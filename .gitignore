@@ -9,6 +9,8 @@
 *.exp
 *.pch
 *.idb
+*.pyc
+__pycache__/
 
 # Editor and release output, including throwaway test projects
 /build/
