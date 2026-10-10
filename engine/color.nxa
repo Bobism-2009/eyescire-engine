@@ -1,0 +1,168 @@
+// =============================================================================
+// Eyescire Engine - color.
+//
+// A Color is just three ints (0..255). Helpers cover the constructors, hex
+// parsing for scene files, a small palette (used by the editor color picker
+// and by the inspector hotkey-cycle), and 24-bit pack/unpack so we can
+// stuff colors into the per-entity int arrays.
+// =============================================================================
+
+struct Color {
+    r: int;
+    g: int;
+    b: int;
+}
+
+fn rgb(r: int, g: int, b: int): Color {
+    let c: Color;
+    c.r = r;
+    c.g = g;
+    c.b = b;
+    return c;
+}
+
+fn col_pack(c: Color): int {
+    return (c.r * 65536) + (c.g * 256) + c.b;
+}
+
+fn col_unpack_r(packed: int): int { return (packed / 65536) & 255; }
+fn col_unpack_g(packed: int): int { return (packed / 256) & 255; }
+fn col_unpack_b(packed: int): int { return packed & 255; }
+
+fn col_lerp(a: Color, b: Color, t_x100: int): Color {
+    let r: Color;
+    r.r = a.r + ((b.r - a.r) * t_x100) / 100;
+    r.g = a.g + ((b.g - a.g) * t_x100) / 100;
+    r.b = a.b + ((b.b - a.b) * t_x100) / 100;
+    return r;
+}
+
+fn col_hex_digit(d: string): int {
+    if (d == "0") return 0;
+    if (d == "1") return 1;
+    if (d == "2") return 2;
+    if (d == "3") return 3;
+    if (d == "4") return 4;
+    if (d == "5") return 5;
+    if (d == "6") return 6;
+    if (d == "7") return 7;
+    if (d == "8") return 8;
+    if (d == "9") return 9;
+    if (d == "a" || d == "A") return 10;
+    if (d == "b" || d == "B") return 11;
+    if (d == "c" || d == "C") return 12;
+    if (d == "d" || d == "D") return 13;
+    if (d == "e" || d == "E") return 14;
+    if (d == "f" || d == "F") return 15;
+    return 0;
+}
+
+fn col_to_int_digit(n: int): string {
+    if (n == 0)  return "0";
+    if (n == 1)  return "1";
+    if (n == 2)  return "2";
+    if (n == 3)  return "3";
+    if (n == 4)  return "4";
+    if (n == 5)  return "5";
+    if (n == 6)  return "6";
+    if (n == 7)  return "7";
+    if (n == 8)  return "8";
+    if (n == 9)  return "9";
+    if (n == 10) return "A";
+    if (n == 11) return "B";
+    if (n == 12) return "C";
+    if (n == 13) return "D";
+    if (n == 14) return "E";
+    return "F";
+}
+
+fn col_to_hex(c: Color): string {
+    let s: string = "#";
+    s += col_to_int_digit((c.r / 16) & 15);
+    s += col_to_int_digit(c.r & 15);
+    s += col_to_int_digit((c.g / 16) & 15);
+    s += col_to_int_digit(c.g & 15);
+    s += col_to_int_digit((c.b / 16) & 15);
+    s += col_to_int_digit(c.b & 15);
+    return s;
+}
+
+fn col_from_hex(hex: string): Color {
+    let c: Color;
+    c.r = 255;
+    c.g = 255;
+    c.b = 255;
+    let n: int = hex.len();
+    let off: int = 0;
+    if (n > 0) {
+        let h0: string = hex.substring(0, 1);
+        if (h0 == "#") off = 1;
+    }
+    if (n - off < 6) return c;
+    // Parsed here rather than through col_hex_digit. NexaC lowers a string
+    // parameter of a top-level function to const char* in a --dll build but
+    // still passes a std::string at the call site, so handing any such
+    // function a string *variable* fails to compile (a literal is fine). These
+    // six calls therefore made every DLL that pulls in this file unbuildable,
+    // examples/runtime.nxa among them. col_hex_digit itself is left in place
+    // so nothing calling it breaks.
+    let r: int = 0;
+    let g: int = 0;
+    let b: int = 0;
+    inline_cpp! {
+        const char* s = hex.c_str() + off;
+        auto dig = [](char ch) -> int {
+            if (ch >= '0' && ch <= '9') return ch - '0';
+            if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+            if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+            return 0;
+        };
+        r = dig(s[0]) * 16 + dig(s[1]);
+        g = dig(s[2]) * 16 + dig(s[3]);
+        b = dig(s[4]) * 16 + dig(s[5]);
+    }
+    c.r = r;
+    c.g = g;
+    c.b = b;
+    return c;
+}
+
+// ----- palette --------------------------------------------------------------
+
+let col_palette_n: int = 12;
+let col_palette_r = [232,  92, 226, 244, 255, 240, 130, 110,  64, 190,  76, 245];
+let col_palette_g = [ 76, 178,  96, 196,  88, 220, 160, 220, 196, 132, 200, 220];
+let col_palette_b = [108, 156, 222,  74,  88,  92, 250,  92, 208, 240,  88, 130];
+
+fn col_palette(i: int): Color {
+    let idx: int = i;
+    if (idx < 0) idx = 0;
+    if (idx >= col_palette_n) idx = idx % col_palette_n;
+    let c: Color;
+    c.r = col_palette_r[idx];
+    c.g = col_palette_g[idx];
+    c.b = col_palette_b[idx];
+    return c;
+}
+
+// ----- semantic UI colors (the editor reads these for chrome) ---------------
+// Values are NexaC std/ui's "dark" theme, so engine chrome and std/ui windows
+// (the player launcher's error screen) share one palette.
+
+fn col_ui_bg(): Color           { return rgb( 27,  28,  32); }   /* page      */
+fn col_ui_panel(): Color        { return rgb( 37,  39,  44); }   /* surface   */
+fn col_ui_panel_hi(): Color     { return rgb( 48,  51,  58); }   /* raised    */
+fn col_ui_border(): Color       { return rgb( 59,  63,  71); }
+fn col_ui_divider(): Color      { return rgb( 44,  46,  52); }   /* hairlines */
+fn col_ui_input(): Color        { return rgb( 29,  31,  35); }
+fn col_ui_track(): Color        { return rgb( 58,  62,  70); }
+fn col_ui_text(): Color         { return rgb(232, 233, 236); }
+fn col_ui_text_dim(): Color     { return rgb(156, 161, 170); }
+fn col_ui_accent(): Color       { return rgb( 79, 140, 255); }
+fn col_ui_accent_hot(): Color   { return rgb(112, 162, 255); }
+fn col_ui_danger(): Color       { return rgb(240,  82,  79); }
+fn col_ui_success(): Color      { return rgb( 52, 196, 120); }
+fn col_ui_warn(): Color         { return rgb(240, 176,  72); }
+fn col_ui_select(): Color       { return rgb( 41,  56,  84); }   /* list row  */
+fn col_ui_grid(): Color         { return rgb( 36,  38,  44); }
+fn col_ui_grid_major(): Color   { return rgb( 52,  55,  62); }

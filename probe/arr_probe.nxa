@@ -1,0 +1,8 @@
+#include <std/io>
+
+fn main() {
+    let xs = [0, 1, 2];
+    io.println("len=" + len(xs));
+    xs.push(99);
+    io.println("len=" + len(xs));
+}

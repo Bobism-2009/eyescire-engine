@@ -1,0 +1,547 @@
+// =============================================================================
+// UI canvas layout — shared by editor and runtime.
+//
+// Design resolution is 1280x720. Editor play/UI tabs fit a 16:9 game-view
+// rect inside the viewport; runtime/export use the full 1280x720 window.
+// All modes stretch UI coords to fill that game-view (WYSIWYG).
+// =============================================================================
+
+let UI_CANVAS_W: int = 1280;
+let UI_CANVAS_H: int = 720;
+let ui_cx: int = 0;
+let ui_cy: int = 0;
+let ui_cw: int = 0;
+let ui_ch: int = 0;
+let ui_scale_x: float = 1.0;
+let ui_scale_y: float = 1.0;
+
+fn ui_canvas_layout_letterbox(v: Rect) {
+    let scale_x: float = v.w;
+    scale_x = scale_x / UI_CANVAS_W;
+    let scale_y: float = v.h;
+    scale_y = scale_y / UI_CANVAS_H;
+    ui_scale_x = scale_x;
+    ui_scale_y = scale_y;
+    if (scale_y < ui_scale_x) ui_scale_x = scale_y;
+    if (scale_x < ui_scale_y) ui_scale_y = scale_x;
+    let cw_f: float = UI_CANVAS_W * ui_scale_x;
+    let ch_f: float = UI_CANVAS_H * ui_scale_y;
+    ui_cw = cw_f;
+    ui_ch = ch_f;
+    ui_cx = v.x + (v.w - ui_cw) / 2;
+    ui_cy = v.y + (v.h - ui_ch) / 2;
+}
+
+fn ui_canvas_layout_game_view(v: Rect) {
+    ui_cx = v.x;
+    ui_cy = v.y;
+    ui_cw = v.w;
+    ui_ch = v.h;
+    ui_scale_x = v.w;
+    ui_scale_x = ui_scale_x / UI_CANVAS_W;
+    ui_scale_y = v.h;
+    ui_scale_y = ui_scale_y / UI_CANVAS_H;
+}
+
+fn ui_canvas_area(): Rect { return rect(ui_cx, ui_cy, ui_cw, ui_ch); }
+
+fn ui_to_screen_x(ux: float): int {
+    let off: float = ux * ui_scale_x;
+    return ui_cx + off;
+}
+fn ui_to_screen_y(uy: float): int {
+    let off: float = uy * ui_scale_y;
+    return ui_cy + off;
+}
+fn ui_len_w(ul: float): int { return ul * ui_scale_x; }
+fn ui_len_h(ul: float): int { return ul * ui_scale_y; }
+fn screen_to_ui_x(sx: int): float {
+    let rel: float = sx - ui_cx;
+    return rel / ui_scale_x;
+}
+fn screen_to_ui_y(sy: int): float {
+    let rel: float = sy - ui_cy;
+    return rel / ui_scale_y;
+}
+
+fn ui_named(slot: int, want: string): int {
+    if (slot < 0) return 0;
+    let kind: string = ent_kind(slot);
+    if (kind == want) return 1;
+    if (kind == "ui_" + want) return 1;
+    if (kind == "rect" && ent_name(slot) == want) return 1;
+    return 0;
+}
+
+fn ent_is_ui(slot: int): int {
+    if (slot < 0) return 0;
+    let kind: string = ent_kind(slot);
+    if (kind == "label" || kind == "ui_label") return 1;
+    if (ui_named(slot, "panel") == 1) return 1;
+    if (ui_named(slot, "button") == 1) return 1;
+    if (ui_named(slot, "checkbox") == 1) return 1;
+    if (ui_named(slot, "toggle") == 1) return 1;
+    if (ui_named(slot, "slider") == 1) return 1;
+    if (ui_named(slot, "bar") == 1) return 1;
+    if (ui_named(slot, "field") == 1) return 1;
+    return 0;
+}
+
+fn ui_ent_is_check(slot: int): int { return ui_named(slot, "checkbox"); }
+fn ui_ent_is_toggle(slot: int): int { return ui_named(slot, "toggle"); }
+fn ui_ent_is_slider(slot: int): int { return ui_named(slot, "slider"); }
+fn ui_ent_is_bar(slot: int): int { return ui_named(slot, "bar"); }
+fn ui_ent_is_field(slot: int): int { return ui_named(slot, "field"); }
+
+/* These paint their own words, so the shared centered caption stays off them. */
+fn ui_ent_owns_caption(slot: int): int {
+    if (ui_ent_is_check(slot) == 1) return 1;
+    if (ui_ent_is_toggle(slot) == 1) return 1;
+    if (ui_ent_is_slider(slot) == 1) return 1;
+    if (ui_ent_is_field(slot) == 1) return 1;
+    return 0;
+}
+
+// -----------------------------------------------------------------------------
+// UI boxes — panels and buttons take NexaC std/ui's "modern" shape: rounded,
+// a soft drop shadow, and a hairline edge on panels. Radii are in canvas units
+// and scale with the game view, so the editor UI tab, play mode, the native
+// player, and the web player (drawUiBox in EyescirePlayer.js) all match.
+// -----------------------------------------------------------------------------
+
+fn ui_ent_is_button(slot: int): int {
+    let kind: string = ent_kind(slot);
+    if (kind == "ui_button") return 1;
+    if (kind == "rect" && ent_name(slot) == "button") return 1;
+    return 0;
+}
+
+fn ui_lighten(v: int, amt: int): int {
+    let o: int = v + amt;
+    if (o > 255) o = 255;
+    return o;
+}
+
+fn ui_point_in(sx: int, sy: int, sw: int, sh: int): int {
+    let mx: int = eng_mouse_x();
+    let my: int = eng_mouse_y();
+    if (mx < sx || my < sy) return 0;
+    if (mx >= sx + sw || my >= sy + sh) return 0;
+    return 1;
+}
+
+let ui_fill_r: int = 0;
+let ui_fill_g: int = 0;
+let ui_fill_b: int = 0;
+let ui_focus: int = -1;
+let ui_drag: int = -1;
+let ui_drag_changed: int = 0;
+let ui_blink: int = 0;
+let ui_tx: int = 0;
+let ui_ty: int = 0;
+let ui_tw: int = 0;
+let ui_th: int = 0;
+let ui_lab_w: int = 0;
+let ui_num_w: int = 0;
+let ui_font: int = 14;
+
+/* Fill for this box right now. Buttons darken under the pointer and while held,
+   and use the toggled color when that setting is on. */
+fn ui_resolve_fill(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    let hit: int = 0;
+    let held: int = 0;
+    if (ui_ent_is_button(slot) == 1 && ui_point_in(sx, sy, sw, sh) == 1) {
+        hit = 1;
+        if (eng_mouse_down(0) == 1) held = 1;
+    }
+    ui_fill_r = ent_button_fill(slot, hit, held, 0);
+    ui_fill_g = ent_button_fill(slot, hit, held, 1);
+    ui_fill_b = ent_button_fill(slot, hit, held, 2);
+}
+
+/* Click flips a toggle button and runs its On click function.
+   The caller has already laid out the canvas. The last hit wins, matching paint order. */
+fn ui_button_call(slot: int) {
+    let sc: string = ent_button_script(slot);
+    let stored: string = ent_button_fn(slot);
+    if (sc.len() < 5 || stored.len() == 0) return;
+    if (sc.substring(sc.len() - 4, 4) != ".nxa") return;
+    let sym: string = stored;
+    let sig: string = "";
+    let hash: int = 0;
+    while (hash < stored.len()) {
+        if (stored.substring(hash, 1) == "#") {
+            sym = stored.substring(0, hash);
+            sig = stored.substring(hash + 1, stored.len() - hash - 1);
+            hash = stored.len();
+        } else {
+            hash = hash + 1;
+        }
+    }
+    if (sym.len() == 0) return;
+    let dll_rel: string = sc.substring(0, sc.len() - 4) + ".dll";
+    let dll: string = proj_path_join(proj_path_join(proj_root(), "bin"), dll_rel);
+    if (eng_fs_exists(dll) == 0) {
+        eng_log("[button] missing " + dll_rel);
+        return;
+    }
+    let h: int = eng_dll_load(dll);
+    if (h == 0) return;
+    eng_set_self(slot);
+    if (eng_dll_call_sig(h, sym, sig) == 0) eng_log("[button] no function " + sym + " in " + sc);
+    eng_set_self(-1);
+}
+
+fn ui_poll_buttons() {
+    ui_poll_widgets();
+    if (eng_mouse_pressed(0) == 0) return;
+    let hit: int = -1;
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        if (ui_ent_is_button(i) == 1 && ent_shown(i) == 1) {
+            let sx: int = ui_to_screen_x(ent_x(i));
+            let sy: int = ui_to_screen_y(ent_y(i));
+            let sw: int = ui_len_w(ent_w(i));
+            let sh: int = ui_len_h(ent_h(i));
+            if (ui_point_in(sx, sy, sw, sh) == 1) hit = i;
+        }
+        i = ent_iter_next(i + 1);
+    }
+    if (hit < 0) return;
+    if (ent_button_toggle(hit) == 1) {
+        if (ent_button_toggled(hit) == 1) ent_set_button_toggled(hit, 0);
+        else                               ent_set_button_toggled(hit, 1);
+    }
+    ui_button_call(hit);
+}
+
+fn ui_draw_box(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    if (ui_ent_is_check(slot) == 1) { ui_draw_check(slot, sx, sy, sw, sh); return; }
+    if (ui_ent_is_toggle(slot) == 1) { ui_draw_toggle(slot, sx, sy, sw, sh); return; }
+    if (ui_ent_is_slider(slot) == 1) { ui_draw_slider(slot, sx, sy, sw, sh); return; }
+    if (ui_ent_is_bar(slot) == 1) { ui_draw_bar(slot, sx, sy, sw, sh); return; }
+    if (ui_ent_is_field(slot) == 1) { ui_draw_field(slot, sx, sy, sw, sh); return; }
+    let is_button: int = ui_ent_is_button(slot);
+    let base: float = 10.0;
+    if (is_button == 1) base = 6.0;
+    let rad: int = base * ui_scale_y;
+    if (rad < 2) rad = 2;
+    if (rad * 2 > sh) rad = sh / 2;
+    if (rad * 2 > sw) rad = sw / 2;
+    let drop: int = 2.0 * ui_scale_y;
+    if (drop < 1) drop = 1;
+    ui_resolve_fill(slot, sx, sy, sw, sh);
+    let r: int = ui_fill_r;
+    let g: int = ui_fill_g;
+    let b: int = ui_fill_b;
+    let a: int = ent_a(slot);
+    eng_fill_round_a(sx, sy + drop, sw, sh, rad, 0, 0, 0, 70 * a / 255);
+    eng_fill_round_a(sx, sy, sw, sh, rad, r, g, b, a);
+    if (is_button == 0) {
+        eng_outline_round_a(sx, sy, sw - 1, sh - 1, rad, 1,
+                            ui_lighten(r, 22), ui_lighten(g, 22), ui_lighten(b, 22), a);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Scaled text — text pixel size tracks the game-view scale so labels/buttons
+// look identical in the editor UI tab, play mode, native runtime, and web.
+// A label/button's on-screen box height (already scaled) drives its font size,
+// giving designers WYSIWYG control by dragging the element's height.
+// -----------------------------------------------------------------------------
+
+fn ui_clamp_font(px: int): int {
+    if (px < 6) return 6;
+    if (px > 96) return 96;
+    return px;
+}
+
+/* Label text fills the element height. */
+fn ui_label_font_px(scaled_h: int): int {
+    return ui_clamp_font(scaled_h);
+}
+
+/* Rect (panel/button) caption sits at ~60% of the element height. */
+fn ui_rect_text_font_px(scaled_h: int): int {
+    let f: float = scaled_h;
+    let px: int = f * 0.6;
+    return ui_clamp_font(px);
+}
+
+/* 5x7 caption scale shared by the 3D editor overlay and the 3D player.
+   Height wants ~60% of the button, but that integer jumps past the button
+   width on a full 1280x720 export (16 chars * 6px * scale 3 = 288 inside a
+   257px button). Clamp to the largest scale that still fits. */
+fn ui_px_caption_scale(sw: int, sh: int, nchars: int): int {
+    let sc: int = (sh * 6 / 10) / 8;
+    if (sc < 1) sc = 1;
+    if (nchars < 1) return sc;
+    let pad: int = sw / 16;
+    if (pad < 4) pad = 4;
+    if (pad * 2 >= sw) pad = 0;
+    let fit: int = (sw - pad * 2) / (nchars * 6);
+    if (fit < 1) fit = 1;
+    if (sc > fit) sc = fit;
+    return sc;
+}
+
+fn ui_text_w(s: string, px: int): int {
+    if (scene_render3d() == 1) {
+        let sc: int = px / 8;
+        if (sc < 1) sc = 1;
+        return s.len() * 6 * sc;
+    }
+    eng_set_font("Consolas", px);
+    return eng_text_width(s);
+}
+
+fn ui_draw_text(x: int, y: int, s: string, r: int, g: int, b: int, px: int) {
+    if (s.len() == 0) return;
+    if (scene_render3d() == 1) {
+        let sc: int = px / 8;
+        if (sc < 1) sc = 1;
+        eng_text_px(x, y, s, r, g, b, sc);
+    } else {
+        eng_set_font("Consolas", px);
+        eng_text(x, y, s, r, g, b);
+        eng_set_font("Consolas", 14);
+    }
+}
+
+fn ui_text_y(sy: int, sh: int, px: int): int {
+    let y: int = sy + (sh - px) / 2;
+    if (y < sy) y = sy;
+    return y;
+}
+
+fn ui_hit_slot(slot: int): int {
+    let sx: int = ui_to_screen_x(ent_x(slot));
+    let sy: int = ui_to_screen_y(ent_y(slot));
+    let sw: int = ui_len_w(ent_w(slot));
+    let sh: int = ui_len_h(ent_h(slot));
+    return ui_point_in(sx, sy, sw, sh);
+}
+
+fn ui_slider_layout(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    ui_font = ui_rect_text_font_px(sh);
+    let num: string = "" + ent_ui_value(slot);
+    ui_num_w = ui_text_w(num, ui_font) + 10;
+    ui_lab_w = 0;
+    let lab: string = ent_text(slot);
+    if (lab.len() > 0) {
+        let lw: int = ui_text_w(lab, ui_font) + 8;
+        if (lw + ui_num_w + 24 <= sw) ui_lab_w = lw;
+    }
+    ui_tx = sx + ui_lab_w;
+    ui_tw = sw - ui_lab_w - ui_num_w;
+    if (ui_tw < 8) {
+        ui_lab_w = 0;
+        ui_tx = sx;
+        ui_tw = sw - ui_num_w;
+        if (ui_tw < 8) ui_tw = sw;
+    }
+    ui_ty = sy;
+    ui_th = sh;
+}
+
+fn ui_slider_from_mouse(slot: int) {
+    ui_slider_layout(slot, ui_to_screen_x(ent_x(slot)), ui_to_screen_y(ent_y(slot)),
+                     ui_len_w(ent_w(slot)), ui_len_h(ent_h(slot)));
+    let rel: float = eng_mouse_x() - ui_tx;
+    let span: float = ui_tw;
+    if (span < 1.0) span = 1.0;
+    let t: float = rel / span;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    let vf: float = t * 100.0;
+    let v: int = vf;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    if (v != ent_ui_value(slot)) {
+        ent_set_ui_value(slot, v);
+        ui_drag_changed = 1;
+    }
+}
+
+fn ui_draw_check(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    let bs: int = sh;
+    if (bs > sw) bs = sw;
+    if (bs < 8) bs = 8;
+    let rad: int = bs / 5;
+    if (rad < 2) rad = 2;
+    eng_fill_round_a(sx, sy, bs, bs, rad, 28, 32, 40, 255);
+    if (ent_button_toggled(slot) == 1) {
+        eng_fill_round_a(sx, sy, bs, bs, rad, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot));
+        let x0: int = sx + bs / 4;
+        let y0: int = sy + bs / 2;
+        let x1: int = sx + bs * 2 / 5;
+        let y1: int = sy + bs * 3 / 4;
+        let x2: int = sx + bs * 3 / 4;
+        let y2: int = sy + bs / 4;
+        eng_line(x0, y0, x1, y1, 245, 245, 245);
+        eng_line(x1, y1, x2, y2, 245, 245, 245);
+    } else {
+        eng_outline_round_a(sx, sy, bs - 1, bs - 1, rad, 1, 90, 96, 110, 255);
+    }
+    let lab: string = ent_text(slot);
+    if (lab.len() == 0) lab = ent_name(slot);
+    let px: int = ui_rect_text_font_px(sh);
+    ui_draw_text(sx + bs + 8, ui_text_y(sy, sh, px), lab, 232, 233, 236, px);
+}
+
+fn ui_draw_toggle(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    let pw: int = sh * 2;
+    if (pw > sw) pw = sw;
+    if (pw < sh) pw = sh;
+    let rad: int = sh / 2;
+    if (rad < 2) rad = 2;
+    if (ent_button_toggled(slot) == 1) {
+        eng_fill_round_a(sx, sy, pw, sh, rad, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot));
+    } else {
+        eng_fill_round_a(sx, sy, pw, sh, rad, 40, 44, 54, 255);
+    }
+    let ks: int = sh - 6;
+    if (ks < 4) ks = 4;
+    let kx: int = sx + 3;
+    if (ent_button_toggled(slot) == 1) kx = sx + pw - ks - 3;
+    let ky: int = sy + (sh - ks) / 2;
+    eng_fill_round_a(kx, ky, ks, ks, ks / 2, 236, 237, 240, 255);
+    let lab: string = ent_text(slot);
+    if (lab.len() == 0) lab = ent_name(slot);
+    let px: int = ui_rect_text_font_px(sh);
+    ui_draw_text(sx + pw + 8, ui_text_y(sy, sh, px), lab, 232, 233, 236, px);
+}
+
+fn ui_draw_slider(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    ui_slider_layout(slot, sx, sy, sw, sh);
+    let px: int = ui_font;
+    if (ui_lab_w > 0) {
+        ui_draw_text(sx, ui_text_y(sy, sh, px), ent_text(slot), 210, 214, 220, px);
+    }
+    let th: int = sh / 3;
+    if (th < 4) th = 4;
+    if (th > sh) th = sh;
+    let ty: int = sy + (sh - th) / 2;
+    let trad: int = th / 2;
+    if (trad < 2) trad = 2;
+    eng_fill_round_a(ui_tx, ty, ui_tw, th, trad, 28, 32, 40, 255);
+    let v: int = ent_ui_value(slot);
+    let fw: int = ui_tw * v / 100;
+    if (fw < trad * 2 && v > 0) fw = trad * 2;
+    if (fw > ui_tw) fw = ui_tw;
+    if (fw > 0) eng_fill_round_a(ui_tx, ty, fw, th, trad, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot));
+    let kr: int = sh / 2;
+    if (kr < 5) kr = 5;
+    if (kr > 12) kr = 12;
+    let kx: int = ui_tx + ui_tw * v / 100 - kr;
+    if (kx < ui_tx - kr / 2) kx = ui_tx - kr / 2;
+    if (kx + kr * 2 > ui_tx + ui_tw + kr / 2) kx = ui_tx + ui_tw - kr * 2 + kr / 2;
+    let ky: int = sy + sh / 2 - kr;
+    eng_fill_round_a(kx, ky, kr * 2, kr * 2, kr, 236, 237, 240, 255);
+    let num: string = "" + v;
+    ui_draw_text(sx + sw - ui_num_w + 6, ui_text_y(sy, sh, px), num, 210, 214, 220, px);
+}
+
+fn ui_draw_bar(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    let rad: int = sh / 2;
+    if (rad > 8) rad = 8;
+    if (rad < 2) rad = 2;
+    eng_fill_round_a(sx, sy, sw, sh, rad, 28, 32, 40, 255);
+    let v: int = ent_ui_value(slot);
+    let fw: int = sw * v / 100;
+    if (fw > sw) fw = sw;
+    if (fw > 0) eng_fill_round_a(sx, sy, fw, sh, rad, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot));
+}
+
+fn ui_draw_field(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    ui_blink = ui_blink + 1;
+    let rad: int = 6;
+    if (rad * 2 > sh) rad = sh / 2;
+    eng_fill_round_a(sx, sy, sw, sh, rad, 22, 26, 34, 255);
+    let br: int = 70;
+    let bg: int = 76;
+    let bb: int = 88;
+    if (ui_focus == slot) { br = ent_r(slot); bg = ent_g(slot); bb = ent_b(slot); }
+    eng_outline_round_a(sx, sy, sw - 1, sh - 1, rad, 1, br, bg, bb, 255);
+    let px: int = ui_rect_text_font_px(sh);
+    let txt: string = ent_text(slot);
+    let tx: int = sx + 8;
+    let ty: int = ui_text_y(sy, sh, px);
+    if (txt.len() == 0 && ui_focus != slot) {
+        ui_draw_text(tx, ty, "Text", 120, 126, 138, px);
+    } else {
+        ui_draw_text(tx, ty, txt, 232, 233, 236, px);
+    }
+    if (ui_focus == slot && (ui_blink / 18) % 2 == 0) {
+        let cx: int = tx + ui_text_w(txt, px) + 1;
+        let ch: int = px;
+        if (ch > sh - 6) ch = sh - 6;
+        eng_fill_rect(cx, sy + (sh - ch) / 2, 2, ch, 232, 233, 236);
+    }
+}
+
+fn ui_type_into(slot: int, code: int) {
+    let cur: string = ent_text(slot);
+    if (code == 8) {
+        if (cur.len() > 0) ent_set_text(slot, cur.substring(0, cur.len() - 1));
+        return;
+    }
+    if (code == 13) {
+        ui_button_call(slot);
+        ui_focus = -1;
+        return;
+    }
+    if (code == 27) {
+        ui_focus = -1;
+        return;
+    }
+    if (code < 32 || code > 126) return;
+    if (cur.len() >= 80) return;
+    ent_set_text(slot, cur + eng_ascii(code));
+}
+
+fn ui_poll_widgets() {
+    if (ui_drag >= 0) {
+        if (eng_mouse_down(0) == 1 && ent_active(ui_drag) == 1) {
+            ui_slider_from_mouse(ui_drag);
+        } else {
+            if (ui_drag_changed == 1) ui_button_call(ui_drag);
+            ui_drag = -1;
+            ui_drag_changed = 0;
+        }
+    }
+    if (ui_focus >= 0 && ent_active(ui_focus) == 1 && ui_ent_is_field(ui_focus) == 1) {
+        let guard: int = 0;
+        while (guard < 32 && ui_focus >= 0) {
+            let code: int = eng_typed_pop();
+            if (code == 0) guard = 32;
+            else ui_type_into(ui_focus, code);
+            guard = guard + 1;
+        }
+    }
+    if (eng_mouse_pressed(0) == 0) return;
+    let hit_field: int = -1;
+    let hit_flip: int = -1;
+    let hit_slider: int = -1;
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        if (ent_shown(i) == 1 && ui_hit_slot(i) == 1) {
+            if (ui_ent_is_field(i) == 1) hit_field = i;
+            if (ui_ent_is_check(i) == 1 || ui_ent_is_toggle(i) == 1) hit_flip = i;
+            if (ui_ent_is_slider(i) == 1) hit_slider = i;
+        }
+        i = ent_iter_next(i + 1);
+    }
+    if (hit_field >= 0) ui_focus = hit_field;
+    else ui_focus = -1;
+    if (hit_flip >= 0) {
+        if (ent_button_toggled(hit_flip) == 1) ent_set_button_toggled(hit_flip, 0);
+        else ent_set_button_toggled(hit_flip, 1);
+        ui_button_call(hit_flip);
+    }
+    if (hit_slider >= 0) {
+        ui_drag = hit_slider;
+        ui_drag_changed = 0;
+        ui_slider_from_mouse(hit_slider);
+    }
+}

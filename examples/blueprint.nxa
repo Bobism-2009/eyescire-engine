@@ -1,0 +1,1980 @@
+// Visual blueprint graph. Drawn in the script viewport when a .ebp is open.
+// The document lives in engine.dll. This file is the editor for it.
+
+let bp_sel: int = -1;
+let bp_mode: int = 0; /* 0 idle, 1 move node, 2 pan, 3 drag a wire */
+let bp_wire_node: int = -1;
+let bp_wire_pin: int = -1;
+let bp_grab_dx: int = 0;
+let bp_grab_dy: int = 0;
+let bp_pan0x: int = 0;
+let bp_pan0y: int = 0;
+let bp_mouse0x: int = 0;
+let bp_mouse0y: int = 0;
+let bp_pan_moved: int = 0;
+let bp_pan_from_left: int = 0;
+let bp_found_node: int = -1;
+let bp_found_pin: int = -1;
+let bp_zoom: int = 100;
+let bp_key_open: int = 0;
+let bp_key_ignore: int = 0;
+let bp_key_query: string = "";
+let bp_key_scroll: int = 0;
+let bp_key_bx: int = 0;
+let bp_key_by: int = 0;
+let bp_key_bw: int = 0;
+let bp_key_bh: int = 0;
+let bp_menu_open: int = 0;
+let bp_menu_query: string = "";
+let bp_menu_scroll: int = 0;
+let bp_menu_cat: int = -1;
+let bp_menu_gx: int = 0;
+let bp_menu_gy: int = 0;
+let bp_menu_sx: int = 0;
+let bp_menu_sy: int = 0;
+let bp_menu_bx: int = 0;
+let bp_menu_by: int = 0;
+let bp_menu_bw: int = 0;
+let bp_menu_bh: int = 0;
+let bp_tab_scroll: int = 0;
+let bp_var_edit: int = -1;
+
+let BP_NW: int = 220;
+let BP_HDR: int = 32;
+let BP_ROW: int = 28;
+let BP_PROP: int = 260;
+
+fn bp_ui_reset() {
+    bp_sel = -1;
+    bp_mode = 0;
+    bp_wire_node = -1;
+    bp_wire_pin = -1;
+    bp_zoom = 100;
+    bp_key_open = 0;
+    bp_key_ignore = 0;
+    bp_key_query = "";
+    bp_key_scroll = 0;
+    bp_menu_open = 0;
+    bp_menu_query = "";
+    bp_menu_scroll = 0;
+    bp_menu_cat = -1;
+    bp_tab_scroll = 0;
+    bp_var_edit = -1;
+    if (edit_target.len() >= 3 && edit_target.substring(0, 3) == "bp_") edit_target = "";
+}
+
+fn bp_clear_edit() {
+    if (edit_target.len() >= 3 && edit_target.substring(0, 3) == "bp_") edit_target = "";
+}
+
+fn bp_delete_selected() {
+    if (bp_sel < 0 || bp_sel >= bp_node_count()) return;
+    let k: int = bp_node_kind(bp_sel);
+    if (k == 1 || k == 2 || k == 13) return;
+    bp_clear_edit();
+    bp_remove_node(bp_sel);
+    bp_sel = -1;
+    bp_mode = 0;
+}
+
+fn bp_leave_project() {
+    if (bp_is_open() == 0) return;
+    if (bp_dirty() == 1) bp_save();
+    bp_close();
+    bp_ui_reset();
+    if (te_path().len() == 0 && viewport_mode == "script") viewport_mode = "scene";
+}
+
+fn bp_open_path(path: string) {
+    if (bp_is_open() == 1 && bp_path() == path) {
+        viewport_mode = "script";
+        return;
+    }
+    if (bp_is_open() == 1 && bp_dirty() == 1) bp_save();
+    if (te_dirty() == 1) te_save();
+    let ok: int = bp_open(path);
+    if (ok == 0) return;
+    te_clear();
+    bp_ui_reset();
+    viewport_mode = "script";
+    eng_log("[blueprint] open " + path_basename(path));
+}
+
+fn bp_file_taken(base: string): int {
+    let ebp: string = base + ".ebp";
+    let nxa: string = base + ".nxa";
+    let i: int = 0;
+    while (i < proj_bp_count()) {
+        if (proj_bp_name(i) == ebp) return 1;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < proj_script_count()) {
+        if (proj_script_name(i) == nxa && proj_script_generated(i) == 0) return 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn bp_pick_name(base: string): string {
+    if (base.len() == 0) base = "blueprint";
+    if (bp_file_taken(base) == 0) return base;
+    let n: int = 2;
+    while (n < 1000) {
+        let cand: string = base + n;
+        if (bp_file_taken(cand) == 0) return cand;
+        n = n + 1;
+    }
+    return base;
+}
+
+fn bp_open_existing(base: string): int {
+    let want: string = base + ".ebp";
+    let i: int = 0;
+    while (i < proj_bp_count()) {
+        if (proj_bp_name(i) == want) {
+            bp_open_path(proj_bp_path(i));
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn bp_create_named(name: string): int {
+    if (bp_is_open() == 1 && bp_dirty() == 1) bp_save();
+    if (te_dirty() == 1) te_save();
+    let ok: int = bp_create(name);
+    if (ok == 0) return 0;
+    te_clear();
+    bp_ui_reset();
+    viewport_mode = "script";
+    return 1;
+}
+
+fn bp_tab_path(): string {
+    if (bp_is_open() == 1) return bp_path();
+    return te_path();
+}
+
+fn bp_tab_dirty(): int {
+    if (bp_is_open() == 1) return bp_dirty();
+    return te_dirty();
+}
+
+fn bp_tab_close() {
+    if (bp_is_open() == 1) {
+        if (bp_dirty() == 1) bp_save();
+        bp_close();
+        bp_ui_reset();
+    }
+    if (te_dirty() == 1) te_save();
+    te_clear();
+}
+
+fn bp_strip(): Rect {
+    let r: Rect = viewport_rect();
+    return rect(r.x, r.y, r.w, 32);
+}
+
+fn bp_tabs(): Rect {
+    let r: Rect = viewport_rect();
+    return rect(r.x, r.y + 32, r.w, 28);
+}
+
+fn bp_props(): Rect {
+    let r: Rect = viewport_rect();
+    let h: int = r.h - 60;
+    if (h < 20) h = 20;
+    return rect(r.x + r.w - BP_PROP, r.y + 60, BP_PROP, h);
+}
+
+fn bp_canvas(): Rect {
+    let r: Rect = viewport_rect();
+    let w: int = r.w;
+    if (w < 20) w = 20;
+    let h: int = r.h - 60;
+    if (h < 20) h = 20;
+    return rect(r.x, r.y + 60, w, h);
+}
+
+fn bp_over_props(mx: int, my: int): int {
+    if (point_in_rect(mx, my, bp_props())) return 1;
+    return 0;
+}
+
+fn bp_palette_count(): int { return 24; }
+
+fn bp_palette_kind(i: int): int {
+    if (i == 0) return 18;
+    if (i == 1) return 3;
+    if (i == 2) return 4;
+    if (i == 3) return 5;
+    if (i == 4) return 6;
+    if (i == 5) return 7;
+    if (i == 6) return 8;
+    if (i == 7) return 9;
+    if (i == 8) return 10;
+    if (i == 9) return 11;
+    if (i == 10) return 19;
+    if (i == 11) return 20;
+    if (i == 12) return 21;
+    if (i == 13) return 22;
+    if (i == 14) return 23;
+    if (i == 15) return 24;
+    if (i == 16) return 25;
+    if (i == 17) return 26;
+    if (i == 18) return 27;
+    if (i == 19) return 28;
+    if (i == 20) return 29;
+    if (i == 21) return 30;
+    if (i == 22) return 31;
+    return 32;
+}
+
+fn bp_font_px(): int {
+    let px: int = 14 * bp_zoom / 100;
+    if (px < 8) px = 8;
+    if (px > 28) px = 28;
+    return px;
+}
+
+fn bp_hdr(): int {
+    th_font(bp_font_px());
+    let h: int = BP_HDR * bp_zoom / 100;
+    let need: int = eng_text_height() + 6;
+    if (h < need) h = need;
+    return h;
+}
+
+fn bp_row(): int {
+    th_font(bp_font_px());
+    let h: int = BP_ROW * bp_zoom / 100;
+    let need: int = eng_text_height() + 4;
+    if (h < need) h = need;
+    return h;
+}
+
+fn bp_nw(): int {
+    return BP_NW * bp_zoom / 100;
+}
+
+fn bp_node_sx(i: int): int {
+    return bp_origin_x() + bp_node_x(i) * bp_zoom / 100;
+}
+
+fn bp_node_sy(i: int): int {
+    return bp_origin_y() + bp_node_y(i) * bp_zoom / 100;
+}
+
+fn bp_zoom_by(mx: int, my: int, notches: int) {
+    if (notches == 0) return;
+    let c: Rect = bp_canvas();
+    let oldz: int = bp_zoom;
+    let z: int = bp_zoom + notches * 10;
+    if (z < 40) z = 40;
+    if (z > 200) z = 200;
+    if (z == oldz) return;
+    let gx: int = (mx - c.x - bp_pan_x()) * 100 / oldz;
+    let gy: int = (my - c.y - bp_pan_y()) * 100 / oldz;
+    bp_zoom = z;
+    bp_set_pan(mx - c.x - gx * z / 100, my - c.y - gy * z / 100);
+}
+
+fn bp_node_h(i: int): int {
+    let ins: int = 0;
+    let outs: int = 0;
+    let n: int = bp_node_pin_count(i);
+    let p: int = 0;
+    while (p < n) {
+        if (bp_node_pin_dir(i, p) == 1) outs = outs + 1;
+        else ins = ins + 1;
+        p = p + 1;
+    }
+    let rows: int = ins;
+    if (outs > rows) rows = outs;
+    if (rows < 1) rows = 1;
+    return bp_hdr() + rows * bp_row();
+}
+
+fn bp_origin_x(): int {
+    let c: Rect = bp_canvas();
+    return c.x + bp_pan_x();
+}
+
+fn bp_origin_y(): int {
+    let c: Rect = bp_canvas();
+    return c.y + bp_pan_y();
+}
+
+fn bp_pin_at(i: int, pin: int): Rect {
+    let nx: int = bp_node_sx(i);
+    let ny: int = bp_node_sy(i);
+    let dir: int = bp_node_pin_dir(i, pin);
+    let row: int = 0;
+    let p: int = 0;
+    while (p < pin) {
+        if (bp_node_pin_dir(i, p) == dir) row = row + 1;
+        p = p + 1;
+    }
+    let rh: int = bp_row();
+    let y: int = ny + bp_hdr() + row * rh + rh / 2;
+    let x: int = nx;
+    if (dir == 1) x = nx + bp_nw();
+    return rect(x, y, 8, 8);
+}
+
+fn bp_near(mx: int, my: int, x: int, y: int): int {
+    let dx: int = mx - x;
+    let dy: int = my - y;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    let rad: int = 12 * bp_zoom / 100;
+    if (rad < 8) rad = 8;
+    if (dx <= rad && dy <= rad) return 1;
+    return 0;
+}
+
+fn bp_find_pin(mx: int, my: int): int {
+    bp_found_node = -1;
+    bp_found_pin = -1;
+    let i: int = bp_node_count() - 1;
+    while (i >= 0) {
+        let p: int = bp_node_pin_count(i) - 1;
+        while (p >= 0) {
+            let at: Rect = bp_pin_at(i, p);
+            if (bp_near(mx, my, at.x, at.y) == 1) {
+                bp_found_node = i;
+                bp_found_pin = p;
+                return 1;
+            }
+            p = p - 1;
+        }
+        i = i - 1;
+    }
+    return 0;
+}
+
+fn bp_find_node(mx: int, my: int): int {
+    let i: int = bp_node_count() - 1;
+    while (i >= 0) {
+        let body: Rect = rect(bp_node_sx(i), bp_node_sy(i), bp_nw(), bp_node_h(i));
+        if (point_in_rect(mx, my, body)) return i;
+        i = i - 1;
+    }
+    return -1;
+}
+
+fn bp_head_color(kind: int): Color {
+    if (kind == 1 || kind == 2) return rgb(168, 124, 48);
+    if (kind == 3 || kind == 4) return rgb(56, 104, 168);
+    if (kind == 18) return rgb(72, 96, 184);
+    if (kind == 6 || kind == 8 || kind == 11 || kind == 20 || kind == 21 || kind == 25 || kind == 26 || kind == 29 || kind == 30) return rgb(108, 78, 158);
+    if (kind == 12) return rgb(64, 112, 168);
+    if (kind == 13) return rgb(46, 140, 96);
+    if (kind == 14) return rgb(176, 96, 48);
+    if (kind == 15) return rgb(96, 78, 168);
+    if (kind == 16) return rgb(48, 150, 132);
+    if (kind == 17) return rgb(36, 116, 138);
+    return rgb(48, 122, 96);
+}
+
+fn bp_type_color(t: int): Color {
+    if (t == 1) return rgb(220, 96, 96);
+    if (t == 2) return rgb(96, 196, 128);
+    if (t == 3) return rgb(220, 164, 72);
+    if (t == 4) return rgb(96, 156, 230);
+    return rgb(232, 234, 238);
+}
+
+fn bp_text_head(t: string): string {
+    let i: int = 0;
+    while (i < t.len()) {
+        if (t.substring(i, 1) == " ") return t.substring(0, i);
+        i = i + 1;
+    }
+    if (t.len() == 0) return "0";
+    return t;
+}
+
+fn bp_text_tail(t: string): string {
+    let i: int = 0;
+    while (i < t.len()) {
+        if (t.substring(i, 1) == " ") return t.substring(i + 1, t.len() - i - 1);
+        i = i + 1;
+    }
+    return "0";
+}
+
+fn bp_before_bar(t: string): string {
+    let i: int = 0;
+    while (i < t.len()) {
+        if (t.substring(i, 1) == "|") return t.substring(0, i);
+        i = i + 1;
+    }
+    return t;
+}
+
+/* Hierarchy drop. The node keeps the entity id, so a later rename still hits it. */
+fn bp_drop_object(slot: int, mx: int, my: int) {
+    if (bp_is_open() == 0 || slot < 0) return;
+    let z: int = bp_zoom;
+    if (z < 1) z = 1;
+    let gx: int = (mx - bp_origin_x()) * 100 / z;
+    let gy: int = (my - bp_origin_y()) * 100 / z;
+    let idx: int = bp_add_node(12, gx, gy);
+    if (idx < 0) {
+        eng_log("[blueprint] could not add that object");
+        return;
+    }
+    let label: string = ent_name(slot);
+    if (label.len() == 0) label = "(unnamed)";
+    bp_node_set_name(idx, label);
+    bp_node_set_op(idx, ent_id(slot));
+    bp_set_a_text(idx, "" + ent_x(slot));
+    bp_set_b_text(idx, "" + ent_y(slot));
+    bp_node_set_text(idx, "" + ent_z(slot) + " " + ent_rot(slot));
+    bp_menu_open = 0;
+    bp_key_open = 0;
+    bp_clear_edit();
+    bp_sel = idx;
+    eng_log("[blueprint] " + label + " — wire the left pin to set x, y, z, and rotation");
+}
+
+fn bp_add_at(kind: int, gx: int, gy: int) {
+    let idx: int = bp_add_node(kind, gx, gy);
+    if (idx < 0) {
+        eng_log("[blueprint] could not add that node");
+        return;
+    }
+    bp_menu_open = 0;
+    bp_key_open = 0;
+    bp_clear_edit();
+    bp_sel = idx;
+}
+
+fn bp_menu_over(mx: int, my: int): int {
+    if (bp_menu_open == 0) return 0;
+    if (point_in_rect(mx, my, rect(bp_menu_bx, bp_menu_by, bp_menu_bw, bp_menu_bh))) return 1;
+    return 0;
+}
+
+fn bp_bez(t: float, p0: float, p1: float, p2: float, p3: float): float {
+    let u: float = 1.0 - t;
+    let uu: float = u * u;
+    let tt: float = t * t;
+    return uu * u * p0 + 3.0 * uu * t * p1 + 3.0 * u * tt * p2 + tt * t * p3;
+}
+
+fn bp_wire(x0: int, y0: int, x1: int, y1: int, col: Color) {
+    let dx: int = x1 - x0;
+    if (dx < 0) dx = -dx;
+    dx = dx / 2;
+    if (dx < 24 * bp_zoom / 100) dx = 24 * bp_zoom / 100;
+    if (dx < 16) dx = 16;
+    let fx0: float = x0;
+    let fy0: float = y0;
+    let fx1: float = x1;
+    let fy1: float = y1;
+    let c0x: float = x0 + dx;
+    let c1x: float = x1 - dx;
+    let steps: int = 14;
+    let i: int = 0;
+    let px: int = x0;
+    let py: int = y0;
+    while (i < steps) {
+        i = i + 1;
+        let t: float = i * 1.0 / steps;
+        let x: float = bp_bez(t, fx0, c0x, c1x, fx1);
+        let y: float = bp_bez(t, fy0, fy0, fy1, fy1);
+        let ix: int = x;
+        let iy: int = y;
+        eng_line(px, py, ix, iy, col.r, col.g, col.b);
+        px = ix;
+        py = iy;
+    }
+}
+
+fn bp_switch_graph(i: int) {
+    bp_edit_fn(i);
+    bp_sel = -1;
+    bp_mode = 0;
+    bp_wire_node = -1;
+    bp_wire_pin = -1;
+    bp_menu_open = 0;
+    bp_key_open = 0;
+    bp_clear_edit();
+}
+
+fn bp_tab_n(): int { return bp_fn_count() + 2; }
+
+fn bp_tab_label(i: int): string {
+    if (i <= 0) return "Event";
+    if (i >= bp_fn_count() + 1) return "+";
+    return bp_fn_name(i - 1);
+}
+
+fn bp_tab_w(i: int): int {
+    if (i >= bp_fn_count() + 1) return 28;
+    th_font(13);
+    let w: int = eng_text_width(bp_tab_label(i)) + 28;
+    if (w < 64) w = 64;
+    if (w > 160) w = 160;
+    return w;
+}
+
+fn bp_tabs_span(): int {
+    let n: int = bp_tab_n();
+    let i: int = 0;
+    let w: int = 0;
+    while (i < n) {
+        w = w + bp_tab_w(i);
+        if (i + 1 < n) w = w + 6;
+        i = i + 1;
+    }
+    return w;
+}
+
+fn bp_tab_max_scroll(): int {
+    let t: Rect = bp_tabs();
+    let extra: int = bp_tabs_span() + 16 - t.w;
+    if (extra < 0) extra = 0;
+    return extra;
+}
+
+fn bp_tab_x(i: int): int {
+    let t: Rect = bp_tabs();
+    let x: int = t.x + 8 - bp_tab_scroll;
+    let k: int = 0;
+    while (k < i) {
+        x = x + bp_tab_w(k) + 6;
+        k = k + 1;
+    }
+    return x;
+}
+
+fn bp_try_tab(mx: int, my: int): int {
+    if (mouse_pressed(MOUSE_LEFT) == 0) return 0;
+    let bar: Rect = bp_tabs();
+    if (point_in_rect(mx, my, bar) == 0) return 0;
+    let n: int = bp_tab_n();
+    let i: int = 0;
+    while (i < n) {
+        let rr: Rect = rect(bp_tab_x(i), bar.y + 2, bp_tab_w(i), 24);
+        if (point_in_rect(mx, my, rr) == 1) {
+            if (i == 0) bp_switch_graph(-1);
+            else if (i >= bp_fn_count() + 1) {
+                let idx: int = bp_add_fn();
+                if (idx >= 0) {
+                    bp_sel = -1;
+                    bp_mode = 0;
+                    bp_wire_node = -1;
+                    bp_wire_pin = -1;
+                    bp_menu_open = 0;
+                    bp_key_open = 0;
+                    bp_clear_edit();
+                }
+            } else bp_switch_graph(i - 1);
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn bp_draw_tabs() {
+    let t: Rect = bp_tabs();
+    if (bp_tab_scroll > bp_tab_max_scroll()) bp_tab_scroll = bp_tab_max_scroll();
+    if (bp_tab_scroll < 0) bp_tab_scroll = 0;
+    draw_fill_rect(t, rgb(24, 26, 30));
+    draw_fill_rect(rect(t.x, t.y + t.h - 1, t.w, 1), col_border_soft());
+    eng_set_clip(t.x, t.y, t.w, t.h);
+    th_font(13);
+    let n: int = bp_tab_n();
+    let i: int = 0;
+    let mx: int = eng_mouse_x();
+    let my: int = eng_mouse_y();
+    while (i < n) {
+        let rr: Rect = rect(bp_tab_x(i), t.y + 2, bp_tab_w(i), 24);
+        let on: int = 0;
+        if (i == 0 && bp_editing() < 0) on = 1;
+        if (i > 0 && i <= bp_fn_count() && bp_editing() == i - 1) on = 1;
+        if (on == 1) draw_fill_rect(rr, rgb(46, 52, 64));
+        else if (point_in_rect(mx, my, rr) == 1) draw_fill_rect(rr, rgb(36, 40, 48));
+        else draw_fill_rect(rr, rgb(30, 32, 38));
+        if (on == 1) {
+            let ac: Color = col_accent();
+            draw_fill_rect(rect(rr.x, rr.y + rr.h - 2, rr.w, 2), ac);
+        }
+        let lx: int = rr.x + 10;
+        if (i >= bp_fn_count() + 1) lx = rr.x + 8;
+        draw_text(lx, th_text_y(rr.y, rr.h), bp_tab_label(i), col_text_main());
+        i = i + 1;
+    }
+    eng_clear_clip();
+    th_font(14);
+}
+
+fn bp_editor_input() {
+    if (bp_is_open() == 0) return;
+    /* Keys typed while no blueprint field is focused must not sit in the queue.
+       The message box is focused during draw, so a later click would dump them all. */
+    if (edit_target.len() < 3 || edit_target.substring(0, 3) != "bp_") {
+        let junk: int = typed_pop();
+        while (junk != 0) junk = typed_pop();
+    }
+    let mx: int = eng_mouse_x();
+    let my: int = eng_mouse_y();
+    let c: Rect = bp_canvas();
+    let inside: int = 0;
+    if (point_in_rect(mx, my, c)) inside = 1;
+
+    if (bp_menu_open == 1 && key_pressed(VK_ESCAPE)) {
+        if (bp_menu_query.len() > 0) {
+            bp_menu_query = "";
+            bp_menu_scroll = 0;
+            if (edit_target == "bp_node_find") edit_buf = "";
+        } else if (bp_menu_cat >= 0) {
+            bp_menu_cat = -1;
+            bp_menu_scroll = 0;
+        } else {
+            bp_menu_open = 0;
+            if (edit_target == "bp_node_find") edit_target = "";
+        }
+    }
+    if (edit_target.len() == 0 && (key_pressed(VK_DELETE) || key_pressed(VK_BACK))) bp_delete_selected();
+    if (ctrl_held() && key_pressed(VK_S)) {
+        if (bp_save() == 1) eng_log("[blueprint] saved " + path_basename(bp_path()));
+        else eng_log("[blueprint] save failed");
+    }
+
+    let tab_hit: int = 0;
+    if (bp_menu_open == 0 || bp_menu_over(mx, my) == 0) tab_hit = bp_try_tab(mx, my);
+    if (tab_hit == 1 && bp_menu_open == 1) {
+        bp_menu_open = 0;
+        if (edit_target == "bp_node_find") edit_target = "";
+    }
+
+    let menu_click: int = 0;
+    if (bp_menu_open == 1 && mouse_pressed(MOUSE_LEFT)) {
+        menu_click = 1;
+        if (bp_menu_over(mx, my) == 0) {
+            bp_menu_open = 0;
+            if (edit_target == "bp_node_find") edit_target = "";
+        }
+    }
+
+    if (bp_over_props(mx, my) == 0 && bp_mode == 0 && inside == 1 && mouse_pressed(MOUSE_MIDDLE)) {
+        bp_mode = 2;
+        bp_pan_from_left = 0;
+        bp_pan_moved = 1;
+        bp_pan0x = bp_pan_x();
+        bp_pan0y = bp_pan_y();
+        bp_mouse0x = mx;
+        bp_mouse0y = my;
+    }
+
+    if (bp_over_props(mx, my) == 0 && bp_menu_over(mx, my) == 0 && bp_mode == 0 && inside == 1 && mouse_pressed(MOUSE_RIGHT)) {
+        if (bp_find_pin(mx, my) == 1) {
+            bp_clear_pin(bp_found_node, bp_found_pin);
+        } else {
+            bp_menu_open = 1;
+            bp_menu_sx = mx;
+            bp_menu_sy = my;
+            bp_menu_gx = (mx - bp_origin_x()) * 100 / bp_zoom;
+            bp_menu_gy = (my - bp_origin_y()) * 100 / bp_zoom;
+            bp_menu_query = "";
+            bp_menu_scroll = 0;
+            bp_menu_cat = -1;
+            bp_key_open = 0;
+            edit_target = "bp_node_find";
+            edit_buf = "";
+        }
+    }
+
+    if (menu_click == 0 && bp_over_props(mx, my) == 0 && bp_mode == 0 && inside == 1 && mouse_pressed(MOUSE_LEFT)) {
+        if (bp_find_pin(mx, my) == 1) {
+            bp_mode = 3;
+            bp_wire_node = bp_found_node;
+            bp_wire_pin = bp_found_pin;
+            bp_clear_edit();
+            bp_sel = bp_found_node;
+        } else {
+            let hit: int = bp_find_node(mx, my);
+            if (hit >= 0) {
+                if (hit != bp_sel) bp_key_open = 0;
+                bp_clear_edit();
+                bp_sel = hit;
+                bp_mode = 1;
+                bp_grab_dx = bp_node_x(hit);
+                bp_grab_dy = bp_node_y(hit);
+                bp_mouse0x = mx;
+                bp_mouse0y = my;
+            } else {
+                bp_clear_edit();
+                bp_sel = -1;
+            }
+        }
+    }
+
+    if (bp_mode == 1 && mouse_down(MOUSE_LEFT) && bp_sel >= 0) {
+        let nx: int = bp_grab_dx + (mx - bp_mouse0x) * 100 / bp_zoom;
+        let ny: int = bp_grab_dy + (my - bp_mouse0y) * 100 / bp_zoom;
+        bp_node_set_pos(bp_sel, nx, ny);
+    }
+    if (bp_mode == 2 && mouse_down(MOUSE_MIDDLE)) {
+        bp_set_pan(bp_pan0x + (mx - bp_mouse0x), bp_pan0y + (my - bp_mouse0y));
+    }
+
+    if (bp_mode == 1 && mouse_released(MOUSE_LEFT)) bp_mode = 0;
+    if (bp_mode == 3 && mouse_released(MOUSE_LEFT)) {
+        if (bp_over_props(mx, my) == 0 && bp_find_pin(mx, my) == 1) {
+            if (bp_wire_node != bp_found_node) {
+                if (bp_add_link(bp_wire_node, bp_wire_pin, bp_found_node, bp_found_pin) == 0)
+                    eng_log("[blueprint] those pins don't connect");
+            }
+        }
+        bp_mode = 0;
+    }
+    if (bp_mode == 2 && mouse_released(MOUSE_MIDDLE)) bp_mode = 0;
+
+    if (bp_menu_open == 1 && bp_menu_over(mx, my) == 1) {
+        let w: int = eng_mouse_wheel();
+        if (w != 0) {
+            bp_menu_scroll = bp_menu_scroll - w;
+            if (bp_menu_scroll < 0) bp_menu_scroll = 0;
+        }
+    } else if (bp_key_open == 1 && point_in_rect(mx, my, rect(bp_key_bx, bp_key_by, bp_key_bw, bp_key_bh))) {
+        let w: int = eng_mouse_wheel();
+        if (w != 0) {
+            bp_key_scroll = bp_key_scroll - w;
+            if (bp_key_scroll < 0) bp_key_scroll = 0;
+        }
+    } else if (point_in_rect(mx, my, bp_tabs()) == 1) {
+        let w: int = eng_mouse_wheel();
+        if (w != 0) {
+            bp_tab_scroll = bp_tab_scroll - w * 48;
+            if (bp_tab_scroll < 0) bp_tab_scroll = 0;
+            if (bp_tab_scroll > bp_tab_max_scroll()) bp_tab_scroll = bp_tab_max_scroll();
+        }
+    } else if (inside == 1 && bp_over_props(mx, my) == 0 && bp_mode == 0) {
+        let w: int = eng_mouse_wheel();
+        if (w != 0) bp_zoom_by(mx, my, w);
+    }
+}
+
+fn bp_draw_grid(c: Rect) {
+    let step: int = 32 * bp_zoom / 100;
+    if (step < 12) step = 12;
+    let ox: int = bp_pan_x() % step;
+    let oy: int = bp_pan_y() % step;
+    if (ox < 0) ox = ox + step;
+    if (oy < 0) oy = oy + step;
+    let x: int = c.x + ox;
+    while (x < c.x + c.w) {
+        eng_line(x, c.y, x, c.y + c.h, 32, 34, 40);
+        x = x + step;
+    }
+    let y: int = c.y + oy;
+    while (y < c.y + c.h) {
+        eng_line(c.x, y, c.x + c.w, y, 32, 34, 40);
+        y = y + step;
+    }
+}
+
+fn bp_draw_wires() {
+    let lc: int = bp_link_count();
+    let li: int = 0;
+    while (li < lc) {
+        let a: Rect = bp_pin_at(bp_link_from_node(li), bp_link_from_pin(li));
+        let b: Rect = bp_pin_at(bp_link_to_node(li), bp_link_to_pin(li));
+        let col: Color = bp_type_color(bp_node_pin_type(bp_link_from_node(li), bp_link_from_pin(li)));
+        bp_wire(a.x, a.y, b.x, b.y, col);
+        li = li + 1;
+    }
+    if (bp_mode == 3 && bp_wire_node >= 0) {
+        let at: Rect = bp_pin_at(bp_wire_node, bp_wire_pin);
+        let col: Color = bp_type_color(bp_node_pin_type(bp_wire_node, bp_wire_pin));
+        bp_wire(at.x, at.y, eng_mouse_x(), eng_mouse_y(), col);
+    }
+}
+
+fn bp_draw_nodes() {
+    let i: int = 0;
+    let n: int = bp_node_count();
+    while (i < n) {
+        let kind: int = bp_node_kind(i);
+        let nx: int = bp_node_sx(i);
+        let ny: int = bp_node_sy(i);
+        let nw: int = bp_nw();
+        let nh: int = bp_node_h(i);
+        let hh: int = bp_hdr();
+        let body: Rect = rect(nx, ny, nw, nh);
+        draw_fill_rect(body, rgb(32, 34, 40));
+        let head: Color = bp_head_color(kind);
+        draw_fill_rect(rect(nx, ny, nw, hh), head);
+        th_font(bp_font_px());
+        let pad: int = 12 * bp_zoom / 100;
+        if (pad < 6) pad = 6;
+        let title: string = bp_node_title(i);
+        if (kind == 5 && bp_node_text(i).len() > 0) title = bp_node_text(i);
+        draw_text(nx + pad, th_text_y(ny, hh), title, rgb(255, 255, 255));
+        i = i + 1;
+    }
+
+    bp_draw_wires();
+
+    i = 0;
+    while (i < n) {
+        let nx: int = bp_node_sx(i);
+        let ny: int = bp_node_sy(i);
+        let nw: int = bp_nw();
+        let nh: int = bp_node_h(i);
+        let pc: int = bp_node_pin_count(i);
+        let p: int = 0;
+        while (p < pc) {
+            let at: Rect = bp_pin_at(i, p);
+            let tc: Color = bp_type_color(bp_node_pin_type(i, p));
+            let ps: int = 10 * bp_zoom / 100;
+            if (ps < 6) ps = 6;
+            draw_fill_rect(rect(at.x - ps / 2, at.y - ps / 2, ps, ps), tc);
+            let label: string = bp_node_pin_name(i, p);
+            if (label.len() > 0) {
+                th_font(bp_font_px());
+                let rh: int = bp_row();
+                let row_top: int = at.y - rh / 2;
+                let row_y: int = th_text_y(row_top, rh);
+                let inset: int = 16 * bp_zoom / 100;
+                if (inset < 8) inset = 8;
+                if (bp_node_pin_dir(i, p) == 1) {
+                    let tw: int = eng_text_width(label);
+                    draw_text(nx + nw - inset - tw, row_y, label, rgb(236, 238, 242));
+                } else {
+                    draw_text(nx + inset, row_y, label, rgb(236, 238, 242));
+                }
+            }
+            p = p + 1;
+        }
+        if (i == bp_sel) {
+            let ac: Color = col_accent();
+            eng_line(nx, ny, nx + nw, ny, ac.r, ac.g, ac.b);
+            eng_line(nx, ny + nh - 1, nx + nw, ny + nh - 1, ac.r, ac.g, ac.b);
+            eng_line(nx, ny, nx, ny + nh, ac.r, ac.g, ac.b);
+            eng_line(nx + nw - 1, ny, nx + nw - 1, ny + nh, ac.r, ac.g, ac.b);
+        }
+        i = i + 1;
+    }
+    th_font(14);
+}
+
+fn bp_key_total(): int { return 62; }
+
+fn bp_named_vk(i: int): int {
+    if (i == 0) return 32;
+    if (i == 1) return 13;
+    if (i == 2) return 27;
+    if (i == 3) return 9;
+    if (i == 4) return 16;
+    if (i == 5) return 17;
+    if (i == 6) return 18;
+    if (i == 7) return 8;
+    if (i == 8) return 46;
+    if (i == 9) return 37;
+    if (i == 10) return 39;
+    if (i == 11) return 38;
+    if (i == 12) return 40;
+    return 32;
+}
+
+fn bp_named_name(i: int): string {
+    if (i == 0) return "Space";
+    if (i == 1) return "Enter";
+    if (i == 2) return "Esc";
+    if (i == 3) return "Tab";
+    if (i == 4) return "Shift";
+    if (i == 5) return "Ctrl";
+    if (i == 6) return "Alt";
+    if (i == 7) return "Backspace";
+    if (i == 8) return "Delete";
+    if (i == 9) return "Left";
+    if (i == 10) return "Right";
+    if (i == 11) return "Up";
+    if (i == 12) return "Down";
+    return "Space";
+}
+
+fn bp_key_name(i: int): string {
+    if (i < 14) return bp_named_name(i);
+    if (i < 26) return "F" + (i - 13);
+    if (i < 52) {
+        let letters: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        return letters.substring(i - 26, 1);
+    }
+    let digits: string = "0123456789";
+    return digits.substring(i - 52, 1);
+}
+
+fn bp_key_vk_at(i: int): int {
+    if (i < 14) return bp_named_vk(i);
+    if (i < 26) return 112 + (i - 14);
+    if (i < 52) return 65 + (i - 26);
+    return 48 + (i - 52);
+}
+
+fn bp_lower(s: string): string {
+    let upper: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let lower: string = "abcdefghijklmnopqrstuvwxyz";
+    let o: string = "";
+    let i: int = 0;
+    while (i < s.len()) {
+        let ch: string = s.substring(i, 1);
+        let j: int = 0;
+        let found: int = 0;
+        while (j < 26) {
+            if (ch == upper.substring(j, 1)) {
+                o = o + lower.substring(j, 1);
+                found = 1;
+            }
+            j = j + 1;
+        }
+        if (found == 0) o = o + ch;
+        i = i + 1;
+    }
+    return o;
+}
+
+fn bp_has(hay: string, needle: string): int {
+    if (needle.len() == 0) return 1;
+    let n: int = hay.len();
+    let m: int = needle.len();
+    if (m > n) return 0;
+    let i: int = 0;
+    while (i + m <= n) {
+        if (hay.substring(i, m) == needle) return 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn bp_key_match(i: int, q: string): int {
+    return bp_has(bp_lower(bp_key_name(i)), bp_lower(q));
+}
+
+fn bp_key_match_count(q: string): int {
+    let n: int = 0;
+    let i: int = 0;
+    while (i < bp_key_total()) {
+        if (bp_key_match(i, q) == 1) n = n + 1;
+        i = i + 1;
+    }
+    return n;
+}
+
+fn bp_key_match_at(q: string, nth: int): int {
+    let n: int = 0;
+    let i: int = 0;
+    while (i < bp_key_total()) {
+        if (bp_key_match(i, q) == 1) {
+            if (n == nth) return i;
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn bp_key_name_for_vk(vk: int): string {
+    let i: int = 0;
+    while (i < bp_key_total()) {
+        if (bp_key_vk_at(i) == vk) return bp_key_name(i);
+        i = i + 1;
+    }
+    return "" + vk;
+}
+
+fn bp_draw_key_picker(fx: int, y: int, fw: int): int {
+    let opener: Rect = rect(fx, y, fw, 28);
+    let hv: int = 0;
+    if (point_in_rect(eng_mouse_x(), eng_mouse_y(), opener)) hv = 1;
+    let focused: int = 0;
+    if (bp_key_open == 1) focused = 1;
+    th_field(opener, focused, hv);
+    th_font(14);
+    let shown: string = bp_key_name_for_vk(bp_node_op(bp_sel));
+    draw_text(fx + 10, th_text_y(y, 28), shown, col_text_main());
+    draw_text(fx + fw - 18, th_text_y(y, 28), "v", col_text_dim());
+    if (hv == 1 && mouse_pressed(MOUSE_LEFT)) {
+        if (bp_key_open == 1) {
+            bp_key_open = 0;
+            if (edit_target == "bp_key_find") edit_target = "";
+        } else {
+            bp_key_open = 1;
+            bp_key_ignore = 1;
+            bp_key_query = "";
+            bp_key_scroll = 0;
+            edit_target = "";
+        }
+    }
+
+    let box_h: int = 28;
+    if (bp_key_open == 1) {
+        let sy: int = y + 32;
+        let search: Rect = rect(fx, sy, fw, 28);
+        th_font(14);
+        let prev_q: string = bp_key_query;
+        bp_key_query = ui_field("bp_key_find", search, bp_key_query);
+        if (bp_key_query != prev_q) bp_key_scroll = 0;
+        th_font(14);
+        let matches: int = bp_key_match_count(bp_key_query);
+        let vis: int = 8;
+        if (matches < vis) vis = matches;
+        if (bp_key_scroll > matches - vis) bp_key_scroll = matches - vis;
+        if (bp_key_scroll < 0) bp_key_scroll = 0;
+        let row: int = 0;
+        while (row < vis) {
+            let idx: int = bp_key_match_at(bp_key_query, bp_key_scroll + row);
+            let rr: Rect = rect(fx, sy + 32 + row * 26, fw, 26);
+            let hot: int = 0;
+            if (point_in_rect(eng_mouse_x(), eng_mouse_y(), rr)) hot = 1;
+            if (hot == 1) draw_fill_rect(rr, rgb(46, 78, 140));
+            else draw_fill_rect(rr, rgb(24, 26, 32));
+            th_font(14);
+            if (idx >= 0) draw_text(fx + 10, th_text_y(rr.y, rr.h), bp_key_name(idx), col_text_main());
+            if (hot == 1 && bp_key_ignore == 0 && mouse_pressed(MOUSE_LEFT) && idx >= 0) {
+                bp_node_set_op(bp_sel, bp_key_vk_at(idx));
+                bp_key_open = 0;
+                bp_key_query = "";
+                if (edit_target == "bp_key_find") edit_target = "";
+            }
+            row = row + 1;
+        }
+        if (bp_key_ignore == 1 && mouse_down(MOUSE_LEFT) == 0) bp_key_ignore = 0;
+        box_h = 64 + vis * 26;
+        if (matches == 0) {
+            th_font(14);
+            draw_text(fx + 10, sy + 36, "No keys", col_text_dim());
+            box_h = 96;
+        }
+        if (bp_key_ignore == 0 && mouse_pressed(MOUSE_LEFT)) {
+            if (point_in_rect(eng_mouse_x(), eng_mouse_y(), rect(fx, y, fw, box_h)) == 0) {
+                bp_key_open = 0;
+                if (edit_target == "bp_key_find") edit_target = "";
+            }
+        }
+    }
+    bp_key_bx = fx;
+    bp_key_by = y;
+    bp_key_bw = fw;
+    bp_key_bh = box_h;
+    return y + box_h;
+}
+
+fn bp_type_label(t: int): string {
+    if (t == 1) return "Bool";
+    if (t == 3) return "Text";
+    return "Float";
+}
+
+fn bp_draw_var_fields(vi: int, fx: int, y: int, fw: int, step: int): int {
+    if (vi < 0 || vi >= bp_var_count()) return y;
+    draw_text(fx, y, "Name", col_text_dim());
+    y = y + step;
+    let nm: string = ui_field("bp_vname" + vi, rect(fx, y, fw, 28), bp_var_name(vi));
+    bp_var_set_name(vi, nm);
+    th_font(14);
+    y = y + 36;
+    draw_text(fx, y, "Type", col_text_dim());
+    y = y + step;
+    let ty: int = bp_var_type(vi);
+    let onf: int = 0;
+    let onb: int = 0;
+    let ont: int = 0;
+    if (ty == 2) onf = 1;
+    if (ty == 1) onb = 1;
+    if (ty == 3) ont = 1;
+    if (ui_pill(rect(fx, y, 72, 28), "Float", onf) == 1) bp_var_set_type(vi, 2);
+    if (ui_pill(rect(fx + 78, y, 72, 28), "Bool", onb) == 1) bp_var_set_type(vi, 1);
+    if (ui_pill(rect(fx + 156, y, 72, 28), "Text", ont) == 1) bp_var_set_type(vi, 3);
+    y = y + 40;
+    th_font(14);
+    ty = bp_var_type(vi);
+    draw_text(fx, y, "Starts at", col_text_dim());
+    y = y + step;
+    if (ty == 1) {
+        let b: int = bp_var_bool(vi);
+        let off: int = 0;
+        let on: int = 0;
+        if (b == 0) off = 1;
+        if (b == 1) on = 1;
+        if (ui_pill(rect(fx, y, 72, 28), "Off", off) == 1) bp_var_set_bool(vi, 0);
+        if (ui_pill(rect(fx + 78, y, 72, 28), "On", on) == 1) bp_var_set_bool(vi, 1);
+        y = y + 40;
+    } else if (ty == 3) {
+        let tx: string = ui_field("bp_vtext" + vi, rect(fx, y, fw, 28), bp_var_text(vi));
+        bp_var_set_text(vi, tx);
+        th_font(14);
+        y = y + 40;
+    } else {
+        let nx: string = ui_field("bp_vnum" + vi, rect(fx, y, fw, 28), bp_var_num(vi));
+        bp_var_set_num(vi, nx);
+        th_font(14);
+        y = y + 40;
+    }
+    th_font(14);
+    if (ui_button_danger(rect(fx, y, fw, 28), "Delete value") == 1) {
+        bp_clear_edit();
+        bp_remove_var(vi);
+        bp_var_edit = -1;
+        bp_sel = -1;
+        bp_mode = 0;
+        bp_wire_node = -1;
+    }
+    return y + 36;
+}
+
+fn bp_draw_values(p: Rect) {
+    draw_fill_rect(p, col_panel_dark());
+    draw_fill_rect(rect(p.x, p.y, 1, p.h), col_border_soft());
+    th_font(14);
+    draw_text(p.x + 14, th_text_y(p.y, 36), "Values", col_text_main());
+    let y: int = p.y + 44;
+    let fx: int = p.x + 12;
+    let fw: int = p.w - 24;
+    let step: int = eng_text_height() + 8;
+    draw_text(fx, y, "Buttons share one copy.", col_text_dim());
+    y = y + step;
+    draw_text(fx, y, "A script on an object keeps its own.", col_text_dim());
+    y = y + step + 6;
+    if (ui_pill(rect(fx, y, fw, 28), "+ Value", 0) == 1) {
+        let added: int = bp_add_var(2);
+        if (added >= 0) bp_var_edit = added;
+    }
+    y = y + 36;
+    th_font(14);
+    if (bp_var_edit >= bp_var_count()) bp_var_edit = -1;
+    let i: int = 0;
+    let n: int = bp_var_count();
+    while (i < n) {
+        let on: int = 0;
+        if (i == bp_var_edit) on = 1;
+        let label: string = bp_var_name(i) + "  " + bp_type_label(bp_var_type(i));
+        if (ui_pill(rect(fx, y, fw, 26), label, on) == 1) bp_var_edit = i;
+        y = y + 30;
+        i = i + 1;
+    }
+    if (bp_var_edit >= 0) {
+        y = y + 8;
+        bp_draw_var_fields(bp_var_edit, fx, y, fw, step);
+    }
+    th_font(14);
+}
+
+fn bp_draw_props() {
+    if (bp_sel < 0 || bp_sel >= bp_node_count()) {
+        bp_draw_values(bp_props());
+        return;
+    }
+    let p: Rect = bp_props();
+    draw_fill_rect(p, col_panel_dark());
+    draw_fill_rect(rect(p.x, p.y, 1, p.h), col_border_soft());
+    let kind: int = bp_node_kind(bp_sel);
+    th_font(14);
+    draw_text(p.x + 14, th_text_y(p.y, 36), bp_kind_name(kind), col_text_main());
+    th_font(14);
+    let y: int = p.y + 44;
+    let step: int = eng_text_height() + 8;
+    let fx: int = p.x + 12;
+    let fw: int = p.w - 24;
+
+    if (kind == 1) {
+        draw_text(fx, y, "Runs once when play starts.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "The entity may not be set yet.", col_text_dim());
+    } else if (kind == 2) {
+        draw_text(fx, y, "Runs every frame on the", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "entity this blueprint is on.", col_text_dim());
+    } else if (kind == 3) {
+        draw_text(fx, y, "True and false are separate paths.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Wire a bool, such as Key Pressed.", col_text_dim());
+    } else if (kind == 18) {
+        let cmp: int = bp_node_op(bp_sel);
+        let q0: int = 0;
+        let q1: int = 0;
+        let q2: int = 0;
+        let q3: int = 0;
+        let q4: int = 0;
+        let q5: int = 0;
+        if (cmp == 0) q0 = 1;
+        if (cmp == 1) q1 = 1;
+        if (cmp == 2) q2 = 1;
+        if (cmp == 3) q3 = 1;
+        if (cmp == 4) q4 = 1;
+        if (cmp == 5) q5 = 1;
+        if (ui_pill(rect(fx, y, 108, 28), "Is", q0) == 1) bp_node_set_op(bp_sel, 0);
+        if (ui_pill(rect(fx + 116, y, 108, 28), "Is not", q1) == 1) bp_node_set_op(bp_sel, 1);
+        y = y + 34;
+        if (ui_pill(rect(fx, y, 108, 28), "Greater", q2) == 1) bp_node_set_op(bp_sel, 2);
+        if (ui_pill(rect(fx + 116, y, 108, 28), "Less", q3) == 1) bp_node_set_op(bp_sel, 3);
+        y = y + 34;
+        if (ui_pill(rect(fx, y, 108, 28), "At least", q4) == 1) bp_node_set_op(bp_sel, 4);
+        if (ui_pill(rect(fx + 116, y, 108, 28), "At most", q5) == 1) bp_node_set_op(bp_sel, 5);
+        y = y + 40;
+        th_font(14);
+        draw_text(fx, y, "Used when a pin is empty.", col_text_dim());
+        y = y + step;
+        draw_text(fx, y, "Value", col_text_dim());
+        y = y + step;
+        let ia: string = ui_field("bp_ifa", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, ia);
+        th_font(14);
+        y = y + 36;
+        let blab: string = "Is";
+        if (cmp == 1) blab = "Is not";
+        if (cmp == 2) blab = "Greater than";
+        if (cmp == 3) blab = "Less than";
+        if (cmp == 4) blab = "At least";
+        if (cmp == 5) blab = "At most";
+        draw_text(fx, y, blab, col_text_dim());
+        y = y + step;
+        let ib: string = ui_field("bp_ifb", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, ib);
+        th_font(14);
+    } else if (kind == 4) {
+        draw_text(fx, y, "Runs First, then Second.", col_text_main());
+    } else if (kind == 5) {
+        draw_text(fx, y, "Message", col_text_dim());
+        y = y + step;
+        let msg: string = ui_field("bp_log", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, msg);
+        th_font(14);
+    } else if (kind == 6) {
+        draw_text(fx, y, "X and Y of this entity.", col_text_main());
+    } else if (kind == 7) {
+        draw_text(fx, y, "Used when a pin is not wired.", col_text_dim());
+        y = y + step;
+        draw_text(fx, y, "X", col_text_dim());
+        y = y + step;
+        let ax: string = ui_field("bp_ax", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, ax);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Y", col_text_dim());
+        y = y + step;
+        let ay: string = ui_field("bp_ay", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, ay);
+        th_font(14);
+    } else if (kind == 8) {
+        draw_text(fx, y, "Key", col_text_dim());
+        y = y + step;
+        y = bp_draw_key_picker(fx, y, fw);
+        th_font(14);
+    } else if (kind == 9) {
+        draw_text(fx, y, "Kind", col_text_dim());
+        y = y + step;
+        let kd: string = ui_field("bp_kind", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, kd);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Name", col_text_dim());
+        y = y + step;
+        let nm: string = ui_field("bp_name", rect(fx, y, fw, 28), bp_node_name(bp_sel));
+        bp_node_set_name(bp_sel, nm);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "X, if that pin is empty", col_text_dim());
+        y = y + step;
+        let sx: string = ui_field("bp_sx", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, sx);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Y, if that pin is empty", col_text_dim());
+        y = y + step;
+        let sy: string = ui_field("bp_sy", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, sy);
+        th_font(14);
+    } else if (kind == 10) {
+        draw_text(fx, y, "An empty Entity pin destroys", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "this entity. Or wire Spawn.", col_text_dim());
+    } else if (kind == 11) {
+        let op: int = bp_node_op(bp_sel);
+        let a0: int = 0;
+        let a1: int = 0;
+        let a2: int = 0;
+        let a3: int = 0;
+        if (op == 0) a0 = 1;
+        if (op == 1) a1 = 1;
+        if (op == 2) a2 = 1;
+        if (op == 3) a3 = 1;
+        if (ui_pill(rect(fx, y, 108, 28), "Add", a0) == 1) bp_node_set_op(bp_sel, 0);
+        if (ui_pill(rect(fx + 116, y, 108, 28), "Subtract", a1) == 1) bp_node_set_op(bp_sel, 1);
+        y = y + 34;
+        if (ui_pill(rect(fx, y, 108, 28), "Multiply", a2) == 1) bp_node_set_op(bp_sel, 2);
+        if (ui_pill(rect(fx + 116, y, 108, 28), "Divide", a3) == 1) bp_node_set_op(bp_sel, 3);
+        y = y + 40;
+        th_font(14);
+        draw_text(fx, y, "A and B when a pin is empty.", col_text_dim());
+        y = y + step;
+        draw_text(fx, y, "A", col_text_dim());
+        y = y + step;
+        let ma: string = ui_field("bp_ma", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, ma);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "B", col_text_dim());
+        y = y + step;
+        let mb: string = ui_field("bp_mb", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, mb);
+        th_font(14);
+    } else if (kind == 12) {
+        draw_text(fx, y, bp_node_title(bp_sel), col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Wire the left pin to run it.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "These numbers are written when it runs.", col_text_dim());
+        y = y + step;
+        draw_text(fx, y, "Right pins read where it is now.", col_text_dim());
+        y = y + step + 4;
+        draw_text(fx, y, "X", col_text_dim());
+        y = y + step;
+        let oxnow: string = bp_a_text(bp_sel);
+        let ox: string = ui_field("bp_ox" + bp_sel, rect(fx, y, fw, 28), oxnow);
+        if (ox != oxnow) bp_set_a_text(bp_sel, ox);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Y", col_text_dim());
+        y = y + step;
+        let oynow: string = bp_b_text(bp_sel);
+        let oy: string = ui_field("bp_oy" + bp_sel, rect(fx, y, fw, 28), oynow);
+        if (oy != oynow) bp_set_b_text(bp_sel, oy);
+        th_font(14);
+        y = y + 36;
+        let packed: string = bp_before_bar(bp_node_text(bp_sel));
+        draw_text(fx, y, "Z", col_text_dim());
+        y = y + step;
+        let hz: string = bp_text_head(packed);
+        let oz: string = ui_field("bp_oz" + bp_sel, rect(fx, y, fw, 28), hz);
+        if (oz != hz) bp_node_set_text(bp_sel, oz + " " + bp_text_tail(packed));
+        th_font(14);
+        y = y + 36;
+        packed = bp_before_bar(bp_node_text(bp_sel));
+        draw_text(fx, y, "Rotation", col_text_dim());
+        y = y + step;
+        let hrot: string = bp_text_tail(packed);
+        let oro: string = ui_field("bp_orot" + bp_sel, rect(fx, y, fw, 28), hrot);
+        if (oro != hrot) bp_node_set_text(bp_sel, bp_text_head(packed) + " " + oro);
+        th_font(14);
+    } else if (kind == 13) {
+        draw_text(fx, y, "Name", col_text_dim());
+        y = y + step;
+        let fnm: string = ui_field("bp_fnname", rect(fx, y, fw, 28), bp_fn_name(bp_editing()));
+        bp_fn_set_name(fnm);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Arguments", col_text_dim());
+        y = y + step;
+        let ac: int = bp_fn_argc();
+        let ai: int = 0;
+        while (ai <= 4) {
+            let on: int = 0;
+            if (ai == ac) on = 1;
+            if (ui_pill(rect(fx + ai * 36, y, 32, 28), "" + ai, on) == 1) bp_fn_set_argc(ai);
+            ai = ai + 1;
+        }
+        y = y + 40;
+        th_font(14);
+        ac = bp_fn_argc();
+        ai = 0;
+        while (ai < ac) {
+            draw_text(fx, y, "Argument " + (ai + 1), col_text_dim());
+            y = y + step;
+            let an: string = ui_field("bp_arg" + ai, rect(fx, y, fw, 28), bp_fn_arg(ai));
+            bp_fn_set_arg(ai, an);
+            th_font(14);
+            y = y + 36;
+            ai = ai + 1;
+        }
+        draw_text(fx, y, "Wire from the entry pin.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Add a Return to send a value back.", col_text_dim());
+        y = y + 28;
+        if (ui_button_danger(rect(fx, y, fw, 28), "Delete function") == 1) {
+            let which: int = bp_editing();
+            bp_clear_edit();
+            bp_remove_fn(which);
+            bp_sel = -1;
+            bp_mode = 0;
+            bp_wire_node = -1;
+        }
+    } else if (kind == 19) {
+        draw_text(fx, y, "Pixels per second. Empty pins use these.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "X speed", col_text_dim());
+        y = y + step;
+        let vx: string = ui_field("bp_vx", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, vx);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Y speed", col_text_dim());
+        y = y + step;
+        let vy: string = ui_field("bp_vy", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, vy);
+        th_font(14);
+    } else if (kind == 20) {
+        draw_text(fx, y, "This entity's physics speed.", col_text_main());
+    } else if (kind == 21) {
+        draw_text(fx, y, "Mouse button", col_text_dim());
+        y = y + step;
+        let mb: int = bp_node_op(bp_sel);
+        let ml: int = 0;
+        let mr: int = 0;
+        let mm: int = 0;
+        if (mb == 1) mr = 1;
+        else if (mb == 2) mm = 1;
+        else ml = 1;
+        if (ui_pill(rect(fx, y, 72, 28), "Left", ml) == 1) bp_node_set_op(bp_sel, 0);
+        if (ui_pill(rect(fx + 80, y, 72, 28), "Right", mr) == 1) bp_node_set_op(bp_sel, 1);
+        if (ui_pill(rect(fx + 160, y, 80, 28), "Middle", mm) == 1) bp_node_set_op(bp_sel, 2);
+        th_font(14);
+    } else if (kind == 22) {
+        draw_text(fx, y, "Name prefix", col_text_dim());
+        y = y + step;
+        let hp: string = ui_field("bp_hit", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, hp);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Hit runs when something with that name overlaps this entity.", col_text_dim());
+    } else if (kind == 23) {
+        draw_text(fx, y, "Kind", col_text_dim());
+        y = y + step;
+        let sk: string = ui_field("bp_skind", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, sk);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Name", col_text_dim());
+        y = y + step;
+        let sn: string = ui_field("bp_sname", rect(fx, y, fw, 28), bp_node_name(bp_sel));
+        bp_node_set_name(bp_sel, sn);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Size", col_text_dim());
+        y = y + step;
+        let ss: string = ui_field("bp_ssize", rect(fx, y, fw, 28), "" + bp_node_op(bp_sel));
+        bp_node_set_op(bp_sel, parse_int_or(ss, bp_node_op(bp_sel)));
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Kind can be sphere|bullet.nxa to give the new actor a script.", col_text_dim());
+    } else if (kind == 24) {
+        draw_text(fx, y, "Yaw, if that pin is empty", col_text_dim());
+        y = y + step;
+        let yw: string = ui_field("bp_yaw", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, yw);
+        th_font(14);
+    } else if (kind == 25) {
+        draw_text(fx, y, "Which way this entity is turned.", col_text_main());
+    } else if (kind == 26) {
+        draw_text(fx, y, "Positive key adds 1, negative key subtracts 1.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Positive key", col_text_dim());
+        y = y + step;
+        let pk: string = ui_field("bp_axis_p", rect(fx, y, fw, 28), "" + bp_node_op(bp_sel));
+        bp_node_set_op(bp_sel, parse_int_or(pk, bp_node_op(bp_sel)));
+        y = y + 36;
+        draw_text(fx, y, "Negative key", col_text_dim());
+        y = y + step;
+        let nk: string = ui_field("bp_axis_n", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, nk);
+    } else if (kind == 27) {
+        draw_text(fx, y, "Locks the mouse and turns the view.", col_text_main());
+    } else if (kind == 28) {
+        draw_text(fx, y, "Pitch, if that pin is empty", col_text_dim());
+        y = y + step;
+        let pt: string = ui_field("bp_pitch", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, pt);
+    } else if (kind == 29) {
+        draw_text(fx, y, "How far this entity is looking up.", col_text_main());
+    } else if (kind == 30) {
+        draw_text(fx, y, "Offsets along the look, when a pin is empty.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Forward", col_text_dim());
+        y = y + step;
+        let vf: string = ui_field("bp_view_f", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, vf);
+        y = y + 36;
+        draw_text(fx, y, "Right", col_text_dim());
+        y = y + step;
+        let vr: string = ui_field("bp_view_r", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, vr);
+        y = y + 36;
+        draw_text(fx, y, "Down", col_text_dim());
+        y = y + step;
+        let vd: string = ui_field("bp_view_d", rect(fx, y, fw, 28), "" + bp_node_op(bp_sel));
+        bp_node_set_op(bp_sel, parse_int_or(vd, bp_node_op(bp_sel)));
+    } else if (kind == 31) {
+        draw_text(fx, y, "Walk speed", col_text_dim());
+        y = y + step;
+        let ws: string = ui_field("bp_walk_s", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, ws);
+        y = y + 36;
+        draw_text(fx, y, "Jump speed", col_text_dim());
+        y = y + step;
+        let wj: string = ui_field("bp_walk_j", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, wj);
+    } else if (kind == 32) {
+        draw_text(fx, y, "Speed. Empty means the offsets are already pixels.", col_text_main());
+        y = y + step;
+        let ns: string = ui_field("bp_nudge", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, ns);
+    } else if (kind == 14) {
+        draw_text(fx, y, "Sends this value back and stops", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "the function.", col_text_dim());
+        y = y + step + 4;
+        draw_text(fx, y, "Result, if that pin is empty", col_text_dim());
+        y = y + step;
+        let rv: string = ui_field("bp_retv", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, rv);
+        th_font(14);
+    } else if (kind == 15) {
+        draw_text(fx, y, "Runs that function. The result", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "pin is what it returns.", col_text_dim());
+        y = y + step + 4;
+        let called: string = bp_node_name(bp_sel);
+        let fi: int = 0;
+        let fc: int = bp_fn_count();
+        while (fi < fc) {
+            let on: int = 0;
+            if (bp_fn_name(fi) == called) on = 1;
+            if (ui_pill(rect(fx, y, fw, 26), bp_fn_name(fi), on) == 1) bp_call_set_fn(bp_sel, fi);
+            y = y + 30;
+            fi = fi + 1;
+        }
+        th_font(14);
+        let argc: int = bp_node_op(bp_sel);
+        if (argc >= 1) {
+            draw_text(fx, y, "A, if that pin is empty", col_text_dim());
+            y = y + step;
+            let ca: string = ui_field("bp_ca", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+            bp_set_a_text(bp_sel, ca);
+            th_font(14);
+            y = y + 36;
+        }
+        if (argc >= 2) {
+            draw_text(fx, y, "B, if that pin is empty", col_text_dim());
+            y = y + step;
+            let cb: string = ui_field("bp_cb", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+            bp_set_b_text(bp_sel, cb);
+            th_font(14);
+            y = y + 36;
+        }
+        if (argc >= 3) {
+            let cpack: string = bp_node_text(bp_sel);
+            draw_text(fx, y, "C, if that pin is empty", col_text_dim());
+            y = y + step;
+            let cc: string = ui_field("bp_cc", rect(fx, y, fw, 28), bp_text_head(cpack));
+            if (cc != bp_text_head(cpack)) bp_node_set_text(bp_sel, cc + " " + bp_text_tail(cpack));
+            th_font(14);
+            y = y + 36;
+        }
+        if (argc >= 4) {
+            let packed4: string = bp_node_text(bp_sel);
+            draw_text(fx, y, "D, if that pin is empty", col_text_dim());
+            y = y + step;
+            let cd: string = ui_field("bp_cd", rect(fx, y, fw, 28), bp_text_tail(packed4));
+            if (cd != bp_text_tail(packed4)) bp_node_set_text(bp_sel, bp_text_head(packed4) + " " + cd);
+            th_font(14);
+            y = y + 36;
+        }
+        let open_i: int = bp_fn_find(bp_node_name(bp_sel));
+        if (open_i >= 0) {
+            y = y + 8;
+            if (ui_pill(rect(fx, y, fw, 26), "Open function", 0) == 1) bp_switch_graph(open_i);
+        }
+    } else if (kind == 16) {
+        draw_text(fx, y, "Reads this object's value.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Until something sets it, you get the start.", col_text_dim());
+        y = y + step + 6;
+        let vi: int = bp_var_find(bp_node_name(bp_sel));
+        if (vi < 0) {
+            draw_text(fx, y, "This value was removed.", col_text_dim());
+        } else {
+            y = bp_draw_var_fields(vi, fx, y, fw, step);
+        }
+    } else if (kind == 17) {
+        draw_text(fx, y, "Wire the left pin to write it.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "This number belongs to this block.", col_text_dim());
+        y = y + step + 6;
+        let svname: string = bp_node_name(bp_sel);
+        draw_text(fx, y, "Writes " + svname, col_text_main());
+        y = y + step + 4;
+        let svi: int = bp_var_find(svname);
+        let svty: int = bp_node_op(bp_sel);
+        if (svi >= 0) svty = bp_var_type(svi);
+        if (svi < 0) {
+            draw_text(fx, y, "This value was removed.", col_text_dim());
+        } else if (svty == 1) {
+            let svcur: string = bp_a_text(bp_sel);
+            let svon: int = 1;
+            if (svcur == "0.0" || svcur == "0") svon = 0;
+            let svoff: int = 0;
+            if (svon == 0) svoff = 1;
+            if (ui_pill(rect(fx, y, 72, 28), "Off", svoff) == 1) bp_set_a_text(bp_sel, "0");
+            if (ui_pill(rect(fx + 78, y, 72, 28), "On", svon) == 1) bp_set_a_text(bp_sel, "1");
+        } else if (svty == 3) {
+            let svnow: string = bp_node_text(bp_sel);
+            let svtx: string = ui_field("bp_sett" + bp_sel, rect(fx, y, fw, 28), svnow);
+            if (svtx != svnow) bp_node_set_text(bp_sel, svtx);
+            th_font(14);
+        } else {
+            let svnnow: string = bp_a_text(bp_sel);
+            let svn: string = ui_field("bp_setn" + bp_sel, rect(fx, y, fw, 28), svnnow);
+            if (svn != svnnow) bp_set_a_text(bp_sel, svn);
+            th_font(14);
+        }
+    }
+    if (kind != 1 && kind != 2 && kind != 13) {
+        y = y + 22;
+        th_font(14);
+        if (ui_button_danger(rect(fx, y, fw, 28), "Delete node") == 1) bp_delete_selected();
+    }
+    th_font(14);
+}
+
+fn bp_menu_var_at(): int { return bp_palette_count() + 1; }
+
+fn bp_menu_fn_at(): int { return bp_menu_var_at() + bp_var_count() * 2; }
+
+fn bp_menu_total(): int {
+    let n: int = bp_menu_fn_at();
+    if (bp_editing() >= 0) n = n + 1;
+    n = n + bp_fn_count();
+    return n;
+}
+
+fn bp_menu_var_index(i: int): int {
+    let k: int = i - bp_menu_var_at();
+    let vi: int = 0;
+    while (k >= 2) {
+        k = k - 2;
+        vi = vi + 1;
+    }
+    return vi;
+}
+
+fn bp_menu_var_is_set(i: int): int {
+    let k: int = i - bp_menu_var_at();
+    while (k >= 2) k = k - 2;
+    if (k == 1) return 1;
+    return 0;
+}
+
+fn bp_place_bound(idx: int) {
+    if (idx < 0) {
+        eng_log("[blueprint] could not add that node");
+        return;
+    }
+    bp_menu_open = 0;
+    bp_key_open = 0;
+    bp_clear_edit();
+    bp_sel = idx;
+}
+
+fn bp_menu_label(i: int): string {
+    if (i < bp_palette_count()) return bp_kind_name(bp_palette_kind(i));
+    if (i == bp_palette_count()) return "New Value";
+    if (i < bp_menu_fn_at()) {
+        let vi: int = bp_menu_var_index(i);
+        if (bp_menu_var_is_set(i) == 1) return "Set " + bp_var_name(vi);
+        return "Get " + bp_var_name(vi);
+    }
+    let j: int = i - bp_menu_fn_at();
+    if (bp_editing() >= 0) {
+        if (j == 0) return "Return";
+        j = j - 1;
+    }
+    return "Call " + bp_fn_name(j);
+}
+
+fn bp_menu_swatch(i: int): int {
+    if (i < bp_palette_count()) return bp_palette_kind(i);
+    if (i == bp_palette_count()) return 16;
+    if (i < bp_menu_fn_at()) {
+        if (bp_menu_var_is_set(i) == 1) return 17;
+        return 16;
+    }
+    let j: int = i - bp_menu_fn_at();
+    if (bp_editing() >= 0 && j == 0) return 14;
+    return 15;
+}
+
+fn bp_menu_place(i: int) {
+    if (i < bp_palette_count()) {
+        bp_add_at(bp_palette_kind(i), bp_menu_gx, bp_menu_gy);
+        return;
+    }
+    if (i == bp_palette_count()) {
+        let vi: int = bp_add_var(2);
+        if (vi < 0) {
+            eng_log("[blueprint] could not add a value");
+            return;
+        }
+        bp_var_edit = vi;
+        bp_place_bound(bp_add_get(vi, bp_menu_gx, bp_menu_gy));
+        return;
+    }
+    if (i < bp_menu_fn_at()) {
+        let vi: int = bp_menu_var_index(i);
+        if (bp_menu_var_is_set(i) == 1) bp_place_bound(bp_add_set(vi, bp_menu_gx, bp_menu_gy));
+        else bp_place_bound(bp_add_get(vi, bp_menu_gx, bp_menu_gy));
+        return;
+    }
+    let j: int = i - bp_menu_fn_at();
+    if (bp_editing() >= 0 && j == 0) {
+        bp_add_at(14, bp_menu_gx, bp_menu_gy);
+        return;
+    }
+    if (bp_editing() >= 0) j = j - 1;
+    bp_place_bound(bp_add_call(bp_fn_name(j), bp_menu_gx, bp_menu_gy));
+}
+
+fn bp_menu_match(i: int, q: string): int {
+    return bp_has(bp_lower(bp_menu_label(i)), bp_lower(q));
+}
+
+fn bp_menu_match_count(q: string): int {
+    let n: int = 0;
+    let i: int = 0;
+    while (i < bp_menu_total()) {
+        if (bp_menu_match(i, q) == 1) n = n + 1;
+        i = i + 1;
+    }
+    return n;
+}
+
+fn bp_menu_match_at(q: string, nth: int): int {
+    let n: int = 0;
+    let i: int = 0;
+    while (i < bp_menu_total()) {
+        if (bp_menu_match(i, q) == 1) {
+            if (n == nth) return i;
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn bp_cat_count(): int { return 6; }
+
+fn bp_cat_name(c: int): string {
+    if (c == 0) return "Flow";
+    if (c == 1) return "Math";
+    if (c == 2) return "Vectors";
+    if (c == 3) return "Scene";
+    if (c == 4) return "Values";
+    if (c == 5) return "Functions";
+    return "";
+}
+
+fn bp_menu_cat_of(i: int): int {
+    if (i < bp_palette_count()) {
+        let k: int = bp_palette_kind(i);
+        if (k == 18 || k == 3 || k == 4) return 0;
+        if (k == 11) return 1;
+        if (k == 6 || k == 7 || k == 20 || k == 25 || k == 26 || k == 29 || k == 30) return 2;
+        return 3;
+    }
+    if (i < bp_menu_fn_at()) return 4;
+    return 5;
+}
+
+fn bp_cat_item_count(c: int): int {
+    let n: int = 0;
+    let i: int = 0;
+    while (i < bp_menu_total()) {
+        if (bp_menu_cat_of(i) == c) n = n + 1;
+        i = i + 1;
+    }
+    return n;
+}
+
+fn bp_cat_item(c: int, nth: int): int {
+    let n: int = 0;
+    let i: int = 0;
+    while (i < bp_menu_total()) {
+        if (bp_menu_cat_of(i) == c) {
+            if (n == nth) return i;
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn bp_cat_shown_count(): int {
+    let n: int = 0;
+    let c: int = 0;
+    while (c < bp_cat_count()) {
+        if (bp_cat_item_count(c) > 0) n = n + 1;
+        c = c + 1;
+    }
+    return n;
+}
+
+fn bp_cat_shown_at(nth: int): int {
+    let n: int = 0;
+    let c: int = 0;
+    while (c < bp_cat_count()) {
+        if (bp_cat_item_count(c) > 0) {
+            if (n == nth) return c;
+            n = n + 1;
+        }
+        c = c + 1;
+    }
+    return -1;
+}
+
+fn bp_menu_list_count(): int {
+    if (bp_menu_query.len() > 0) return bp_menu_match_count(bp_menu_query);
+    if (bp_menu_cat < 0) return bp_cat_shown_count();
+    return bp_cat_item_count(bp_menu_cat) + 1;
+}
+
+fn bp_draw_add_menu() {
+    if (bp_menu_open == 0) return;
+    let view: Rect = viewport_rect();
+    let mw: int = 240;
+    let row_h: int = 28;
+    th_font(14);
+    let prev_q: string = bp_menu_query;
+    let matches: int = bp_menu_list_count();
+    let vis: int = matches;
+    if (vis > 8) vis = 8;
+    if (matches == 0) vis = 1;
+    if (bp_menu_scroll > matches - vis) bp_menu_scroll = matches - vis;
+    if (bp_menu_scroll < 0) bp_menu_scroll = 0;
+    let mh: int = 46 + vis * row_h;
+    let x: int = bp_menu_sx;
+    let y: int = bp_menu_sy;
+    if (x + mw > view.x + view.w - 8) x = view.x + view.w - 8 - mw;
+    if (y + mh > view.y + view.h - 8) y = view.y + view.h - 8 - mh;
+    if (x < view.x + 4) x = view.x + 4;
+    if (y < view.y + 64) y = view.y + 64;
+    bp_menu_bx = x;
+    bp_menu_by = y;
+    bp_menu_bw = mw;
+    bp_menu_bh = mh;
+    th_popup(rect(x, y, mw, mh));
+    let search: Rect = rect(x + 8, y + 8, mw - 16, 28);
+    bp_menu_query = ui_field("bp_node_find", search, bp_menu_query);
+    if (bp_menu_query != prev_q) bp_menu_scroll = 0;
+    th_font(14);
+    if (bp_menu_query.len() == 0) draw_text(search.x + 9, th_text_y(search.y, search.h), "Search", col_text_dim());
+    matches = bp_menu_list_count();
+    vis = matches;
+    if (vis > 8) vis = 8;
+    if (bp_menu_scroll > matches - vis) bp_menu_scroll = matches - vis;
+    if (bp_menu_scroll < 0) bp_menu_scroll = 0;
+    if (matches == 0) {
+        draw_text(x + 16, th_text_y(y + 40, row_h), "No nodes", col_text_dim());
+        th_font(14);
+        return;
+    }
+    let show_cats: int = 0;
+    if (bp_menu_query.len() == 0 && bp_menu_cat < 0) show_cats = 1;
+    let show_back: int = 0;
+    if (bp_menu_query.len() == 0 && bp_menu_cat >= 0) show_back = 1;
+    let row: int = 0;
+    while (row < vis) {
+        let slot: int = bp_menu_scroll + row;
+        let rr: Rect = rect(x + 6, y + 42 + row * row_h, mw - 12, row_h);
+        let hot: int = 0;
+        if (point_in_rect(eng_mouse_x(), eng_mouse_y(), rr)) hot = 1;
+        if (hot == 1) draw_fill_rect(rr, rgb(46, 78, 140));
+        th_font(14);
+        if (show_cats == 1) {
+            let cat: int = bp_cat_shown_at(slot);
+            if (cat >= 0) {
+                draw_text(rr.x + 14, th_text_y(rr.y, rr.h), bp_cat_name(cat), col_text_main());
+                draw_text(rr.x + rr.w - 18, th_text_y(rr.y, rr.h), ">", col_text_dim());
+                if (hot == 1 && mouse_pressed(MOUSE_LEFT)) {
+                    bp_menu_cat = cat;
+                    bp_menu_scroll = 0;
+                }
+            }
+        } else if (show_back == 1 && slot == 0) {
+            draw_text(rr.x + 14, th_text_y(rr.y, rr.h), "Back", col_text_dim());
+            if (hot == 1 && mouse_pressed(MOUSE_LEFT)) {
+                bp_menu_cat = -1;
+                bp_menu_scroll = 0;
+            }
+        } else {
+            let idx: int = -1;
+            if (bp_menu_query.len() > 0) idx = bp_menu_match_at(bp_menu_query, slot);
+            else idx = bp_cat_item(bp_menu_cat, slot - 1);
+            if (idx >= 0) {
+                let hc: Color = bp_head_color(bp_menu_swatch(idx));
+                draw_fill_rect(rect(rr.x, rr.y + 6, 4, rr.h - 12), hc);
+                let lab: string = bp_menu_label(idx);
+                draw_text(rr.x + 14, th_text_y(rr.y, rr.h), lab, col_text_main());
+                if (bp_menu_query.len() > 0) {
+                    let cn: string = bp_cat_name(bp_menu_cat_of(idx));
+                    let room: int = rr.w - 22 - eng_text_width(lab) - eng_text_width(cn);
+                    if (room > 16) draw_text(rr.x + rr.w - eng_text_width(cn) - 8, th_text_y(rr.y, rr.h), cn, col_text_dim());
+                }
+                if (hot == 1 && mouse_pressed(MOUSE_LEFT)) bp_menu_place(idx);
+            }
+        }
+        row = row + 1;
+    }
+    th_font(14);
+}
+
+fn bp_editor_draw() {
+    if (bp_is_open() == 0) return;
+    let r: Rect = viewport_rect();
+    draw_fill_rect(r, col_bg_deep());
+
+    let strip: Rect = bp_strip();
+    draw_fill_rect(strip, col_panel_dark());
+    draw_fill_rect(rect(strip.x, strip.y + strip.h - 1, strip.w, 1), col_border_soft());
+    let title: string = path_basename(bp_path());
+    th_font(14);
+    draw_text(r.x + 12, th_text_y(strip.y, strip.h), title, col_text_main());
+    if (bp_dirty() == 1) {
+        let dx: int = r.x + 12 + eng_text_width(title) + 10;
+        th_chip(rect(dx, strip.y + 5, 72, strip.h - 10), "UNSAVED", col_warn());
+    }
+    th_font(14);
+    let bx: int = r.x + r.w - 190;
+    if (ui_pill(rect(bx, r.y + 3, 80, strip.h - 6), "Save", 0) == 1) {
+        if (bp_save() == 1) eng_log("[blueprint] saved " + path_basename(bp_path()));
+        else eng_log("[blueprint] save failed");
+    }
+    if (ui_pill(rect(bx + 86, r.y + 3, 96, strip.h - 6), "Build", 1) == 1) compile_begin("idle");
+    th_font(14);
+    let zlabel: string = "" + bp_zoom + "%";
+    draw_text(bx - eng_text_width(zlabel) - 16, th_text_y(strip.y, strip.h), zlabel, col_text_dim());
+    bp_draw_tabs();
+
+    let c: Rect = bp_canvas();
+    eng_set_clip(c.x, c.y, c.w, c.h);
+    draw_fill_rect(c, rgb(18, 19, 22));
+    bp_draw_grid(c);
+    bp_draw_nodes();
+    eng_clear_clip();
+
+    bp_draw_props();
+    th_font(14);
+    if (bp_menu_open == 0) {
+        if (bp_editing() >= 0) draw_text(c.x + 12, c.y + c.h - 28, "Function graph. Right-click to add a node or value.", col_text_dim());
+        else draw_text(c.x + 12, c.y + c.h - 28, "Right-click to add a node or value.", col_text_dim());
+    }
+    bp_draw_add_menu();
+    th_font(14);
+}

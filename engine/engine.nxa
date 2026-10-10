@@ -1,0 +1,20 @@
+// =============================================================================
+// Eyescire Engine - umbrella include.
+//
+// One stop for app code:  #include "../engine/engine.nxa"
+// pulls in every engine module in the right order. Apps and scripts both
+// include this; the underlying state lives in engine.dll, accessed via
+// the api.nxa C-ABI wrappers.
+// =============================================================================
+
+#include <std/math>
+
+#include "api.nxa"
+#include "color.nxa"
+#include "rect.nxa"
+#include "input.nxa"
+#include "timing.nxa"
+#include "draw.nxa"
+#include "ui.nxa"
+#include "shape3d.nxa"
+#include "scene_util.nxa"

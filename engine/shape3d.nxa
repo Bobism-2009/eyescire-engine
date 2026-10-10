@@ -1,0 +1,122 @@
+// =============================================================================
+// Eyescire Engine - 3D shapes.
+//
+// A scene set to render in 3D (scene_render3d) plays in EyescirePlayer3D, a
+// NexaC std/gfx3d window. The 2D layout stays the source of truth: x/y are the
+// front view and the physics plane (2.5D), z is how far into the screen an
+// entity starts and depth how far it extends. This file holds the rules both
+// the editor and the 3D player follow, plus the flat look 3D kinds take in 2D
+// views (editor viewport, native 2D player).
+//
+// Kinds: "cube" (box w x h x depth), "sphere" (diameter = min(w, h)),
+// "cylinder" (upright, diameter w, height h), "model" (.obj fitted to
+// max(w, h)). Every other visible kind is extruded to a box in 3D.
+// =============================================================================
+
+fn ent_is_3d_kind(slot: int): int {
+    let k: string = ent_kind(slot);
+    if (k == "cube" || k == "sphere" || k == "cylinder" || k == "model") return 1;
+    return 0;
+}
+
+fn shape3d_min(a: int, b: int): int {
+    if (a < b) return a;
+    return b;
+}
+
+/* Depth in px: the stored depth, or the kind's natural one when it is 0. */
+fn ent_depth3d(slot: int): int {
+    let d: int = ent_depth(slot);
+    if (d > 0) return d;
+    let k: string = ent_kind(slot);
+    let w: int = ent_w(slot);
+    let h: int = ent_h(slot);
+    if (k == "cube" || k == "cylinder") return w;
+    if (k == "model") {
+        if (w > h) return w;
+        return h;
+    }
+    return shape3d_min(w, h);
+}
+
+fn shape3d_lift(v: int, amt: int): int {
+    let o: int = v + amt;
+    if (o > 255) o = 255;
+    if (o < 0) o = 0;
+    return o;
+}
+
+/* The 2D stand-in for a 3D kind at screen rect (sx, sy, sw, sh). */
+fn shape3d_draw_flat(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    let k: string = ent_kind(slot);
+    let r: int = ent_r(slot);
+    let g: int = ent_g(slot);
+    let b: int = ent_b(slot);
+    let a: int = ent_a(slot);
+    if (k == "sphere") {
+        let dm: int = shape3d_min(sw, sh);
+        let ox: int = sx + (sw - dm) / 2;
+        let oy: int = sy + (sh - dm) / 2;
+        eng_fill_round_a(ox, oy, dm, dm, dm / 2, r, g, b, a);
+        let hl: int = dm / 3;
+        eng_fill_round_a(ox + dm / 5, oy + dm / 6, hl, hl, hl / 2,
+                         shape3d_lift(r, 70), shape3d_lift(g, 70), shape3d_lift(b, 70), 110 * a / 255);
+    } else if (k == "cylinder") {
+        let cap: int = sw / 5;
+        if (cap * 2 > sh) cap = sh / 2;
+        eng_fill_round_a(sx, sy, sw, sh, cap, r, g, b, a);
+        eng_fill_rect_a(sx + sw / 6, sy + cap, sw / 5, sh - cap * 2,
+                        shape3d_lift(r, 45), shape3d_lift(g, 45), shape3d_lift(b, 45), 120 * a / 255);
+        eng_outline_round_a(sx, sy, sw - 1, cap * 2, cap, 1,
+                            shape3d_lift(r, 60), shape3d_lift(g, 60), shape3d_lift(b, 60), a);
+    } else if (k == "model") {
+        eng_fill_round_a(sx, sy, sw, sh, 4, r, g, b, 90 * a / 255);
+        eng_outline_round_a(sx, sy, sw - 1, sh - 1, 4, 1, r, g, b, a);
+        eng_line(sx, sy, sx + sw - 1, sy + sh - 1, r, g, b);
+        eng_line(sx + sw - 1, sy, sx, sy + sh - 1, r, g, b);
+    } else if (ent_rot(slot) != 0) {
+        /* rotated cube: plain face (the bevel below is axis-aligned) */
+        eng_fill_rect_rot_a(sx, sy, sw, sh, r, g, b, a, ent_rot(slot));
+    } else {
+        /* cube: face plus a bevel so it reads as a solid */
+        eng_fill_rect_a(sx, sy, sw, sh, r, g, b, a);
+        let bev: int = shape3d_min(sw, sh) / 8;
+        if (bev < 2) bev = 2;
+        eng_fill_rect_a(sx, sy, sw, bev, shape3d_lift(r, 40), shape3d_lift(g, 40), shape3d_lift(b, 40), a);
+        eng_fill_rect_a(sx, sy, bev, sh, shape3d_lift(r, 20), shape3d_lift(g, 20), shape3d_lift(b, 20), a);
+        eng_fill_rect_a(sx, sy + sh - bev, sw, bev, shape3d_lift(r, -45), shape3d_lift(g, -45), shape3d_lift(b, -45), a);
+        eng_fill_rect_a(sx + sw - bev, sy, bev, sh, shape3d_lift(r, -30), shape3d_lift(g, -30), shape3d_lift(b, -30), a);
+    }
+}
+
+// ----- lights -----------------------------------------------------------------------
+// Kinds "light_directional" (a sun: direction only), "light_point" (shines all
+// around, fades out by its range), "light_spot" (a cone) and "light_ambient"
+// (fills everything evenly). The color is the entity color times intensity
+// (percent). A light sits at its rect's center, at its z. Directional and spot
+// lights shine down the screen, turned by the entity's rotation and swung into
+// the screen by tilt. A 3D scene without lights gets a default sun.
+
+fn ent_is_light(slot: int): int {
+    let k: string = ent_kind(slot);
+    if (k == "light_directional" || k == "light_point") return 1;
+    if (k == "light_spot" || k == "light_ambient") return 1;
+    return 0;
+}
+
+/* The way a directional / spot light shines, as a unit vector in 3D world
+   space (x right, y up, z out of the screen). */
+fn light_dir_x(slot: int): float {
+    let r: float = ent_rot(slot) * math.pi / 180.0;
+    let t: float = ent_light_tilt(slot) * math.pi / 180.0;
+    return 0.0 - math.sin(r) * math.cos(t);
+}
+fn light_dir_y(slot: int): float {
+    let r: float = ent_rot(slot) * math.pi / 180.0;
+    let t: float = ent_light_tilt(slot) * math.pi / 180.0;
+    return 0.0 - math.cos(r) * math.cos(t);
+}
+fn light_dir_z(slot: int): float {
+    let t: float = ent_light_tilt(slot) * math.pi / 180.0;
+    return 0.0 - math.sin(t);
+}

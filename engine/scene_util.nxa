@@ -1,0 +1,50 @@
+// Scene helpers used by the editor and standalone player (exe builds).
+// Kept out of script DLLs because Nexa --dll exports string params as
+// const char* and these helpers pass std::string between Nexa functions.
+
+fn scene_load(rel: string): int {
+    if (proj_loaded() == 0) return 0;
+    let abs: string = proj_path_join(proj_root(), rel);
+    if (eng_fs_exists(abs) == 0) return 0;
+    let ok: int = eng_scene_load(abs);
+    if (ok == 1) {
+        let i: int = 0;
+        while (i < proj_scene_count()) {
+            if (proj_scene_rel(i) == rel) {
+                proj_set_active_scene(i);
+                break;
+            }
+            i = i + 1;
+        }
+    }
+    return ok;
+}
+
+fn scene_load_by_index(idx: int): int {
+    if (proj_loaded() == 0) return 0;
+    if (idx < 0 || idx >= proj_scene_count()) return 0;
+    let rel: string = proj_scene_rel(idx);
+    return scene_load(rel);
+}
+
+fn scene_load_game(rel: string): int {
+    let ok: int = scene_load(rel);
+    if (ok == 0) return 0;
+    let n: int = proj_script_count();
+    let i: int = 0;
+    while (i < n) {
+        let dll: string = proj_script_dll(i);
+        if (eng_fs_exists(dll) == 1) {
+            let h: int = eng_dll_load(dll);
+            if (h != 0) eng_dll_call(h, "script_init");
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn scene_load_game_by_index(idx: int): int {
+    if (proj_loaded() == 0) return 0;
+    if (idx < 0 || idx >= proj_scene_count()) return 0;
+    return scene_load_game(proj_scene_rel(idx));
+}

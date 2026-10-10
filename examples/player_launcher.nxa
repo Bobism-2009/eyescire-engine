@@ -1,0 +1,74 @@
+// =============================================================================
+// Eyescire Player Launcher
+//
+// Thin .exe shipped with exported games. Loads EyescirePlayer.dll and runs it.
+// If the player can't start, it says so in a small NexaC std/ui window rather
+// than a console line the player never sees.
+//
+// Uses NexaC's std modules only, not <eyescire/engine>: std/ui brings in
+// <windows.h>, whose VK_* macros collide with the engine's input constants.
+// EyescirePlayer.dll does the engine work. The DLL is loaded with inline C++
+// because std/dll's dll.load only takes a literal path.
+// =============================================================================
+
+#include <std/os>
+#include <std/file>
+#include <std/inline>
+#include <std/ui>
+
+/* 1 = the game ran, 0 = player_run found no project.eye,
+   -1 = the DLL would not load, -2 = it has no player_run export. */
+fn run_player(path: string): int {
+    let result: int = -1;
+    inline_cpp! {
+        /* no system "Bad Image" popup; a bad DLL gets our own message */
+        UINT prev_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
+        HMODULE mod = LoadLibraryA(path.c_str());
+        SetErrorMode(prev_mode);
+        if (mod) {
+            typedef int (*player_run_fn)();
+            player_run_fn run = (player_run_fn)GetProcAddress(mod, "player_run");
+            if (run) result = run() ? 1 : 0;
+            else     result = -2;
+        }
+    }
+    return result;
+}
+
+fn launcher_error(title: string, detail: string, hint: string) {
+    let w: int = 560;
+    let h: int = 230;
+    ui.open("Eyescire Player", w, h);
+    ui.theme("dark");
+    ui.style("modern");
+    while (!gfx.closed()) {
+        gfx.poll();
+        ui.background();
+        ui.heading(32, 30, title);
+        ui.text(32, 78, detail);
+        ui.caption(32, 108, hint);
+        ui.separator(32, h - 76, w - 64);
+        if (ui.button(w - 32 - 110, h - 56, 110, 36, "Close", "primary")) gfx.close();
+        gfx.present();
+    }
+}
+
+fn main() {
+    let path: string = file.join(os.exe_dir(), "EyescirePlayer.dll");
+    if (!file.exists(path)) {
+        launcher_error("Can't start this game",
+                       "EyescirePlayer.dll was not found next to the game.",
+                       "Re-export the game from the Eyescire editor, or copy the whole export folder.");
+        return;
+    }
+    let r: int = run_player(path);
+    if (r == 0) {
+        launcher_error("Can't start this game",
+                       "project.eye was not found next to the game.",
+                       "Copy the whole export folder, not just the .exe.");
+    } else if (r < 0) {
+        launcher_error("Can't start this game",
+                       "EyescirePlayer.dll is present but failed to load.",
+                       "It may be damaged or from another Eyescire version. Re-export the game.");
+    }
+}

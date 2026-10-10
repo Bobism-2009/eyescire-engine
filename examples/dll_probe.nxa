@@ -1,0 +1,54 @@
+// Verify that engine.dll can LoadLibrary a .nxa-built script DLL,
+// resolve its imports back into engine.dll, and dispatch script_update.
+
+#include "../engine/engine.nxa"
+
+fn main() {
+    let ok: int = eng_init(640, 360, "DLL probe");
+    if (ok == 0) { io.println("init failed"); return; }
+
+    let me: int = ent_create("rect", "player", 200, 150, 64, 64, 200, 100, 80);
+    eng_set_self(me);
+
+    let h: int = eng_dll_load("TestProject\\bin\\player.dll");
+    io.println("dll handle = " + h);
+    if (h == 0) {
+        io.println("LoadLibrary failed");
+        eng_shutdown();
+        return;
+    }
+
+    let init_ok: int = eng_dll_call(h, "script_init");
+    io.println("script_init returned " + init_ok);
+
+    let running: int = 1;
+    while (running == 1) {
+        frame_begin();
+        running = eng_pump();
+        if (key_pressed(VK_ESCAPE)) running = 0;
+
+        eng_set_self(me);
+        eng_dll_call(h, "script_update");
+
+        eng_clear(20, 22, 28);
+        eng_fill_rect(ent_x(me), ent_y(me), ent_w(me), ent_h(me),
+                      ent_r(me), ent_g(me), ent_b(me));
+        eng_text(12, 12, "Move with WASD or arrows; Esc to quit", 220, 220, 230);
+
+        let logs: int = eng_log_count();
+        let yy: int = 36;
+        let i: int = 0;
+        let start: int = logs - 8;
+        if (start < 0) start = 0;
+        i = start;
+        while (i < logs) {
+            eng_text(12, yy, eng_log_get(i), 180, 200, 240);
+            yy = yy + 16;
+            i = i + 1;
+        }
+
+        eng_present();
+        frame_end();
+    }
+    eng_shutdown();
+}

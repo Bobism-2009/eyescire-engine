@@ -1,0 +1,115 @@
+// =============================================================================
+// Eyescire Engine - input convenience wrappers + virtual-key constants.
+// Forwards to the C engine via api.nxa's eng_* helpers.
+// =============================================================================
+
+#include "api.nxa"
+
+let VK_BACK:    int = 8;
+let VK_TAB:     int = 9;
+let VK_RETURN:  int = 13;
+let VK_SHIFT:   int = 16;
+let VK_CONTROL: int = 17;
+let VK_ALT:     int = 18;
+let VK_ESCAPE:  int = 27;
+let VK_SPACE:   int = 32;
+let VK_PAGEUP:  int = 33;
+let VK_PAGEDOWN:int = 34;
+let VK_END:     int = 35;
+let VK_HOME:    int = 36;
+let VK_LEFT:    int = 37;
+let VK_UP:      int = 38;
+let VK_RIGHT:   int = 39;
+let VK_DOWN:    int = 40;
+let VK_INSERT:  int = 45;
+let VK_DELETE:  int = 46;
+
+let VK_0: int = 48;
+let VK_1: int = 49;
+let VK_2: int = 50;
+let VK_3: int = 51;
+let VK_4: int = 52;
+let VK_5: int = 53;
+let VK_6: int = 54;
+let VK_7: int = 55;
+let VK_8: int = 56;
+let VK_9: int = 57;
+
+let VK_A: int = 65;
+let VK_B: int = 66;
+let VK_C: int = 67;
+let VK_D: int = 68;
+let VK_E: int = 69;
+let VK_F: int = 70;
+let VK_G: int = 71;
+let VK_H: int = 72;
+let VK_I: int = 73;
+let VK_J: int = 74;
+let VK_K: int = 75;
+let VK_L: int = 76;
+let VK_M: int = 77;
+let VK_N: int = 78;
+let VK_O: int = 79;
+let VK_P: int = 80;
+let VK_Q: int = 81;
+let VK_R: int = 82;
+let VK_S: int = 83;
+let VK_T: int = 84;
+let VK_U: int = 85;
+let VK_V: int = 86;
+let VK_W: int = 87;
+let VK_X: int = 88;
+let VK_Y: int = 89;
+let VK_Z: int = 90;
+
+let VK_F1:  int = 112;
+let VK_F2:  int = 113;
+let VK_F3:  int = 114;
+let VK_F4:  int = 115;
+let VK_F5:  int = 116;
+let VK_F6:  int = 117;
+let VK_F7:  int = 118;
+let VK_F8:  int = 119;
+let VK_F9:  int = 120;
+let VK_F10: int = 121;
+let VK_F11: int = 122;
+let VK_F12: int = 123;
+
+let VK_PLUS:   int = 187;
+let VK_COMMA:  int = 188;
+let VK_MINUS:  int = 189;
+let VK_PERIOD: int = 190;
+
+let MOUSE_LEFT:   int = 0;
+let MOUSE_RIGHT:  int = 1;
+let MOUSE_MIDDLE: int = 2;
+
+fn key_down(vk: int): bool {
+    if (eng_key_down(vk) == 1) return true;
+    return false;
+}
+fn key_pressed(vk: int): bool {
+    if (eng_key_pressed(vk) == 1) return true;
+    return false;
+}
+fn key_released(vk: int): bool {
+    if (eng_key_released(vk) == 1) return true;
+    return false;
+}
+fn mouse_down(btn: int): bool {
+    if (eng_mouse_down(btn) == 1) return true;
+    return false;
+}
+fn mouse_pressed(btn: int): bool {
+    if (eng_mouse_pressed(btn) == 1) return true;
+    return false;
+}
+fn mouse_released(btn: int): bool {
+    if (eng_mouse_released(btn) == 1) return true;
+    return false;
+}
+fn ctrl_held(): bool { return key_down(VK_CONTROL); }
+fn shift_held(): bool { return key_down(VK_SHIFT); }
+fn alt_held(): bool { return key_down(VK_ALT); }
+
+fn typed_pop(): int { return eng_typed_pop(); }

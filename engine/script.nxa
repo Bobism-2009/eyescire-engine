@@ -1,0 +1,8 @@
+// Slim include for game script DLLs.
+// Full editor modules (color hex, draw helpers, scene_load) stay out of
+// --dll builds because Nexa exports string parameters as const char*.
+
+#include <std/math>
+#include "api.nxa"
+#include "input.nxa"
+#include "timing.nxa"

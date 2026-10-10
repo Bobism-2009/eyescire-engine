@@ -1,0 +1,272 @@
+// =============================================================================
+// Eyescire Runtime
+//
+// Standalone player for shipped games. Rendering matches editor play mode:
+// world through the main camera, UI stretched to fill the 1280x720 game view.
+// =============================================================================
+
+#include "../engine/engine.nxa"
+
+let WIN_W: int = 1280;
+let WIN_H: int = 720;
+
+let cam_x: float = 0.0;
+let cam_y: float = 0.0;
+let cam_zoom: float = 1.0;
+
+fn ent_is_empty(slot: int): int {
+    if (slot < 0) return 0;
+    if (ent_kind(slot) == "empty") return 1;
+    if (ent_is_light(slot) == 1) return 1;       /* 3D lights: nothing to draw in 2D */
+    if (ent_kind(slot) == "rect" && ent_name(slot) == "empty") return 1;
+    return 0;
+}
+
+fn ent_is_camera_ent(slot: int): int {
+    if (slot < 0) return 0;
+    if (ent_camera(slot) == 1) return 1;
+    if (ent_kind(slot) == "camera") return 1;
+    return 0;
+}
+
+fn snap_to_main_camera() {
+    let cam_slot: int = ent_find_main_camera();
+    if (cam_slot < 0) {
+        cam_x = 0.0;
+        cam_y = 0.0;
+        cam_zoom = 1.0;
+        return;
+    }
+    let ex: int = ent_x(cam_slot);
+    let ey: int = ent_y(cam_slot);
+    let ew: int = ent_w(cam_slot);
+    let eh: int = ent_h(cam_slot);
+    if (ew < 4) ew = 4;
+    if (eh < 4) eh = 4;
+    let zoom_x: float = WIN_W;
+    zoom_x = zoom_x / ew;
+    let zoom_y: float = WIN_H;
+    zoom_y = zoom_y / eh;
+    if (WIN_W * eh <= WIN_H * ew) {
+        cam_zoom = zoom_x;
+        cam_x = ex;
+        cam_y = ey + eh / 2.0 - WIN_H / (2.0 * cam_zoom);
+    } else {
+        cam_zoom = zoom_y;
+        cam_x = ex + ew / 2.0 - WIN_W / (2.0 * cam_zoom);
+        cam_y = ey;
+    }
+    if (cam_zoom < 0.05) cam_zoom = 0.05;
+}
+
+fn world_to_screen_x(wx: float): int {
+    return (wx - cam_x) * cam_zoom;
+}
+fn world_to_screen_y(wy: float): int {
+    return (wy - cam_y) * cam_zoom;
+}
+fn world_len(wl: float): int { return wl * cam_zoom; }
+
+fn draw_entity_at(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    let kind: string = ent_kind(slot);
+    if (kind == "emitter") return;
+    let rot: int = ent_rot(slot);
+    if (kind == "label") {
+        let txt: string = ent_text(slot);
+        if (txt.len() == 0) txt = ent_name(slot);
+        eng_set_font_size(ui_label_font_px(sh));
+        draw_text(sx, sy, txt, rgb(ent_r(slot), ent_g(slot), ent_b(slot)));
+        eng_set_font_size(14);
+    } else if (ent_is_3d_kind(slot) == 1) {
+        shape3d_draw_flat(slot, sx, sy, sw, sh);
+    } else if (ent_sprite_id(slot) != 0) {
+        if (rot != 0) eng_image_blit_scaled_rot(ent_sprite_id(slot), sx, sy, sw, sh, rot);
+        else          eng_image_blit_scaled(ent_sprite_id(slot), sx, sy, sw, sh);
+    } else {
+        if (rot != 0)                 eng_fill_rect_rot(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), rot);
+        else if (ent_is_ui(slot) == 1) ui_draw_box(slot, sx, sy, sw, sh);
+        else                          draw_fill_rect(rect(sx, sy, sw, sh), rgb(ent_r(slot), ent_g(slot), ent_b(slot)));
+        let txt: string = ent_text(slot);
+        if (txt.len() > 0 && sw > 10 && sh > 8 && rot == 0 && ui_ent_owns_caption(slot) == 0) {
+            eng_set_font_size(ui_rect_text_font_px(sh));
+            draw_text_centered(sx, sy, sw, sh, txt, rgb(240, 240, 240));
+            eng_set_font_size(14);
+        }
+    }
+}
+
+fn draw_world() {
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        if (ent_is_empty(i) == 1) {
+            i = ent_iter_next(i + 1);
+            continue;
+        }
+        if (ent_is_ui(i) == 1) {
+            i = ent_iter_next(i + 1);
+            continue;
+        }
+        if (ent_is_camera_ent(i) == 1 || ent_shown(i) == 0) {
+            i = ent_iter_next(i + 1);
+            continue;
+        }
+        let sx: int = world_to_screen_x(ent_x(i));
+        let sy: int = world_to_screen_y(ent_y(i));
+        let sw: int = world_len(ent_w(i));
+        let sh: int = world_len(ent_h(i));
+        draw_entity_at(i, sx, sy, sw, sh);
+        i = ent_iter_next(i + 1);
+    }
+    particles_draw();
+}
+
+fn draw_ui_overlay() {
+    ui_canvas_layout_game_view(rect(0, 0, WIN_W, WIN_H));
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        if (ent_is_ui(i) == 0 || ent_shown(i) == 0) {
+            i = ent_iter_next(i + 1);
+            continue;
+        }
+        let sx: int = ui_to_screen_x(ent_x(i));
+        let sy: int = ui_to_screen_y(ent_y(i));
+        let sw: int = ui_len_w(ent_w(i));
+        let sh: int = ui_len_h(ent_h(i));
+        draw_entity_at(i, sx, sy, sw, sh);
+        i = ent_iter_next(i + 1);
+    }
+}
+
+fn apply_engine_view() {
+    eng_view_set(cam_x, cam_y, cam_zoom, 0, 0, WIN_W, WIN_H);
+}
+
+fn draw_scene() {
+    eng_clear(28, 32, 40);
+    snap_to_main_camera();
+    apply_engine_view();
+    if (tilemap_active() == 1) tilemap_draw(1);
+    draw_world();
+    draw_ui_overlay();
+    dispatch_draw();
+}
+
+fn dispatch_scripts() {
+    let s: int = ent_iter_next(0);
+    while (s >= 0) {
+        let sc: string = ent_script(s);
+        if (sc.len() > 0) {
+            let dll_name: string = sc.replace(".nxa", ".dll");
+            let dll: string = proj_path_join(proj_path_join(proj_root(), "bin"), dll_name);
+            if (eng_fs_exists(dll) == 1) {
+                let h: int = eng_dll_load(dll);
+                if (h != 0) {
+                    eng_set_self(s);
+                    eng_dll_call(h, "script_update");
+                }
+            }
+        }
+        s = ent_iter_next(s + 1);
+    }
+    eng_set_self(-1);
+}
+
+fn dispatch_draw() {
+    let s: int = ent_iter_next(0);
+    while (s >= 0) {
+        let sc: string = ent_script(s);
+        if (sc.len() > 0) {
+            let dll_name: string = sc.replace(".nxa", ".dll");
+            let dll: string = proj_path_join(proj_path_join(proj_root(), "bin"), dll_name);
+            if (eng_fs_exists(dll) == 1) {
+                let h: int = eng_dll_load(dll);
+                if (h != 0) {
+                    eng_set_self(s);
+                    eng_dll_call(h, "script_draw");
+                }
+            }
+        }
+        s = ent_iter_next(s + 1);
+    }
+    eng_set_self(-1);
+}
+
+/* Game entry. 1 = ran, 0 = no project.eye / engine init failed.
+   EyescirePlayer.dll exports it as `player_run` (see below); the exe build
+   calls it from main(). */
+fn player_main(): int {
+    let exe_dir: string = eng_exe_dir();
+    let manifest: string = exe_dir + "\\project.eye";
+    if (eng_fs_exists(manifest) == 0) {
+        return 0;
+    }
+
+    let opened: int = proj_open(exe_dir);
+    if (opened == 0) return 0;
+
+    let title: string = proj_name();
+    if (title.len() == 0) title = "Eyescire Game";
+
+    WIN_W = pref_int("play_w", 1280);
+    WIN_H = pref_int("play_h", 720);
+    let ok: int = eng_init(WIN_W, WIN_H, title);
+    if (pref_int("fullscreen", 0) == 1) eng_set_fullscreen(1);
+    if (ok == 0) return 0;
+    set_target_fps(60);
+    if (eng_splash_run() == 0) return 0;
+
+    if (proj_scene_count() > 0) {
+        let scene_path: string = proj_scene_abs(proj_active_scene());
+        if (eng_fs_exists(scene_path) == 1) eng_scene_load(scene_path);
+    }
+    sfx_set_live(1);
+
+    let n: int = proj_script_count();
+    let i: int = 0;
+    while (i < n) {
+        let dll: string = proj_script_dll(i);
+        if (eng_fs_exists(dll) == 1) {
+            let h: int = eng_dll_load(dll);
+            if (h != 0) eng_dll_call(h, "script_init");
+        }
+        i = i + 1;
+    }
+
+    phys_begin();
+
+    let running: int = 1;
+    while (running == 1) {
+        frame_begin();
+        running = eng_pump();
+        if (key_pressed(VK_ESCAPE)) running = 0;
+
+        ui_canvas_layout_game_view(rect(0, 0, WIN_W, WIN_H));
+        ui_poll_buttons();
+        snap_to_main_camera();
+        apply_engine_view();
+        dispatch_scripts();
+        phys_step(eng_dt_seconds());
+        draw_scene();
+
+        eng_present();
+        frame_end();
+    }
+    sfx_set_live(0);
+    phys_end();
+    return 1;
+}
+
+/* EyescirePlayer.dll's only export, looked up by the player launcher.
+ *
+ * The DLL is NOT built with `NexaC --dll`: library builds export every Nexa
+ * function as extern "C" with const char* string parameters, and the engine's
+ * own calls that pass a string variable (draw_text -> eng_text, ...) then fail
+ * to compile. build.cmd instead emits the normal exe-mode C++ (--source) and
+ * links it with clang++ -shared, so only this wrapper is exported. */
+inline_cpp! {
+extern "C" __declspec(dllexport) int player_run() { return player_main(); }
+}
+
+fn main() {
+    player_main();
+}

@@ -1,0 +1,49 @@
+// =============================================================================
+// Eyescire smoke test: opens a window, draws via engine.dll, exits on Esc.
+// =============================================================================
+
+#include "../engine/engine.nxa"
+
+fn main() {
+    let ok: int = eng_init(720, 480, "Eyescire smoke");
+    if (ok == 0) {
+        io.println("engine_init failed");
+        return;
+    }
+    set_target_fps(60);
+
+    let s1: int = ent_create("rect", "alpha",  60, 60, 80, 80, 200, 100, 80);
+    let s2: int = ent_create("rect", "beta",  220, 60, 80, 80,  80, 200, 120);
+    let s3: int = ent_create("rect", "gamma", 380, 60, 80, 80, 100, 130, 220);
+
+    let running: int = 1;
+    let frames: int  = 0;
+    while (running == 1) {
+        frame_begin();
+        running = eng_pump();
+        if (key_pressed(VK_ESCAPE)) running = 0;
+
+        let mx: int = eng_mouse_x();
+        let s: int  = ent_hit_at(mx, eng_mouse_y());
+        if (s >= 0 && mouse_down(MOUSE_LEFT)) {
+            ent_set_x(s, mx - ent_w(s) / 2);
+            ent_set_y(s, eng_mouse_y() - ent_h(s) / 2);
+        }
+
+        eng_clear(24, 26, 32);
+        let i: int = ent_iter_next(0);
+        while (i >= 0) {
+            eng_fill_rect(ent_x(i), ent_y(i), ent_w(i), ent_h(i),
+                          ent_r(i), ent_g(i), ent_b(i));
+            eng_text(ent_x(i) + 6, ent_y(i) + 6, ent_name(i), 255, 255, 255);
+            i = ent_iter_next(i + 1);
+        }
+        eng_text(12, 12, "engine.dll smoke - drag boxes, Esc to quit", 220, 220, 230);
+        eng_present();
+        frame_end();
+        frames = frames + 1;
+    }
+
+    eng_shutdown();
+    io.println("frames: " + frames);
+}

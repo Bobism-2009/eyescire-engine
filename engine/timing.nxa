@@ -1,0 +1,47 @@
+// =============================================================================
+// Eyescire Engine - frame timing.
+//
+// Wraps the engine's high-resolution timer into a frame-pacing helper.
+// frame_begin() captures "now"; frame_end() sleeps off the remaining slice
+// of the configured frame budget and stores the realized delta back inside
+// the engine via eng_set_dt_seconds() so scripts running inside the engine
+// (this process) can read eng_dt_seconds() directly.
+// =============================================================================
+
+#include "api.nxa"
+
+let frame_target_ms: float  = 16.6667;
+let frame_t0: float         = 0.0;
+let frame_dt_ms_last: float = 16.0;
+let frame_total: int        = 0;
+
+fn set_target_fps(fps: int) {
+    let f: float = fps;
+    if (f < 1.0) f = 1.0;
+    frame_target_ms = 1000.0 / f;
+}
+
+fn frame_begin() {
+    frame_t0 = eng_now_ms();
+}
+
+fn frame_end() {
+    let now: float       = eng_now_ms();
+    let elapsed: float   = now - frame_t0;
+    /* VSync already waited for the monitor inside present. A second sleep
+       lands past the next refresh. */
+    if (eng_vsync() == 0) {
+        let remaining: float = frame_target_ms - elapsed;
+        if (remaining > 1.0) {
+            let r_int: int = remaining;
+            if (r_int > 0) eng_sleep_ms(r_int);
+        }
+    }
+    let after: float = eng_now_ms();
+    frame_dt_ms_last = after - frame_t0;
+    eng_set_dt_seconds(frame_dt_ms_last / 1000.0);
+    frame_total = frame_total + 1;
+}
+
+fn frame_dt_ms(): float { return frame_dt_ms_last; }
+fn frame_count(): int   { return frame_total; }

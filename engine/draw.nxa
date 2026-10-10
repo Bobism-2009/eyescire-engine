@@ -1,0 +1,64 @@
+// =============================================================================
+// Eyescire Engine - drawing helpers (Color/Rect-aware).
+// =============================================================================
+
+#include "api.nxa"
+#include "color.nxa"
+#include "rect.nxa"
+
+fn draw_clear(c: Color) {
+    eng_clear(c.r, c.g, c.b);
+}
+
+fn draw_fill_rect(r: Rect, c: Color) {
+    eng_fill_rect(r.x, r.y, r.w, r.h, c.r, c.g, c.b);
+}
+
+fn draw_outline_rect(r: Rect, thickness: int, c: Color) {
+    eng_outline_rect(r.x, r.y, r.w, r.h, thickness, c.r, c.g, c.b);
+}
+
+fn draw_line(x0: int, y0: int, x1: int, y1: int, c: Color) {
+    eng_line(x0, y0, x1, y1, c.r, c.g, c.b);
+}
+
+fn draw_pixel(x: int, y: int, c: Color) {
+    eng_pixel(x, y, c.r, c.g, c.b);
+}
+
+fn draw_text(x: int, y: int, s: string, c: Color) {
+    eng_text(x, y, s, c.r, c.g, c.b);
+}
+
+fn draw_text_centered(rx: int, ry: int, rw: int, rh: int, s: string, c: Color) {
+    let tw: int = eng_text_width(s);
+    let th: int = eng_text_height();
+    let cx: int = rx + (rw - tw) / 2;
+    let cy: int = ry + (rh - th) / 2;
+    eng_text(cx, cy, s, c.r, c.g, c.b);
+}
+
+fn draw_text_right(rx: int, ry: int, rw: int, rh: int, s: string, c: Color) {
+    let tw: int = eng_text_width(s);
+    let th: int = eng_text_height();
+    eng_text(rx + rw - tw - 6, ry + (rh - th) / 2, s, c.r, c.g, c.b);
+}
+
+fn draw_text_left(rx: int, ry: int, rh: int, s: string, c: Color) {
+    let th: int = eng_text_height();
+    eng_text(rx + 6, ry + (rh - th) / 2, s, c.r, c.g, c.b);
+}
+
+fn draw_panel(r: Rect) {
+    draw_fill_rect(r, col_ui_panel());
+    draw_outline_rect(r, 1, col_ui_border());
+}
+
+fn draw_panel_titled(r: Rect, title: string) {
+    draw_panel(r);
+    let bar_h: int = 20;
+    let bar: Rect = rect(r.x, r.y, r.w, bar_h);
+    draw_fill_rect(bar, col_ui_panel_hi());
+    draw_outline_rect(bar, 1, col_ui_border());
+    draw_text(r.x + 8, r.y + 3, title, col_ui_text());
+}

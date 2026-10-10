@@ -1,0 +1,12 @@
+EYESCIRE_SCENE 1
+NEXT_ID 8
+ENTITY 1|player|rect|140|360|36|36|92|178|156||
+ENTITY 2|wall_top|rect|80|140|800|16|110|118|140||
+ENTITY 3|wall_bottom|rect|80|620|800|16|110|118|140||
+ENTITY 4|wall_left|rect|80|140|16|496|110|118|140||
+ENTITY 5|wall_right|rect|864|140|16|496|110|118|140||
+ENTITY 6|coin_a|rect|320|260|22|22|244|196|74||
+ENTITY 7|coin_b|rect|520|420|22|22|244|196|74||
+ENTITY 8|coin_c|rect|720|520|22|22|244|196|74||
+ENTITY 9|coin_d|rect|220|520|22|22|244|196|74||
+ENTITY 10|hud|label|140|90|800|24|110|200|250||Eyescire Runtime - WASD or arrows to move, collect coins

@@ -1,0 +1,55 @@
+// =============================================================================
+// Eyescire Engine - rectangles.
+//
+// All UI / scene geometry is axis-aligned. A Rect is (x, y, w, h) in pixels;
+// helpers cover hit-testing, clipping intersections, and edge-grow / inset
+// (used a lot by the editor for borders, drag handles, and panels).
+// =============================================================================
+
+struct Rect {
+    x: int;
+    y: int;
+    w: int;
+    h: int;
+}
+
+fn rect(x: int, y: int, w: int, h: int): Rect {
+    let r: Rect;
+    r.x = x;
+    r.y = y;
+    r.w = w;
+    r.h = h;
+    return r;
+}
+
+fn rect_contains(r: Rect, px: int, py: int): bool {
+    if (px < r.x) return false;
+    if (py < r.y) return false;
+    if (px >= r.x + r.w) return false;
+    if (py >= r.y + r.h) return false;
+    return true;
+}
+
+fn rect_inset(r: Rect, by: int): Rect {
+    let out: Rect;
+    out.x = r.x + by;
+    out.y = r.y + by;
+    out.w = r.w - by * 2;
+    out.h = r.h - by * 2;
+    if (out.w < 0) out.w = 0;
+    if (out.h < 0) out.h = 0;
+    return out;
+}
+
+fn rect_intersects(a: Rect, b: Rect): bool {
+    if (a.x + a.w <= b.x) return false;
+    if (b.x + b.w <= a.x) return false;
+    if (a.y + a.h <= b.y) return false;
+    if (b.y + b.h <= a.y) return false;
+    return true;
+}
+
+fn rect_right(r: Rect): int  { return r.x + r.w; }
+fn rect_bottom(r: Rect): int { return r.y + r.h; }
+fn rect_cx(r: Rect): int     { return r.x + r.w / 2; }
+fn rect_cy(r: Rect): int     { return r.y + r.h / 2; }

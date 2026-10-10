@@ -1,0 +1,298 @@
+// =============================================================================
+// Eyescire Player 3D
+//
+// Plays a scene set to render in 3D. The picture is the editor's renderer
+// (engine r3d): the same meshes, camera, and lights, including point and spot
+// lights. UI is drawn over that picture in the engine window.
+//
+//   EyescirePlayer3D.exe                         project.eye next to the exe
+//   EyescirePlayer3D.exe <project dir> [scene]   the editor's Play (3D)
+// =============================================================================
+
+#include <std/math>
+#include "../engine/api.nxa"
+#include "../engine/color.nxa"
+#include "../engine/rect.nxa"
+#include "../engine/timing.nxa"
+#include "../engine/ui.nxa"
+#include "../engine/shape3d.nxa"
+
+let WIN_W: int = 1280;
+let WIN_H: int = 720;
+let UNIT: float = 0.03125;     /* 3D units per scene pixel (32 px = 1 unit) */
+let VK_ESC: int = 27;
+
+// ----- command line --------------------------------------------------------------
+
+fn arg(i: int): string {
+    let s: string = "";
+    inline_cpp! { if (i < __argc && __argv[i]) s = __argv[i]; }
+    return s;
+}
+
+fn parse_uint_or(s: string, def: int): int {
+    if (s.len() == 0) return def;
+    let n: int = 0;
+    let i: int = 0;
+    while (i < s.len()) {
+        let c: string = s.substring(i, 1);
+        if (c < "0" || c > "9") return def;
+        n = n * 10 + io.to_int(c);
+        i = i + 1;
+    }
+    return n;
+}
+
+// ----- scripts (same dispatch as the 2D player) ------------------------------------
+
+fn script_dll_for(slot: int): string {
+    let sc: string = ent_script(slot);
+    if (sc.len() == 0) return "";
+    return proj_path_join(proj_path_join(proj_root(), "bin"), sc.replace(".nxa", ".dll"));
+}
+
+fn dispatch_scripts() {
+    let s: int = ent_iter_next(0);
+    while (s >= 0) {
+        let dll: string = script_dll_for(s);
+        if (dll.len() > 0 && eng_fs_exists(dll) == 1) {
+            let h: int = eng_dll_load(dll);
+            if (h != 0) {
+                eng_set_self(s);
+                eng_dll_call(h, "script_update");
+            }
+        }
+        s = ent_iter_next(s + 1);
+    }
+    eng_set_self(-1);
+}
+
+fn init_scripts() {
+    let i: int = 0;
+    while (i < proj_script_count()) {
+        let dll: string = proj_script_dll(i);
+        if (eng_fs_exists(dll) == 1) {
+            let h: int = eng_dll_load(dll);
+            if (h != 0) eng_dll_call(h, "script_init");
+        }
+        i = i + 1;
+    }
+}
+
+// ----- scene -> 3D --------------------------------------------------------------------
+
+fn ent_is_empty3d(slot: int): int {
+    if (ent_kind(slot) == "empty") return 1;
+    if (ent_kind(slot) == "rect" && ent_name(slot) == "empty") return 1;
+    return 0;
+}
+
+fn ent_is_camera3d(slot: int): int {
+    if (ent_camera(slot) == 1) return 1;
+    if (ent_kind(slot) == "camera") return 1;
+    return 0;
+}
+
+let cam_ex: float = 0.0;
+let cam_ey: float = 0.0;
+let cam_ez: float = 0.0;
+let cam_tx: float = 0.0;
+let cam_ty: float = 0.0;
+let cam_tz: float = 0.0;
+
+/* The main camera's rect is framed exactly at its z (like the 2D view);
+   its rotation tilts the view down (+) or up (-), in degrees. */
+fn setup_camera() {
+    let cx: float = 640.0;
+    let cy: float = 360.0;
+    let cw: float = 1280.0;
+    let ch: float = 720.0;
+    let cz: float = 0.0;
+    let tilt: float = 0.0;
+    let cam: int = ent_find_main_camera();
+    if (cam >= 0) {
+        if (ent_text(cam) == "look") {
+            let ex: float = ent_x(cam) + ent_w(cam) / 2.0;
+            let ey: float = ent_y(cam) + ent_h(cam) / 2.0;
+            let ez: float = ent_z(cam) + ent_depth(cam) / 2.0;
+            let yaw_i: int = ent_rot_y(cam);
+            let pitch_i: int = ent_rot_x(cam);
+            if (pitch_i > 180) pitch_i = pitch_i - 360;
+            if (pitch_i > 89) pitch_i = 89;
+            if (pitch_i < -89) pitch_i = -89;
+            let yaw: float = yaw_i;
+            let pitch: float = pitch_i;
+            let yr: float = yaw * math.pi / 180.0;
+            let pr: float = pitch * math.pi / 180.0;
+            let lx: float = math.cos(pr) * math.cos(yr);
+            let ly: float = 0.0 - math.sin(pr);
+            let lz: float = math.cos(pr) * math.sin(yr);
+            let reach: float = 400.0;
+            /* Eyes sit on the front of the face, not in the middle of the skull. */
+            ex = ex + lx * 42.0;
+            ey = ey + ly * 42.0;
+            ez = ez + lz * 42.0;
+            cam_ex = ex * UNIT;
+            cam_ey = 0.0 - ey * UNIT;
+            cam_ez = 0.0 - ez * UNIT;
+            cam_tx = (ex + lx * reach) * UNIT;
+            cam_ty = 0.0 - (ey + ly * reach) * UNIT;
+            cam_tz = 0.0 - (ez + lz * reach) * UNIT;
+            return;
+        }
+        cw = ent_w(cam);
+        ch = ent_h(cam);
+        cx = ent_x(cam) + cw / 2.0;
+        cy = ent_y(cam) + ch / 2.0;
+        cz = ent_z(cam);
+        let rot: int = ent_rot(cam);
+        if (rot > 180) rot = rot - 360;
+        if (rot > 80) rot = 80;
+        if (rot < -80) rot = -80;
+        tilt = rot;
+    }
+    let vw: int = eng_window_w();
+    let vh: int = eng_window_h();
+    if (vw < 1) vw = WIN_W;
+    if (vh < 1) vh = WIN_H;
+    let aspect: float = vw;
+    aspect = aspect / vh;
+    let t: float = math.tan(scene_fov() * 0.5 * math.pi / 180.0);
+    let dist: float = (ch * 0.5 * UNIT) / t;
+    let dist_w: float = (cw * 0.5 * UNIT) / (t * aspect);
+    if (dist_w > dist) dist = dist_w;
+    cam_tx = cx * UNIT;
+    cam_ty = 0.0 - cy * UNIT;
+    cam_tz = 0.0 - cz * UNIT;
+    let a: float = tilt * math.pi / 180.0;
+    cam_ex = cam_tx;
+    cam_ey = cam_ty + math.sin(a) * dist;
+    cam_ez = cam_tz + math.cos(a) * dist;
+}
+
+fn draw_world3d() {
+    r3d_hide_pawn(1);
+    let hide_hero: int = 0;
+    let cam: int = ent_find_main_camera();
+    if (cam >= 0) {
+        if (ent_text(cam) == "look") hide_hero = 1;
+    }
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        let skip: int = 0;
+        if (hide_hero == 1 && ent_name(i) == "hero") skip = 1;
+        if (skip == 0 && ent_kind(i) != "emitter" && ent_shown(i) == 1 && ent_is_empty3d(i) == 0 && ent_is_ui(i) == 0 && ent_is_camera3d(i) == 0 && ent_is_light(i) == 0) {
+            r3d_entity(i);
+        }
+        i = ent_iter_next(i + 1);
+    }
+}
+
+/* UI sits on the engine back buffer. That buffer is the clear color, which the
+   present step treats as transparent so the 3D picture shows through. */
+fn draw_ui_layer() {
+    let vw: int = eng_window_w();
+    let vh: int = eng_window_h();
+    ui_canvas_layout_game_view(rect(0, 0, vw, vh));
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        if (ent_is_ui(i) == 1 && ent_shown(i) == 1) {
+            let sx: int = ui_to_screen_x(ent_x(i));
+            let sy: int = ui_to_screen_y(ent_y(i));
+            let sw: int = ui_len_w(ent_w(i));
+            let sh: int = ui_len_h(ent_h(i));
+            ui_resolve_fill(i, sx, sy, sw, sh);
+            let r: int = ui_fill_r;
+            let g: int = ui_fill_g;
+            let b: int = ui_fill_b;
+            let txt: string = ent_text(i);
+            if (ent_kind(i) == "label" || ent_kind(i) == "ui_label") {
+                if (txt.len() == 0) txt = ent_name(i);
+                let sc: int = sh / 8;
+                if (sc < 1) sc = 1;
+                eng_text_px(sx, sy, txt, r, g, b, sc);
+            } else {
+                ui_draw_box(i, sx, sy, sw, sh);
+                if (txt.len() > 0 && ui_ent_owns_caption(i) == 0) {
+                    let sc: int = ui_px_caption_scale(sw, sh, txt.len());
+                    let tw: int = txt.len() * 6 * sc;
+                    eng_text_px(sx + (sw - tw) / 2, sy + (sh - 7 * sc) / 2, txt, 240, 240, 240, sc);
+                }
+            }
+        }
+        i = ent_iter_next(i + 1);
+    }
+}
+
+// ----- problems are shown in the window, not a console -------------------------------
+
+fn show_error(title: string, detail: string) {
+    while (eng_pump() == 1) {
+        eng_clear(27, 28, 32);
+        eng_text(28, 36, title, 232, 233, 236);
+        eng_text(28, 72, detail, 156, 161, 170);
+        eng_text(28, 120, "Press Esc to close.", 156, 161, 170);
+        if (eng_key_pressed(VK_ESC) == 1) eng_quit();
+        eng_present();
+    }
+}
+
+fn main() {
+    if (eng_init(WIN_W, WIN_H, "Eyescire") == 0) return;
+    r3d_renderer("OpenGL 3.3");
+    let root: string = arg(1);
+    if (root.len() == 0) root = eng_exe_dir();
+    let scene_arg: int = parse_uint_or(arg(2), -1);
+
+    if (proj_open(root) == 0) {
+        show_error("Can't open the project", "No project.eye in " + root);
+        return;
+    }
+    let scene_idx: int = proj_active_scene();
+    if (scene_arg >= 0 && scene_arg < proj_scene_count()) scene_idx = scene_arg;
+    if (proj_scene_count() == 0 || eng_scene_load(proj_scene_abs(scene_idx)) == 0) {
+        show_error("Can't load the scene", "The project has no loadable scene.");
+        return;
+    }
+
+    let title: string = proj_name();
+    if (title.len() == 0) title = "Eyescire Game";
+    eng_set_title(title);
+    let pw: int = pref_int("play_w", WIN_W);
+    let ph: int = pref_int("play_h", WIN_H);
+    if (pw != WIN_W || ph != WIN_H) eng_resize(pw, ph);
+    if (pref_int("fullscreen", 0) == 1) eng_set_fullscreen(1);
+    set_target_fps(60);
+    if (eng_splash_run() == 0) return;
+
+    sfx_set_live(1);
+    init_scripts();
+    phys_begin();
+
+    while (eng_pump() == 1) {
+        frame_begin();
+        eng_fit_buffer(eng_client_w(), eng_client_h());
+        if (eng_key_pressed(VK_ESC) == 1) break;
+
+        ui_canvas_layout_game_view(rect(0, 0, eng_window_w(), eng_window_h()));
+        ui_poll_buttons();
+        dispatch_scripts();
+        phys_step(eng_dt_seconds());
+
+        /* 28,32,40 is both the 3D clear and the color present punches out,
+           so the interface draws over the picture. */
+        eng_clear(scene_clear_r(), scene_clear_g(), scene_clear_b());
+        setup_camera();
+        r3d_begin(0, 0, eng_window_w(), eng_window_h(),
+                  cam_ex, cam_ey, cam_ez, cam_tx, cam_ty, cam_tz, scene_fov(),
+                  scene_clear_r(), scene_clear_g(), scene_clear_b());
+        draw_world3d();
+        r3d_end(-1, 0, 0);
+        draw_ui_layer();
+        eng_present();
+        frame_end();
+    }
+    eng_mouse_lock(0);
+    sfx_set_live(0);
+    phys_end();
+}

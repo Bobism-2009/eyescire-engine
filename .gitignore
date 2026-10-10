@@ -1,0 +1,22 @@
+# Compiled outputs
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.pch
+*.idb
+
+# Editor and release output, including throwaway test projects
+/build/
+/release/
+
+# Generated when the 2D player is built
+/bin/EyescirePlayer.cpp
+
+# Local editor state
+eyescire_recent.txt
+_play_snapshot.scene

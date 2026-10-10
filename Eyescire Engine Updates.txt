@@ -1,0 +1,73 @@
+Before changing anything- Ask give a list of each item listed, allow me to select one and then if there are different ways it could be implemented- Ask me how I would like it to be implemented before moving on.
+After a change is fully implemened add a checkmark right before the change.
+Example: ✔ Task1
+
+Eyescire Engine Updates:
+
+✔ Visual Blueprints that allow you to make blueprints like in unreal engine that are saved in a special format that only the engine can understand- Then when running the game, compiling, etc. It is translated into .nxa files in real time and used like any other Nexa script.
+
+½ Custom icons for many of the placeholder icons in Eyescire.
+
+✔ A way to play sound in Eyescire Engine- both 2d based and 3d based. (2D is for example background audio- ect. 3D sound is spacial based 3D audio, etc.
+
+✔ Small 2d & 3d particle emitter system- 3D must have an option to be high definition (Will cost much more performance)
+
+A way to layer 2d sprites on top of 3d worlds- For menus when the UI module is not enough- Etc.
+
+✔ A way to drag select things inside of 3d. As well as selecting multiple things at once by holding ctrl and clicking several objects.
+
+✔ 2d has physical arrows, ect coming out of objects when you select them using their respective tools- Yet 3d lacks it. Also there should be a tool that just lets you click and move things without the arrows, (That tool & Move tool will be separate),
+
+✔ Better settings menu
+
+✔ Ability for users to add a splash screen to their games. (Default splash screen should be like- "Made with Eyescire Engine" then the logo) Aswell as multi-layered splashscreens that show one then another- And the ability to animate them- Etc.
+
+Debatable- but an option for something to scan your project and optimize it.
+
+✔ Support to either make a custom textured skybox, or a pre-engine included skybox.
+
+When building you should have an option to encrypt the data that is being shipped (like the scene files)
+
+Add a way to allow AI models to connect to Eyescire Engine and use it like any normal user.
+
+✔ Have Eyescire Engine only export things in build that you actually use.
+
+Ability to install "Plugins" via DLL files- Etc. that it will load at runtime.
+
+Way to swap between local and non local movement of objects.
+
+✔ Grid snapping support.
+
+Reflections- Mirrors- Things like that.
+
+Toggle Anti-Aliasing for Full project / Physical objects.
+
+Ability for variables declared as public (You implement how, not changing Nexa its-self) Shows up in the inspector for the item.
+
+✔ In project settings, ability to turn on and off VSync
+
+Ability to change rendering from Vulkan to OpenGL, Etc.
+
+Support for more programming languages- like lua, Via extensions. (Will be DLL files + Json for highlighting).
+
+✔ Play mode being a separate tab from scene view so you can swap between them.
+
+More shapes for 3D. 
+
+3D terrain builder.
+
+More pre-made templates, like a full pre-built 3D character controller with a small game platformer, a shooter with a 3D player, a 2D game demo- Etc.
+
+An Eyescire Extension builder that allows you to easily create extensions.
+
+Option to either export your game builds with the .scene files (Un-encrypted or encrypted) Or without and all of that data is packed into DLL's loaded by the engine.
+
+A built in 2d/3d animator- That is not super hard to use / learn how to use.
+
+Change current function names to ones that are easier to understand- Current function names for the engine are hard to remember and annoying.
+
+✔ When drag clicking to select several things at once- It being transparent so you can more easily tell what you are selecting.
+
+More realistic looking games.
+
+✔ Port to Opengl 3.3 instead of 1.1 (Will also update inside of nexa.)- Keep 1.1 but allow the function that swaps between opengl and vulkan to accept "OpenGL 3.3", and make it line by line a perfect port.
