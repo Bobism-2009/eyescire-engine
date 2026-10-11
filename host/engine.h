@@ -787,7 +787,7 @@ EYESCIRE_API int  engine_r3d_ray_point(int x, int y, double dist); /* result: hx
 EYESCIRE_API double engine_r3d_hz();
 EYESCIRE_API double engine_r3d_hx();
 EYESCIRE_API double engine_r3d_hy();
-EYESCIRE_API int  engine_r3d_backend();   /* 0 none yet, 1 software, 2 OpenGL */
+EYESCIRE_API int  engine_r3d_backend();   /* 0 none yet, 1 software, 2 OpenGL, 3 Vulkan 1.4 */
 EYESCIRE_API int  engine_r3d_renderer(const char* name); /* "OpenGL 1.1", "OpenGL 3.3", "Vulkan" */
 EYESCIRE_API const char* engine_r3d_backend_name(); /* what the last frame drew with */
 /* hidden, held cursor with relative motion (look-around cameras) */

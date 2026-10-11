@@ -6191,7 +6191,7 @@ static int pref_clamp_key(const std::string& key, int v) {
         if (v > 80000) return 80000;
         return v;
     }
-    if (key == "renderer") return v == 11 ? 11 : 33;
+    if (key == "renderer") return v == 11 ? 11 : v == 14 ? 14 : 33;
     if (key == "music" || key == "sfx") {
         if (v < 0) return 0;
         if (v > 100) return 100;
@@ -6216,6 +6216,7 @@ static void pref_apply_key(const std::string& key, int v) {
     else if (key == "autosave") engine_set_autosave(v);
     else if (key == "renderer") {
         if (v == 11) engine_r3d_renderer("OpenGL 1.1");
+        else if (v == 14) engine_r3d_renderer("Vulkan 1.4");
         else engine_r3d_renderer("OpenGL 3.3");
     }
     else if (key == "vsync") g_vsync = v ? 1 : 0;

@@ -290,7 +290,10 @@ fn show_error(title: string, detail: string) {
 
 fn main() {
     if (eng_init(WIN_W, WIN_H, "Eyescire") == 0) return;
-    r3d_renderer("OpenGL 3.3");
+    let rend: int = pref_int("renderer", 33);
+    if (rend == 14) r3d_renderer("Vulkan 1.4");
+    else if (rend == 11) r3d_renderer("OpenGL 1.1");
+    else r3d_renderer("OpenGL 3.3");
     let root: string = arg(1);
     if (root.len() == 0) root = eng_exe_dir();
     let scene_arg: int = parse_uint_or(arg(2), -1);

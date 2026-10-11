@@ -901,6 +901,7 @@ static bool try_core() {
 }
 
 static void drop() {
+    if (S.vk) nexa_vk14::shutdown();
     if (S.rc) {
         wglMakeCurrent(S.dc, S.rc);
         part_gl_forget();
