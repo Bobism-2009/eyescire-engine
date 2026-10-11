@@ -1166,7 +1166,7 @@ struct State {
     BlitFn blit = nullptr;
     GLuint fbo = 0, rbColor = 0, rbDepth = 0;     /* multisampled */
     GLuint fboOut = 0, rbOut = 0;                  /* resolved, read back */
-    int    w = 0, h = 0, maxSamples = 0;
+    int    w = 0, h = 0, maxSamples = 0, asked = -1;
     GLuint listBox = 0, listSphere = 0, listCyl = 0;
     std::unordered_map<const Model*, GLuint> modelLists;
     std::vector<int> selected;                     /* drawn this frame and selected */
@@ -1251,14 +1251,76 @@ static bool load_fbo() {
     return true;
 }
 
-static bool ensure_buffers(int w, int h) {
-    if (S.fbo && S.w == w && S.h == h) return true;
-    int tries[3] = { std::min(8, S.maxSamples), std::min(4, S.maxSamples), 0 };
-    for (int s : tries) {
-        if (make_buffers(w, h, s)) { S.w = w; S.h = h; return true; }
+static bool aa_kind(const Entity& e) {
+    if (e.isCamera) return false;
+    const std::string& k = e.kind;
+    if (k == "empty" || k == "emitter" || k == "sprite2d" || k == "label" || k == "ui_label") return false;
+    if (k == "panel" || k == "button" || k == "checkbox" || k == "toggle" ||
+        k == "slider" || k == "bar" || k == "field") return false;
+    if (k.size() >= 6 && k.compare(0, 6, "light_") == 0) return false;
+    if (k.size() >= 3 && k.compare(0, 3, "ui_") == 0) return false;
+    if (k == "rect") {
+        const std::string& n = e.name;
+        if (n == "empty" || n == "panel" || n == "button" || n == "checkbox" ||
+            n == "toggle" || n == "slider" || n == "bar" || n == "field") return false;
+    }
+    return true;
+}
+
+/* 8 when any drawn mesh should be smooth, otherwise 0. The project switch is
+   the default. An object set to on still asks for samples when the project is off. */
+static int aa_samples() {
+    int want = g_aa ? 8 : 0;
+    if (!want) {
+        for (int s = 0; s < (int)g.entities.size(); ++s) {
+            const Entity& e = g.entities[s];
+            if (e.aa != 1 || !aa_kind(e) || !entity_shown(s)) continue;
+            want = 8;
+            break;
+        }
+    }
+    if (want > S.maxSamples) want = S.maxSamples;
+    if (want < 0) want = 0;
+    return want;
+}
+
+static void aa_project() {
+    if (g_aa) glEnable(kMultisample);
+    else glDisable(kMultisample);
+}
+
+static void aa_for(const Entity& e) {
+    int on = g_aa ? 1 : 0;
+    if (e.aa == 0) on = 0;
+    else if (e.aa == 1) on = 1;
+    if (on) glEnable(kMultisample);
+    else glDisable(kMultisample);
+}
+
+static bool ensure_buffers(int w, int h, int samples) {
+    if (samples < 0) samples = 0;
+    if (S.maxSamples > 0 && samples > S.maxSamples) samples = S.maxSamples;
+    if (S.fbo && S.w == w && S.h == h && S.asked == samples) return true;
+    int tries[3];
+    int ntry = 0;
+    if (samples > 0) {
+        int s8 = std::min(8, S.maxSamples);
+        int s4 = std::min(4, S.maxSamples);
+        if (samples >= 8 && s8 > 0) tries[ntry++] = s8;
+        if (samples >= 4 && s4 > 0 && (ntry == 0 || tries[ntry - 1] != s4)) tries[ntry++] = s4;
+    }
+    tries[ntry++] = 0;
+    for (int i = 0; i < ntry; ++i) {
+        if (make_buffers(w, h, tries[i])) {
+            S.w = w;
+            S.h = h;
+            S.asked = samples;
+            return true;
+        }
     }
     free_buffers();
     S.w = S.h = 0;
+    S.asked = -1;
     return false;
 }
 
@@ -1643,7 +1705,7 @@ static bool begin(int w, int h, double fov_deg, int br, int bg, int bb) {
         if (rh < 1) rh = 1;
     }
     if (S.core) return begin33(rw, rh, fov_deg, br, bg, bb);
-    if (!wglMakeCurrent(S.dc, S.rc) || !ensure_buffers(rw, rh)) return false;
+    if (!wglMakeCurrent(S.dc, S.rc) || !ensure_buffers(rw, rh, aa_samples())) return false;
     swap_interval();
     S.selected.clear();
     S.bindFb(kFramebuffer, S.fbo);
@@ -1652,7 +1714,7 @@ static bool begin(int w, int h, double fov_deg, int br, int bg, int bb) {
     glStencilMask(0xFF);
     glClearStencil(0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glEnable(kMultisample);
+    aa_project();
     glDisable(GL_LIGHTING);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_STENCIL_TEST);
@@ -1764,7 +1826,8 @@ static bool begin(int w, int h, double fov_deg, int br, int bg, int bb) {
 }
 
 static void entity(const Entity& e, int slot) {
-    if (S.core) { entity33(e, slot); return; }
+    aa_for(e);
+    if (S.core) { entity33(e, slot); aa_project(); return; }
     int aa = std::clamp(e.a, 0, 255);
     if (aa < 255) {
         glEnable(GL_BLEND);
@@ -1777,6 +1840,7 @@ static void entity(const Entity& e, int slot) {
     shape(e);
     if (aa < 255) glDisable(GL_BLEND);
     if (e.selected) S.selected.push_back(slot);
+    aa_project();
 }
 
 /* Translucent coat in world space. pts is 3 vertices per triangle. */
@@ -2317,7 +2381,9 @@ extern "C" void engine_r3d_hitbox(int s) {
     float w = (float)e.w, h = (float)e.h;
     if (w <= 0 || h <= 0) return;
     if (g_useGL) {
+        glb::aa_for(e);
         glb::cover_model(e, 70, 210, 120, 90);
+        glb::aa_project();
         return;
     }
     const Model* m = &model_load(model_path(e.model));

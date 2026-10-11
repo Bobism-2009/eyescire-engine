@@ -241,6 +241,8 @@ extern "C" int    engine_entity_emit_size(int);
 extern "C" void   engine_entity_set_emit_size(int, int);
 extern "C" int    engine_entity_emit_hd(int);
 extern "C" void   engine_entity_set_emit_hd(int, int);
+extern "C" int    engine_entity_aa(int);
+extern "C" void   engine_entity_set_aa(int, int);
 extern "C" int    engine_scene_render3d();
 extern "C" void   engine_r3d_begin(int, int, int, int, double, double, double, double, double, double, double, int, int, int);
 extern "C" void   engine_r3d_entity(int);
@@ -734,6 +736,8 @@ fn ent_emit_size(slot: int): int { let r: int = 28; inline_cpp! { r = engine_ent
 fn ent_set_emit_size(slot: int, v: int) { inline_cpp! { engine_entity_set_emit_size(slot, v); } }
 fn ent_emit_hd(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_emit_hd(slot); } return r; }
 fn ent_set_emit_hd(slot: int, v: int) { inline_cpp! { engine_entity_set_emit_hd(slot, v); } }
+fn ent_aa(slot: int): int { let r: int = -1; inline_cpp! { r = engine_entity_aa(slot); } return r; }
+fn ent_set_aa(slot: int, v: int) { inline_cpp! { engine_entity_set_aa(slot, v); } }
 fn sfx_play(path: string): int {
     let r: int = 0;
     inline_cpp! { r = engine_sfx_play(path.c_str()); }

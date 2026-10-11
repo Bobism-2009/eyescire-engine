@@ -3619,6 +3619,33 @@ fn inspector_draw_one(s: int) {
         yy = yy + 16;
     }
 
+    if (scene_render3d() == 1 && ent_is_mesh3d(s) == 1) {
+        yy = yy + 8;
+        chrome_field_label(x, yy, "Smooth edges");
+        yy = yy + 18;
+        let mode: int = ent_aa(s);
+        let bw: int = (w - 16) / 3;
+        let k_proj: string = "secondary";
+        let k_off: string = "secondary";
+        let k_on: string = "secondary";
+        if (mode < 0) k_proj = "primary";
+        else if (mode == 0) k_off = "primary";
+        else k_on = "primary";
+        if (ui_button_kind(rect(x, yy, bw, 24), "Project", k_proj) == 1 && mode >= 0) {
+            undo_save_modify(s);
+            ent_set_aa(s, -1);
+        }
+        if (ui_button_kind(rect(x + bw + 8, yy, bw, 24), "Off", k_off) == 1 && mode != 0) {
+            undo_save_modify(s);
+            ent_set_aa(s, 0);
+        }
+        if (ui_button_kind(rect(x + (bw + 8) * 2, yy, bw, 24), "On", k_on) == 1 && mode != 1) {
+            undo_save_modify(s);
+            ent_set_aa(s, 1);
+        }
+        yy = yy + 36;
+    }
+
     yy = chrome_section(x, yy, w, "TRANSFORM");
     let half: int = (w - 8) / 2;
     chrome_field_label(x, yy, "X");
@@ -8749,6 +8776,7 @@ fn context_menu_draw() {
                     ent_set_ui_value(ns, ent_ui_value(s));
                     ent_copy_button(ns, s);
                     eng_pub_copy(ns, s);
+                    ent_set_aa(ns, ent_aa(s));
                     undo_save_create(ns);
                     sel_clear();
                     ent_set_selected(ns, 1);
@@ -10936,6 +10964,7 @@ fn edit_hotkeys() {
                     ent_set_ui_value(ns, ent_ui_value(s));
                     ent_copy_button(ns, s);
                     eng_pub_copy(ns, s);
+                    ent_set_aa(ns, ent_aa(s));
                     undo_save_create(ns);
                     sel_clear();
                     ent_set_selected(ns, 1);
@@ -11738,6 +11767,12 @@ fn settings_page_graphics(x: int, y: int, w: int) {
     draw_text(x, y, "On draws the 3D picture at twice the resolution. Sharper, and slower.", col_text_dim());
     y = y + 20;
     draw_text(x, y, "The editor view, Play, and an exported 3D game all use it.", col_text_dim());
+    y = y + 36;
+    settings_onoff(x, y, "Anti-aliasing", "aa", 1);
+    y = y + 36;
+    draw_text(x, y, "On smooths the edges of the 3D picture. Off leaves them jagged.", col_text_dim());
+    y = y + 20;
+    draw_text(x, y, "An object can follow this, or force its own edges on or off.", col_text_dim());
     settings_bottom = y + 28;
 }
 

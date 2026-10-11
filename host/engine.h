@@ -36,6 +36,7 @@ EYESCIRE_API void engine_quit();
 EYESCIRE_API int  engine_pump();
 EYESCIRE_API void engine_present();
 EYESCIRE_API int  engine_vsync();          /* 1 = wait for the monitor */
+EYESCIRE_API int  engine_aa();             /* 1 = smooth 3D edges */
 EYESCIRE_API int  engine_window_w();
 EYESCIRE_API int  engine_window_h();
 EYESCIRE_API void engine_set_title(const char* title);
@@ -726,6 +727,8 @@ EYESCIRE_API int  engine_entity_emit_size(int slot);
 EYESCIRE_API void engine_entity_set_emit_size(int slot, int v);
 EYESCIRE_API int  engine_entity_emit_hd(int slot);
 EYESCIRE_API void engine_entity_set_emit_hd(int slot, int on);
+EYESCIRE_API int  engine_entity_aa(int slot);          /* -1 project, 0 off, 1 on */
+EYESCIRE_API void engine_entity_set_aa(int slot, int mode);
 EYESCIRE_API int  engine_emit_burst(const char* path, float x, float y, float z, int r, int g, int b, int hd);
 EYESCIRE_API void engine_particles_draw_2d();
 EYESCIRE_API int  engine_scene_render3d();            /* 1 = play in 3D */

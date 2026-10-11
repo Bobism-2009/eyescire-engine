@@ -1108,7 +1108,7 @@ static bool draw_sky33(const float* basis) {
 }
 
 static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
-    if (!wglMakeCurrent(S.dc, S.rc) || !ensure_buffers(w, h)) return false;
+    if (!wglMakeCurrent(S.dc, S.rc) || !ensure_buffers(w, h, aa_samples())) return false;
     g_lines.clear();
     g_lineA = -1;
     g_sentLit = g_sentTwo = g_sentVert = g_sentAlpha = -1;
@@ -1120,7 +1120,7 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
     glStencilMask(0xFF);
     glClearStencil(0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glEnable(kMultisample);
+    aa_project();
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_STENCIL_TEST);
     glDisable(GL_BLEND);

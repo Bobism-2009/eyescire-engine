@@ -211,6 +211,9 @@ struct Entity {
     int         emitSize   = 28;
     int         emitHD     = 0;
     float       emitAcc    = 0;
+    /* Edge smoothing for this object. -1 follows the project, 0 off, 1 on.
+       Scene field 67, after the public values. */
+    int         aa         = -1;
     /* Public script values. Saved on this object, so two objects can share a
        script and still differ. Scene field 66. */
     struct PubVal {
@@ -1122,9 +1125,11 @@ namespace r3d { void overlay_present(); }
    has no GL swap, so present waits with DwmFlush instead. */
 static int g_vsync = 1;
 static int g_hd = 0;          /* 1: the 3D picture is drawn at twice the resolution */
+static int g_aa = 1;          /* 1: smooth the edges of the 3D picture */
 static int g_glPresented = 0;
 
 extern "C" int engine_vsync() { return g_vsync ? 1 : 0; }
+extern "C" int engine_aa() { return g_aa ? 1 : 0; }
 
 extern "C" void engine_present() {
     if (!g.hwnd || !g.backDC) return;
@@ -2972,6 +2977,17 @@ extern "C" void engine_entity_set_emit_size(int s, int v) {
 extern "C" int engine_entity_emit_hd(int s) { return active_slot(s) && g.entities[s].emitHD ? 1 : 0; }
 extern "C" void engine_entity_set_emit_hd(int s, int on) {
     if (active_slot(s)) g.entities[s].emitHD = on ? 1 : 0;
+}
+extern "C" int engine_entity_aa(int s) {
+    if (!active_slot(s)) return -1;
+    int v = g.entities[s].aa;
+    if (v < 0) return -1;
+    return v ? 1 : 0;
+}
+extern "C" void engine_entity_set_aa(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 0) g.entities[s].aa = -1;
+    else g.entities[s].aa = v ? 1 : 0;
 }
 /* Absolute path of an entity's model (relative ones resolve like sprites). */
 extern "C" const char* engine_entity_model_path(int s) {
@@ -4965,7 +4981,7 @@ extern "C" int engine_scene_save(const char* path) {
           << e.sound << "|" << (e.soundLoop ? 1 : 0) << "|" << e.soundRange << "|"
           << e.emitRate << "|" << e.emitLife << "|" << e.emitSpeed << "|"
           << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "|"
-          << pub_encode(e.pubs) << "\n";
+          << pub_encode(e.pubs) << "|" << e.aa << "\n";
     }
     return 1;
 }
@@ -5133,6 +5149,12 @@ extern "C" int engine_scene_load(const char* path) {
                 if (parts.size() >= 65) { try { e.emitSize = std::stoi(parts[64]); } catch (...) {} }
                 if (parts.size() >= 66) { try { e.emitHD = std::stoi(parts[65]) != 0; } catch (...) {} }
                 if (parts.size() >= 67) pub_decode(e.pubs, parts[66]);
+                if (parts.size() >= 68) {
+                    try { e.aa = std::stoi(parts[67]); } catch (...) {}
+                    if (e.aa > 0) e.aa = 1;
+                    else if (e.aa < 0) e.aa = -1;
+                    else e.aa = 0;
+                }
                 if (e.emitRate < 0) e.emitRate = 0;
                 if (e.emitRate > 200) e.emitRate = 200;
                 if (e.emitLife < 50) e.emitLife = 50;
@@ -6119,10 +6141,10 @@ extern "C" const char* engine_project_path_join(const char* a, const char* b) {
 
 static const char* kPrefKey[] = {
     "grid", "show_grid", "snap", "autosave", "renderer",
-    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd"
+    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd", "aa"
 };
-static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0 };
-static const int kPrefCount = 13;
+static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0, 1 };
+static const int kPrefCount = 14;
 
 static int pref_clamp_key(const std::string& key, int v) {
     if (key == "grid") {
@@ -6135,7 +6157,7 @@ static int pref_clamp_key(const std::string& key, int v) {
         }
         return best;
     }
-    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd")
+    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd" || key == "aa")
         return v != 0 ? 1 : 0;
     if (key == "renderer") return v == 11 ? 11 : 33;
     if (key == "music" || key == "sfx") {
@@ -6166,6 +6188,7 @@ static void pref_apply_key(const std::string& key, int v) {
     }
     else if (key == "vsync") g_vsync = v ? 1 : 0;
     else if (key == "hd") g_hd = v ? 1 : 0;
+    else if (key == "aa") g_aa = v ? 1 : 0;
 }
 
 static void pref_write() {
@@ -6294,6 +6317,7 @@ extern "C" void engine_project_close() {
     g.projAssets.clear();
     g.projActiveScene = 0;
     g_vsync = 1;
+    g_aa = 1;
     splash_reset();
 }
 
@@ -6991,7 +7015,7 @@ extern "C" int engine_project_save_prefab(const char* name, int slot) {
       << e.sound << "|" << (e.soundLoop ? 1 : 0) << "|" << e.soundRange << "|"
       << e.emitRate << "|" << e.emitLife << "|" << e.emitSpeed << "|"
       << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "|"
-      << pub_encode(e.pubs) << "\n";
+      << pub_encode(e.pubs) << "|" << e.aa << "\n";
 
     auto it = std::find(g.projPrefabs.begin(), g.projPrefabs.end(), fname);
     if (it == g.projPrefabs.end()) {
@@ -7053,6 +7077,11 @@ extern "C" int engine_project_spawn_prefab(int i, int x, int y) {
                 if (parts.size() >= 25) { try { engine_entity_set_emit_size(slot, std::stoi(parts[24])); } catch (...) {} }
                 if (parts.size() >= 26) { try { engine_entity_set_emit_hd(slot, std::stoi(parts[25])); } catch (...) {} }
                 if (parts.size() >= 27) pub_decode(g.entities[slot].pubs, parts[26]);
+                if (parts.size() >= 28) {
+                    int aav = -1;
+                    try { aav = std::stoi(parts[27]); } catch (...) {}
+                    engine_entity_set_aa(slot, aav);
+                }
             }
             return slot;
         }

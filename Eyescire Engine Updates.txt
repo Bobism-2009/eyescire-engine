@@ -40,7 +40,7 @@ Ability to install "Plugins" via DLL files- Etc. that it will load at runtime.
 
 Reflections- Mirrors- Things like that.
 
-Toggle Anti-Aliasing for Full project / Physical objects.
+✔ Toggle Anti-Aliasing for Full project / Physical objects.
 
 ✔ Ability for variables declared as public (You implement how, not changing Nexa its-self) Shows up in the inspector for the item.
 
