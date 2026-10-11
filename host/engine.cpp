@@ -516,6 +516,14 @@ static std::unordered_map<std::string, HFONT> g_fontCache;
  * dropped whenever the clip or the back buffer changes, and at present. Each
  * draw flushes so later GDI calls (TextOut) land on top in call order. */
 static Gdiplus::Graphics* g_roundGfx = nullptr;
+/* GDI+ takes the DC clip when its context is built and does not put it back.
+   Text and plain rectangles would then paint past a panel. This region is
+   selected again before those draws. */
+static HRGN g_clipRgn = nullptr;
+
+static void clip_hold() {
+    if (g.backDC && g_clipRgn) SelectClipRgn(g.backDC, g_clipRgn);
+}
 
 static void round_gfx_drop() {
     if (g_roundGfx) {
@@ -528,6 +536,7 @@ static Gdiplus::Graphics* round_gfx() {
     if (!g_roundGfx && g.backDC) {
         g_roundGfx = new Gdiplus::Graphics(g.backDC);
         g_roundGfx->SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        clip_hold();
     }
     return g_roundGfx;
 }
@@ -1346,12 +1355,14 @@ extern "C" void engine_clear(int r, int g_, int b) {
 
 extern "C" void engine_fill_rect(int x, int y, int w, int h, int r, int g_, int b) {
     if (!g.backDC) return;
+    clip_hold();
     RECT rc{ x, y, x + w, y + h };
     FillRect(g.backDC, &rc, fill_brush(r, g_, b));
 }
 
 extern "C" void engine_outline_rect(int x, int y, int w, int h, int thickness, int r, int g_, int b) {
     if (!g.backDC || w <= 0 || h <= 0 || thickness <= 0) return;
+    clip_hold();
     if (thickness > w / 2 + 1) thickness = w / 2 + 1;
     if (thickness > h / 2 + 1) thickness = h / 2 + 1;
     HBRUSH br = fill_brush(r, g_, b);
@@ -1367,6 +1378,7 @@ extern "C" void engine_outline_rect(int x, int y, int w, int h, int thickness, i
 
 extern "C" void engine_line(int x0, int y0, int x1, int y1, int r, int g_, int b) {
     if (!g.backDC) return;
+    clip_hold();
     SetDCPenColor(g.backDC, RGB(r, g_, b));
     HPEN pen = (HPEN)GetStockObject(DC_PEN);
     HGDIOBJ old = SelectObject(g.backDC, pen);
@@ -1383,6 +1395,7 @@ extern "C" void engine_pixel(int x, int y, int r, int g_, int b) {
 
 extern "C" void engine_text(int x, int y, const char* s, int r, int g_, int b) {
     if (!g.backDC || !s) return;
+    clip_hold();
     SetBkMode(g.backDC, TRANSPARENT);
     SetTextAlign(g.backDC, TA_LEFT | TA_TOP);
     SetTextColor(g.backDC, RGB(r, g_, b));
@@ -1574,14 +1587,18 @@ extern "C" void engine_text_aa(int x, int y, const char* s, int r, int g_, int b
 extern "C" void engine_set_clip(int x, int y, int w, int h) {
     if (!g.backDC) return;
     round_gfx_drop();
-    HRGN rgn = CreateRectRgn(x, y, x + w, y + h);
-    SelectClipRgn(g.backDC, rgn);
-    DeleteObject(rgn);
+    if (g_clipRgn) DeleteObject(g_clipRgn);
+    g_clipRgn = CreateRectRgn(x, y, x + w, y + h);
+    SelectClipRgn(g.backDC, g_clipRgn);
 }
 
 extern "C" void engine_clear_clip() {
     if (!g.backDC) return;
     round_gfx_drop();
+    if (g_clipRgn) {
+        DeleteObject(g_clipRgn);
+        g_clipRgn = nullptr;
+    }
     SelectClipRgn(g.backDC, nullptr);
 }
 
