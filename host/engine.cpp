@@ -1127,6 +1127,9 @@ static int g_vsync = 1;
 static int g_hd = 0;          /* 1: the 3D picture is drawn at twice the resolution */
 static int g_aa = 1;          /* 1: smooth the edges of the 3D picture */
 static int g_shadows = 1;     /* 1: the directional light casts one soft shadow */
+static int g_fog = 0;         /* 1: far objects fade into g_fogR/G/B */
+static int g_fogR = 168, g_fogG = 186, g_fogB = 206;
+static int g_fogDist = 4800;  /* scene pixels until an object is fully the fog color */
 static int g_glPresented = 0;
 
 extern "C" int engine_vsync() { return g_vsync ? 1 : 0; }
@@ -6142,10 +6145,11 @@ extern "C" const char* engine_project_path_join(const char* a, const char* b) {
 
 static const char* kPrefKey[] = {
     "grid", "show_grid", "snap", "autosave", "renderer",
-    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd", "aa", "shadows"
+    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd", "aa", "shadows",
+    "fog", "fog_r", "fog_g", "fog_b", "fog_dist"
 };
-static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0, 1, 1 };
-static const int kPrefCount = 15;
+static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0, 1, 1, 0, 168, 186, 206, 4800 };
+static const int kPrefCount = 20;
 
 static int pref_clamp_key(const std::string& key, int v) {
     if (key == "grid") {
@@ -6158,8 +6162,18 @@ static int pref_clamp_key(const std::string& key, int v) {
         }
         return best;
     }
-    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows")
+    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows" || key == "fog")
         return v != 0 ? 1 : 0;
+    if (key == "fog_r" || key == "fog_g" || key == "fog_b") {
+        if (v < 0) return 0;
+        if (v > 255) return 255;
+        return v;
+    }
+    if (key == "fog_dist") {
+        if (v < 400) return 400;
+        if (v > 80000) return 80000;
+        return v;
+    }
     if (key == "renderer") return v == 11 ? 11 : 33;
     if (key == "music" || key == "sfx") {
         if (v < 0) return 0;
@@ -6191,6 +6205,11 @@ static void pref_apply_key(const std::string& key, int v) {
     else if (key == "hd") g_hd = v ? 1 : 0;
     else if (key == "aa") g_aa = v ? 1 : 0;
     else if (key == "shadows") g_shadows = v ? 1 : 0;
+    else if (key == "fog") g_fog = v ? 1 : 0;
+    else if (key == "fog_r") g_fogR = v;
+    else if (key == "fog_g") g_fogG = v;
+    else if (key == "fog_b") g_fogB = v;
+    else if (key == "fog_dist") g_fogDist = v;
 }
 
 static void pref_write() {
@@ -6321,6 +6340,11 @@ extern "C" void engine_project_close() {
     g_vsync = 1;
     g_aa = 1;
     g_shadows = 1;
+    g_fog = 0;
+    g_fogR = 168;
+    g_fogG = 186;
+    g_fogB = 206;
+    g_fogDist = 4800;
     splash_reset();
 }
 

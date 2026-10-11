@@ -61,6 +61,10 @@ let settings_pw: string = "";
 let settings_ph: string = "";
 let settings_music: string = "";
 let settings_sfx: string = "";
+let settings_fog_r: string = "";
+let settings_fog_g: string = "";
+let settings_fog_b: string = "";
+let settings_fog_d: string = "";
 let settings_scroll: int = 0;
 let settings_bottom: int = 0;
 let settings_clip_y0: int = 0;
@@ -11219,6 +11223,10 @@ fn settings_sync() {
     settings_ph = "" + pref_int("play_h", 720);
     settings_music = "" + pref_int("music", 100);
     settings_sfx = "" + pref_int("sfx", 100);
+    settings_fog_r = "" + pref_int("fog_r", 168);
+    settings_fog_g = "" + pref_int("fog_g", 186);
+    settings_fog_b = "" + pref_int("fog_b", 206);
+    settings_fog_d = "" + pref_int("fog_dist", 4800);
     settings_ready = 1;
 }
 
@@ -11779,7 +11787,29 @@ fn settings_page_graphics(x: int, y: int, w: int) {
     draw_text(x, y, "On casts one soft shadow from the directional light.", col_text_dim());
     y = y + 20;
     draw_text(x, y, "It falls on the ground and on other objects. Spot and point lights stay plain.", col_text_dim());
-    settings_bottom = y + 28;
+    y = y + 36;
+    settings_onoff(x, y, "Fog", "fog", 0);
+    y = y + 36;
+    draw_text(x, y, "On fades far objects into a color. Off leaves the picture clear.", col_text_dim());
+    y = y + 20;
+    draw_text(x, y, "They are fully that color at the distance. Closer objects stay clearer.", col_text_dim());
+    y = y + 20;
+    draw_text(x, y, "The editor, Play, and an exported 3D game use it. OpenGL 1.1 stays clear.", col_text_dim());
+    y = y + 28;
+    chrome_field_label(x, y, "R");
+    chrome_field_label(x + 88, y, "G");
+    chrome_field_label(x + 176, y, "B");
+    chrome_field_label(x + 264, y, "Distance");
+    y = y + 16;
+    let fr: string = ui_field("set_fogr", rect(x, y, 76, 28), settings_fog_r);
+    let fg: string = ui_field("set_fogg", rect(x + 88, y, 76, 28), settings_fog_g);
+    let fb: string = ui_field("set_fogb", rect(x + 176, y, 76, 28), settings_fog_b);
+    let fd: string = ui_field("set_fogd", rect(x + 264, y, 120, 28), settings_fog_d);
+    if (fr != settings_fog_r) { pref_set_int("fog_r", parse_int_or(fr, pref_int("fog_r", 168))); settings_fog_r = fr; }
+    if (fg != settings_fog_g) { pref_set_int("fog_g", parse_int_or(fg, pref_int("fog_g", 186))); settings_fog_g = fg; }
+    if (fb != settings_fog_b) { pref_set_int("fog_b", parse_int_or(fb, pref_int("fog_b", 206))); settings_fog_b = fb; }
+    if (fd != settings_fog_d) { pref_set_int("fog_dist", parse_int_or(fd, pref_int("fog_dist", 4800))); settings_fog_d = fd; }
+    settings_bottom = y + 40;
 }
 
 fn settings_page_audio(x: int, y: int, w: int) {

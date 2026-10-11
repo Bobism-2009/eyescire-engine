@@ -74,7 +74,7 @@ More realistic looking games.
 
 ✔ Cast shadows from lights onto the ground and onto other objects.
 
-Fog in a 3D scene, so far objects fade into a color.
+✔ Fog in a 3D scene, so far objects fade into a color.
 
 Gamepad support, and a way to rebind keys.
 

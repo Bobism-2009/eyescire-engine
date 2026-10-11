@@ -86,6 +86,7 @@ struct Pipe {
     GLuint shProg = 0, shFbo = 0, shTex = 0;
     GLint uLightMvp = -1, uSun = -1, uDoShadow = -1, uShadowMap = -1, shUMvp = -1;
     GLint muLightMvp = -1, muSun = -1, muDoShadow = -1, muShadowMap = -1;
+    GLint uFogColor = -1, uFogDist = -1, muFogColor = -1, muFogDist = -1;
     bool wideLines = true;
     GLint uMvp = -1, uMv = -1, uN = -1, uColor = -1, uAmb = -1;
     GLint uLit = -1, uTwo = -1, uVert = -1, uAlpha = -1, uNdc = -1, uLN = -1, uFill = -1;
@@ -100,10 +101,10 @@ struct Pipe {
     std::unordered_map<const Model*, GLuint> matVao;
     std::unordered_map<const Model*, std::pair<GLuint, GLsizei>> matMesh;
     GLuint skyProg = 0, skyVao = 0, skyVbo = 0, skyTex[6]{};
-    GLint skyUView = -1, skyUFace[6]{};
+    GLint skyUView = -1, skyUFog = -1, skyUFogOn = -1, skyUFace[6]{};
     std::string skyStamp;
     GLuint partProg = 0, partVao = 0, partVbo = 0;
-    GLint partUView = -1, partUProj = -1, partUTex = -1;
+    GLint partUView = -1, partUProj = -1, partUTex = -1, partUFog = -1, partUFogDist = -1;
 };
 
 static Pipe K;
@@ -336,11 +337,13 @@ uniform vec3 uLSpot[16];
 uniform vec3 uLSp[16];
 uniform int uSun;
 uniform mat4 uLightMvp;
+uniform float uFogDist;
 out vec3 vFront;
 out vec3 vBack;
 out vec3 vSunF;
 out vec3 vSunB;
 out vec4 vLight;
+out float vFog;
 vec3 shade(vec3 n, vec3 pe, vec3 mat, int skip) {
     vec3 direct = vec3(0.0);
     for (int i = 0; i < 16; i++) {
@@ -379,6 +382,12 @@ void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
     gl_Position.xy += uNdc * gl_Position.w;
     vLight = uLightMvp * vec4(aPos, 1.0);
+    vFog = 0.0;
+    if (uFogDist > 0.001) {
+        float dist = length(eye.xyz);
+        float start = uFogDist * 0.25;
+        vFog = clamp((dist - start) / max(uFogDist - start, 0.001), 0.0, 1.0);
+    }
     if (uLit < 0.5) {
         vec3 col = (uVert > 0.5) ? aCol : uColor;
         vFront = col;
@@ -416,6 +425,8 @@ static const char* kSkyFs = R"GLSL(
 #version 330
 in vec3 vDir;
 uniform sampler2D uFace[6];
+uniform vec3 uFogColor;
+uniform float uFogOn;
 out vec4 frag;
 void main() {
     vec3 d = normalize(vDir);
@@ -432,6 +443,8 @@ void main() {
         if (d.z > 0.0) { uv = vec2( d.x, d.y) / a.z; c = texture(uFace[4], uv * 0.5 + 0.5).rgb; }
         else           { uv = vec2(-d.x, d.y) / a.z; c = texture(uFace[5], uv * 0.5 + 0.5).rgb; }
     }
+    float horizon = pow(clamp(1.0 - abs(d.y), 0.0, 1.0), 1.4);
+    c = mix(c, uFogColor, horizon * uFogOn);
     frag = vec4(c, 1.0);
 }
 )GLSL";
@@ -443,9 +456,11 @@ in vec3 vBack;
 in vec3 vSunF;
 in vec3 vSunB;
 in vec4 vLight;
+in float vFog;
 uniform float uAlpha;
 uniform float uDoShadow;
 uniform sampler2D uShadowMap;
+uniform vec3 uFogColor;
 out vec4 frag;
 float shadow_pcf(vec4 clip) {
     if (clip.w <= 0.0) return 1.0;
@@ -465,7 +480,8 @@ void main() {
     vec3 col = gl_FrontFacing ? vFront : vBack;
     vec3 sun = gl_FrontFacing ? vSunF : vSunB;
     if (uDoShadow > 0.5) col -= sun * (1.0 - shadow_pcf(vLight));
-    frag = vec4(clamp(col, 0.0, 1.0), uAlpha);
+    col = mix(clamp(col, 0.0, 1.0), uFogColor, vFog);
+    frag = vec4(col, uAlpha);
 }
 )GLSL";
 
@@ -480,8 +496,10 @@ uniform mat4 uMv;
 uniform mat3 uNmat;
 uniform vec2 uNdc;
 uniform mat4 uLightMvp;
+uniform float uFogDist;
 out vec3 vEye;
 out vec4 vLight;
+out float vFog;
 out vec3 vN;
 out vec3 vT;
 out vec3 vB;
@@ -491,6 +509,12 @@ void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
     gl_Position.xy += uNdc * gl_Position.w;
     vEye = eye.xyz;
+    vFog = 0.0;
+    if (uFogDist > 0.001) {
+        float dist = length(eye.xyz);
+        float start = uFogDist * 0.25;
+        vFog = clamp((dist - start) / max(uFogDist - start, 0.001), 0.0, 1.0);
+    }
     vN = normalize(uNmat * aNrm);
     vT = normalize(uNmat * aTan.xyz);
     vB = cross(vN, vT) * aTan.w;
@@ -507,7 +531,9 @@ in vec3 vT;
 in vec3 vB;
 in vec2 vUv;
 in vec4 vLight;
+in float vFog;
 uniform vec3 uColor;
+uniform vec3 uFogColor;
 uniform vec3 uAmb;
 uniform float uFill;
 uniform float uLit;
@@ -604,6 +630,7 @@ void main() {
     float metal = ((uMap & 4) != 0) ? texture(uMetal, uv).r : 0.0;
     float rough = ((uMap & 8) != 0) ? texture(uRough, uv).r : 0.55;
     vec3 col = (uLit < 0.5) ? albedo : shade(nrm, vEye, albedo, metal, rough);
+    col = mix(col, uFogColor, vFog);
     frag = vec4(col, uAlpha);
 }
 )GLSL";
@@ -672,6 +699,9 @@ static bool build_program() {
     if (K.uShadowMap >= 0) K.P.Uni1i(K.uShadowMap, 7);
     if (K.uDoShadow >= 0) K.P.Uni1f(K.uDoShadow, 0);
     if (K.uSun >= 0) K.P.Uni1i(K.uSun, -1);
+    K.uFogColor = K.P.GetLoc(K.prog, "uFogColor");
+    K.uFogDist = K.P.GetLoc(K.prog, "uFogDist");
+    if (K.uFogDist >= 0) K.P.Uni1f(K.uFogDist, 0);
     if (!(K.uMvp >= 0 && K.uMv >= 0 && K.uN >= 0)) return false;
     static const char* kShVs = R"GLSL(
 #version 330
@@ -750,6 +780,9 @@ void main() {}
                 if (K.muShadowMap >= 0) K.P.Uni1i(K.muShadowMap, 7);
                 if (K.muDoShadow >= 0) K.P.Uni1f(K.muDoShadow, 0);
                 if (K.muSun >= 0) K.P.Uni1i(K.muSun, -1);
+                K.muFogColor = K.P.GetLoc(K.matProg, "uFogColor");
+                K.muFogDist = K.P.GetLoc(K.matProg, "uFogDist");
+                if (K.muFogDist >= 0) K.P.Uni1f(K.muFogDist, 0);
             }
         }
     }
@@ -777,6 +810,8 @@ void main() {}
         return true;
     }
     K.skyUView = K.P.GetLoc(K.skyProg, "uView");
+    K.skyUFog = K.P.GetLoc(K.skyProg, "uFogColor");
+    K.skyUFogOn = K.P.GetLoc(K.skyProg, "uFogOn");
     for (int i = 0; i < 6; ++i) {
         std::string name = "uFace[" + std::to_string(i) + "]";
         K.skyUFace[i] = K.P.GetLoc(K.skyProg, name.c_str());
@@ -894,6 +929,22 @@ static void upload_lights() {
     if (K.uDif >= 0) K.P.Uni3fv(K.uDif, 16, K.ldif);
     if (K.uSpot >= 0) K.P.Uni3fv(K.uSpot, 16, K.lspot);
     if (K.uSp >= 0) K.P.Uni3fv(K.uSp, 16, K.lsp);
+}
+
+/* Distance is scene pixels. The shader works in render units, where 32
+   scene pixels are 1. A zero distance leaves the picture clear. */
+static void fog_publish() {
+    float col[3] = { g_fogR / 255.0f, g_fogG / 255.0f, g_fogB / 255.0f };
+    float dist = (g_fog && g_fogDist > 0) ? g_fogDist * kUnit : 0.f;
+    K.P.Use(K.prog);
+    if (K.uFogColor >= 0) K.P.Uni3fv(K.uFogColor, 1, col);
+    if (K.uFogDist >= 0) K.P.Uni1f(K.uFogDist, dist);
+    if (K.matProg) {
+        K.P.Use(K.matProg);
+        if (K.muFogColor >= 0) K.P.Uni3fv(K.muFogColor, 1, col);
+        if (K.muFogDist >= 0) K.P.Uni1f(K.muFogDist, dist);
+        K.P.Use(K.prog);
+    }
 }
 
 /* The vertex format never changes (position, normal, color). One VAO per
@@ -1218,6 +1269,11 @@ static bool draw_sky33(const float* basis) {
     glDepthMask(GL_FALSE);
     K.P.Use(K.skyProg);
     K.P.UniMat4(K.skyUView, 1, GL_FALSE, view);
+    if (K.skyUFog >= 0) {
+        float col[3] = { g_fogR / 255.0f, g_fogG / 255.0f, g_fogB / 255.0f };
+        K.P.Uni3fv(K.skyUFog, 1, col);
+    }
+    if (K.skyUFogOn >= 0) K.P.Uni1f(K.skyUFogOn, g_fog ? 1.f : 0.f);
     for (int i = 0; i < 6; ++i) {
         K.P.ActiveTex(0x84C0 + i);
         glBindTexture(GL_TEXTURE_2D, K.skyTex[i]);
@@ -1419,9 +1475,13 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
     if (!draw_sky33(basis)) {
         float idm[16];
         ident(idm);
-        int r0 = std::min(255, br + 14), g0 = std::min(255, bg + 16), b0 = std::min(255, bb + 22);
+        int cr = br, cg = bg, cb = bb;
+        if (g_fog) { cr = g_fogR; cg = g_fogG; cb = g_fogB; }
+        int r0 = g_fog ? cr : std::min(255, cr + 14);
+        int g0 = g_fog ? cg : std::min(255, cg + 16);
+        int b0 = g_fog ? cb : std::min(255, cb + 22);
         float lr = r0 / 255.0f, lg = g0 / 255.0f, lb = b0 / 255.0f;
-        float dr = br / 255.0f, dg = bg / 255.0f, db = bb / 255.0f;
+        float dr = cr / 255.0f, dg = cg / 255.0f, db = cb / 255.0f;
         float bgv[6 * 9];
         auto put = [&](int i, float x, float y, float rr, float gg, float bbv) {
             float* p = bgv + i * 9;
@@ -1500,6 +1560,7 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
     K.lit = 1; K.vert = 0; K.two = 0; K.alpha = 1;
     K.fill = any_ambient ? 1.0f : 0.0f;
     upload_lights();
+    fog_publish();
     shadow_frame(shine, sunSlot, w, h);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
@@ -1773,12 +1834,21 @@ layout(location = 1) in vec2 aUv;
 layout(location = 2) in vec4 aColor;
 uniform mat4 uView;
 uniform mat4 uProj;
+uniform float uFogDist;
 out vec2 vUv;
 out vec4 vColor;
+out float vFog;
 void main() {
-    gl_Position = uProj * (uView * vec4(aPos, 1.0));
+    vec4 eye = uView * vec4(aPos, 1.0);
+    gl_Position = uProj * eye;
     vUv = aUv;
     vColor = aColor;
+    vFog = 0.0;
+    if (uFogDist > 0.001) {
+        float dist = length(eye.xyz);
+        float start = uFogDist * 0.25;
+        vFog = clamp((dist - start) / max(uFogDist - start, 0.001), 0.0, 1.0);
+    }
 }
 )GLSL";
 
@@ -1786,11 +1856,14 @@ static const char* kPartFs = R"GLSL(
 #version 330
 in vec2 vUv;
 in vec4 vColor;
+in float vFog;
 uniform sampler2D uTex;
+uniform vec3 uFogColor;
 out vec4 frag;
 void main() {
     vec4 t = texture(uTex, vUv);
-    frag = vec4(t.rgb * vColor.rgb, t.a * vColor.a);
+    vec3 col = mix(t.rgb * vColor.rgb, uFogColor, vFog);
+    frag = vec4(col, t.a * vColor.a);
 }
 )GLSL";
 
@@ -1816,6 +1889,8 @@ static bool part_program() {
     K.partUView = K.P.GetLoc(prog, "uView");
     K.partUProj = K.P.GetLoc(prog, "uProj");
     K.partUTex = K.P.GetLoc(prog, "uTex");
+    K.partUFog = K.P.GetLoc(prog, "uFogColor");
+    K.partUFogDist = K.P.GetLoc(prog, "uFogDist");
     K.P.GenVao(1, &K.partVao);
     K.P.GenBuffers(1, &K.partVbo);
     K.P.BindVao(K.partVao);
@@ -1840,6 +1915,11 @@ static void particles33(const PartDraw* draws, int n) {
     K.P.Use(K.partProg);
     K.P.UniMat4(K.partUView, 1, 0, K.cam);
     K.P.UniMat4(K.partUProj, 1, 0, K.proj);
+    if (K.partUFog >= 0) {
+        float col[3] = { g_fogR / 255.0f, g_fogG / 255.0f, g_fogB / 255.0f };
+        K.P.Uni3fv(K.partUFog, 1, col);
+    }
+    if (K.partUFogDist >= 0) K.P.Uni1f(K.partUFogDist, (g_fog && g_fogDist > 0) ? g_fogDist * kUnit : 0.f);
     if (K.P.ActiveTex) K.P.ActiveTex(0x84C0);
     K.P.Uni1i(K.partUTex, 0);
     K.P.BindVao(K.partVao);
