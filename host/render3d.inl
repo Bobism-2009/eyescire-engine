@@ -8,7 +8,7 @@
  * rasterizer is the fallback. Both follow EyescirePlayer3D's rules
  * (examples/player3d.nxa + engine/shape3d.nxa): world units are scene px / 32,
  * y is up (scene y flipped), z points out of the screen (scene z flipped),
- * boxes / spheres / upright cylinders / .obj models, flat colors lit by one
+ * boxes / spheres / upright cylinders / capsules / .obj models, flat colors lit by one
  * directional light.
  *
  *   engine_r3d_begin(...)    camera + viewport rect, clears the frame
@@ -50,7 +50,7 @@ struct Target {
 static Target T;
 
 struct Cam {
-    V3 eye, right, up, fwd;
+    V3 eye, target, right, up, fwd;
     float f = 1.0f;            /* focal length in px */
     int sx = 0, sy = 0;        /* viewport origin on the back buffer */
     bool valid = false;
@@ -216,10 +216,49 @@ static void draw_tri_cam(CV a, CV b, CV c, int cr, int cg, int cb, int id) {
     if (n == 4) raster_tri(s[0], s[2], s[3], cr, cg, cb, id);
 }
 
-static float light_of(V3 n) {
-    float d = dot(n, g_light);
-    if (d < 0) d = 0;
-    float s = 0.55f + 0.95f * d;
+/* Shade at a world point. A scene light is the same color the GPU uses.
+   With no lights, the default sun and lamp are already in g_lights. */
+static float shade_at(V3 p, V3 n) {
+    float amb = 0.55f;
+    bool any_amb = false;
+    float sum = 0;
+    for (const Light& l : g_lights) {
+        if (l.type == 3) {
+            if (!any_amb) { amb = 0; any_amb = true; }
+            amb += (l.r + l.g + l.b) / 3.0f;
+            continue;
+        }
+        float nd = 0, att = 1;
+        if (l.type == 0) {
+            nd = dot(n, l.dir * -1.0f);
+        } else {
+            V3 to = l.pos - p;
+            float d2 = dot(to, to);
+            float dist = std::sqrt(d2);
+            if (dist > 1e-4f) nd = dot(n, to * (1.0f / dist));
+            else nd = 1;
+            float range = l.range > 1e-3f ? l.range : 1.0f;
+            att = 1.0f / (1.0f + d2 / (range * range));
+            if (l.type == 2 && dist > 1e-4f) {
+                float s = dot(to * (-1.0f / dist), l.dir);
+                float deg = std::clamp(l.cone * 0.5f, 1.0f, 90.0f);
+                float cutoff = std::cos(deg * 3.14159265f / 180.0f);
+                if (s < cutoff) att = 0;
+                else att *= std::pow(std::max(s, 0.0f), 6.0f);
+            }
+        }
+        if (nd < 0) nd = 0;
+        sum += nd * att * (l.r + l.g + l.b) / 3.0f;
+    }
+    float s = amb + sum;
+    if (any_amb) {
+        float d = sum;
+        if (d < 0) d = 0;
+        if (d > 1) d = 1;
+        float fill = amb;
+        if (fill < 0) fill = 0;
+        s = d + fill * (1.0f - d);
+    }
     return s > 1.0f ? 1.0f : s;
 }
 
@@ -249,8 +288,8 @@ static void xform_orient(Xform& xf, const Entity& e) {
 
 /* World-space triangle with per-vertex normals (flat faces pass the same one). */
 static void draw_tri_world(V3 a, V3 b, V3 c, V3 na, V3 nb, V3 nc, int r, int g_, int b_, int id) {
-    draw_tri_cam(CV{ to_cam(a), light_of(na) }, CV{ to_cam(b), light_of(nb) },
-                 CV{ to_cam(c), light_of(nc) }, r, g_, b_, id);
+    draw_tri_cam(CV{ to_cam(a), shade_at(a, na) }, CV{ to_cam(b), shade_at(b, nb) },
+                 CV{ to_cam(c), shade_at(c, nc) }, r, g_, b_, id);
 }
 
 static void mesh_box(const Xform& x, int r, int g_, int b, int id) {
@@ -293,6 +332,71 @@ static void mesh_sphere(const Xform& x, int r, int g_, int b, int id) {
     }
 }
 
+/* Upright capsule in the unit box. Width is the diameter, height is the full
+   length including the round ends. Ends stay spheres under the (w, h, w)
+   scale: the cap is an ellipsoid here that the scale turns into a ball.
+   Shorter than it is wide, it is a sphere of diameter h. */
+struct CapsuleLocal { float rx, ry, cy; };
+
+static CapsuleLocal capsule_local(float w, float h) {
+    CapsuleLocal c;
+    if (w < 1.f) w = 1.f;
+    if (h < 1.f) h = 1.f;
+    if (h <= w) {
+        c.rx = 0.5f * h / w;
+        c.ry = 0.5f;
+        c.cy = 0.f;
+    } else {
+        c.rx = 0.5f;
+        c.ry = 0.5f * w / h;
+        c.cy = 0.5f - c.ry;
+    }
+    return c;
+}
+
+/* One vertex: local position, and a normal that inverse-transpose(scale)
+   turns into the round-cap direction. emit is called three times per triangle. */
+template <class F>
+static void capsule_emit(const CapsuleLocal& c, float sx, float sy, float sz, F emit) {
+    const int SEG = 28, RINGS = 8;
+    auto put = [&](int side, float a, float phi) {
+        float st = std::sin(a), ct = std::cos(a);
+        float sp = std::sin(phi), cp = std::cos(phi);
+        float px = c.rx * st * cp;
+        float py = (float)side * (c.cy + c.ry * ct);
+        float pz = c.rx * st * sp;
+        float dx = px * sx;
+        float dy = (float)side * c.ry * ct * sy;
+        float dz = pz * sz;
+        emit(px, py, pz, dx * sx, dy * sy, dz * sz);
+    };
+    for (int side = 1; side >= -1; side -= 2) {
+        for (int j = 0; j < RINGS; ++j) {
+            float a0 = (float)j / RINGS * 1.5707963f;
+            float a1 = (float)(j + 1) / RINGS * 1.5707963f;
+            for (int i = 0; i < SEG; ++i) {
+                float p0 = (float)i / SEG * 6.2831853f;
+                float p1 = (float)(i + 1) / SEG * 6.2831853f;
+                put(side, a0, p0); put(side, a0, p1); put(side, a1, p1);
+                put(side, a0, p0); put(side, a1, p1); put(side, a1, p0);
+            }
+        }
+    }
+    if (c.cy <= 0.0001f) return;
+    for (int i = 0; i < SEG; ++i) {
+        float p0 = (float)i / SEG * 6.2831853f;
+        float p1 = (float)(i + 1) / SEG * 6.2831853f;
+        float c0 = std::cos(p0), s0 = std::sin(p0);
+        float c1 = std::cos(p1), s1 = std::sin(p1);
+        auto band = [&](float y, float cp, float sp) {
+            float px = c.rx * cp, pz = c.rx * sp;
+            emit(px, y, pz, px * sx * sx, 0.f, pz * sz * sz);
+        };
+        band(-c.cy, c0, s0); band(-c.cy, c1, s1); band(c.cy, c1, s1);
+        band(-c.cy, c0, s0); band(c.cy, c1, s1); band(c.cy, c0, s0);
+    }
+}
+
 static void mesh_cylinder(const Xform& x, int r, int g_, int b, int id) {
     /* upright along local y, radius 0.5, height 1 */
     const int SEG = 24;
@@ -311,11 +415,33 @@ static void mesh_cylinder(const Xform& x, int r, int g_, int b, int id) {
     }
 }
 
+static void mesh_capsule(const Xform& x, float w, float h, int r, int g_, int b, int id) {
+    CapsuleLocal c = capsule_local(w, h);
+    V3 tri[3], nrm[3];
+    int n = 0;
+    capsule_emit(c, x.scale.x, x.scale.y, x.scale.z, [&](float px, float py, float pz, float nx, float ny, float nz) {
+        tri[n] = x.point(v3(px, py, pz));
+        nrm[n] = x.normal(v3(nx, ny, nz));
+        if (++n == 3) {
+            draw_tri_world(tri[0], tri[1], tri[2], nrm[0], nrm[1], nrm[2], r, g_, b, id);
+            n = 0;
+        }
+    });
+}
+
 /* ----- .obj models: positions + faces, centered and scaled to fit a unit cube ----- */
+
+struct MapImg {
+    int w = 0, h = 0;
+    std::vector<unsigned char> rgb; /* row 0 is the bottom, same as an OBJ v of 0 */
+};
 
 struct Model {
     std::vector<V3>  pos;
     std::vector<int> tri;      /* 3 indices per triangle */
+    std::vector<V3>  cn;       /* one normal per corner, same order as tri */
+    std::vector<float> cuv;    /* u,v per corner */
+    MapImg base, nrm, metal, rough, height;
     bool ok = false;
 };
 static std::unordered_map<std::string, Model> g_models;
@@ -334,31 +460,562 @@ static const std::string& model_path(const std::string& rel) {
     return cache.emplace(rel, asset_resolve(rel)).first->second;
 }
 
+static std::string model_lower(std::string s) {
+    for (char& c : s) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return s;
+}
+
+static std::string model_dir(const std::string& path) {
+    size_t p = path.find_last_of("\\/");
+    return p == std::string::npos ? std::string() : path.substr(0, p);
+}
+
+static std::unordered_map<std::string, MapImg> g_imgCache;
+
+/* Uncompressed true-color TGA. The flashlight maps are 24-bit TGAs, which
+   GDI+ does not open. */
+static bool model_load_tga(const std::string& path, MapImg& im) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    unsigned char hdr[18] = {};
+    in.read((char*)hdr, 18);
+    if (!in || hdr[2] != 2) return false;
+    int w = hdr[12] | (hdr[13] << 8);
+    int h = hdr[14] | (hdr[15] << 8);
+    int bpp = hdr[16];
+    if (w < 1 || h < 1 || w > 8192 || h > 8192) return false;
+    if (bpp != 24 && bpp != 32) return false;
+    if (hdr[0]) in.seekg(hdr[0], std::ios::cur);
+    int ch = bpp / 8;
+    std::vector<unsigned char> src((size_t)w * h * ch);
+    in.read((char*)src.data(), (std::streamsize)src.size());
+    if (in.gcount() != (std::streamsize)src.size()) return false;
+    bool top = (hdr[17] & 0x20) != 0;
+    int side = w > h ? w : h;
+    int tw = w, th = h;
+    if (side > 2048) {
+        float s = 2048.f / (float)side;
+        tw = std::max(1, (int)(w * s));
+        th = std::max(1, (int)(h * s));
+    }
+    im.w = tw;
+    im.h = th;
+    im.rgb.assign((size_t)tw * th * 3, 0);
+    for (int j = 0; j < th; ++j) {
+        int fromBottom = (int)((j + 0.5f) * h / th);
+        if (fromBottom >= h) fromBottom = h - 1;
+        int fromTop = h - 1 - fromBottom;
+        int fileRow = top ? fromTop : fromBottom;
+        const unsigned char* row = src.data() + (size_t)fileRow * w * ch;
+        for (int i = 0; i < tw; ++i) {
+            int si = (int)((i + 0.5f) * w / tw);
+            if (si >= w) si = w - 1;
+            const unsigned char* px = row + si * ch;
+            size_t o = ((size_t)j * tw + i) * 3;
+            im.rgb[o] = px[2];
+            im.rgb[o + 1] = px[1];
+            im.rgb[o + 2] = px[0];
+        }
+    }
+    return true;
+}
+
+static bool model_load_image(const std::string& path, MapImg& im) {
+    if (path.empty()) return false;
+    auto cached = g_imgCache.find(path);
+    if (cached != g_imgCache.end()) {
+        im = cached->second;
+        return im.w > 0;
+    }
+    if (path.size() >= 4) {
+        std::string ext = path.substr(path.size() - 4);
+        for (char& c : ext) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (ext == ".tga" && model_load_tga(path, im)) {
+            g_imgCache[path] = im;
+            return im.w > 0;
+        }
+    }
+    int n = MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, nullptr, 0);
+    if (n <= 0) return false;
+    std::wstring w((size_t)n, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, w.data(), n);
+    if (!w.empty() && w.back() == 0) w.pop_back();
+    Gdiplus::Bitmap src(w.c_str());
+    if (src.GetLastStatus() != Gdiplus::Ok || src.GetWidth() < 1 || src.GetHeight() < 1) return false;
+    int sw = (int)src.GetWidth(), sh = (int)src.GetHeight();
+    int side = sw > sh ? sw : sh;
+    int tw = sw, th = sh;
+    if (side > 2048) {
+        float s = 2048.f / (float)side;
+        tw = std::max(1, (int)(sw * s));
+        th = std::max(1, (int)(sh * s));
+    }
+    Gdiplus::Bitmap bmp(tw, th, PixelFormat32bppARGB);
+    if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
+    Gdiplus::Graphics gfx(&bmp);
+    gfx.SetInterpolationMode(Gdiplus::InterpolationModeBilinear);
+    gfx.DrawImage(&src, 0, 0, tw, th);
+    Gdiplus::Rect rc(0, 0, tw, th);
+    Gdiplus::BitmapData bd{};
+    if (bmp.LockBits(&rc, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bd) != Gdiplus::Ok)
+        return false;
+    im.w = tw;
+    im.h = th;
+    im.rgb.assign((size_t)tw * th * 3, 0);
+    for (int j = 0; j < th; ++j) {
+        int srcRow = th - 1 - j;
+        const unsigned char* row = (const unsigned char*)bd.Scan0 + srcRow * bd.Stride;
+        for (int i = 0; i < tw; ++i) {
+            size_t p = ((size_t)j * tw + i) * 3;
+            im.rgb[p] = row[i * 4 + 2];
+            im.rgb[p + 1] = row[i * 4 + 1];
+            im.rgb[p + 2] = row[i * 4];
+        }
+    }
+    bmp.UnlockBits(&bd);
+    g_imgCache[path] = im;
+    return true;
+}
+
+static void model_sample(const MapImg& im, float u, float v, int& r, int& g, int& b) {
+    if (im.w < 1 || im.h < 1 || im.rgb.empty()) return;
+    u -= std::floor(u);
+    v -= std::floor(v);
+    int x = (int)(u * (float)(im.w - 1));
+    int y = (int)(v * (float)(im.h - 1));
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x >= im.w) x = im.w - 1;
+    if (y >= im.h) y = im.h - 1;
+    size_t p = ((size_t)y * im.w + x) * 3;
+    r = im.rgb[p];
+    g = im.rgb[p + 1];
+    b = im.rgb[p + 2];
+}
+
+static std::string model_last_token(const std::string& line) {
+    std::istringstream ss(line);
+    std::string tok, last;
+    while (ss >> tok) if (tok[0] != '-') last = tok;
+    return last;
+}
+
+static MapImg model_gray_channel(const MapImg& src, int ch) {
+    MapImg o;
+    o.w = src.w;
+    o.h = src.h;
+    o.rgb.assign(src.rgb.size(), 0);
+    if (ch < 0 || ch > 2) return o;
+    for (size_t i = 0; i + 2 < src.rgb.size(); i += 3) {
+        unsigned char v = src.rgb[i + (size_t)ch];
+        o.rgb[i] = v;
+        o.rgb[i + 1] = v;
+        o.rgb[i + 2] = v;
+    }
+    return o;
+}
+
+/* Occlusion in the red channel. Kept off pure black so creases stay visible. */
+static void model_bake_ao(MapImg& base, const MapImg& orm) {
+    if (base.w < 1 || orm.w < 1 || base.rgb.empty() || orm.rgb.empty()) return;
+    for (int j = 0; j < base.h; ++j) {
+        int aj = (int)((j + 0.5f) * orm.h / base.h);
+        if (aj >= orm.h) aj = orm.h - 1;
+        if (aj < 0) aj = 0;
+        for (int i = 0; i < base.w; ++i) {
+            int ai = (int)((i + 0.5f) * orm.w / base.w);
+            if (ai >= orm.w) ai = orm.w - 1;
+            if (ai < 0) ai = 0;
+            float a = 0.45f + 0.55f * (orm.rgb[((size_t)aj * orm.w + ai) * 3] / 255.0f);
+            size_t o = ((size_t)j * base.w + i) * 3;
+            base.rgb[o] = (unsigned char)std::clamp(base.rgb[o] * a, 0.0f, 255.0f);
+            base.rgb[o + 1] = (unsigned char)std::clamp(base.rgb[o + 1] * a, 0.0f, 255.0f);
+            base.rgb[o + 2] = (unsigned char)std::clamp(base.rgb[o + 2] * a, 0.0f, 255.0f);
+        }
+    }
+}
+
+/* Unreal exports DirectX normals. OpenGL wants the green channel the other way. */
+static void model_flip_green(MapImg& im) {
+    for (size_t i = 1; i + 2 < im.rgb.size(); i += 3)
+        im.rgb[i] = (unsigned char)(255 - im.rgb[i]);
+}
+
+static void model_bind_maps(Model& m, const std::string& objPath, const std::string& mtllib) {
+    std::string dir = model_dir(objPath);
+    std::string base, nrm, metal, rough, height;
+    auto slot_file = [&](std::string& slot, const std::string& rel) {
+        if (!slot.empty() || rel.empty()) return;
+        std::filesystem::path p = std::filesystem::path(dir) / rel;
+        std::error_code ec;
+        if (std::filesystem::exists(p, ec)) slot = p.string();
+    };
+    if (!mtllib.empty()) {
+        std::filesystem::path mp = std::filesystem::path(dir) / mtllib;
+        std::ifstream mf(mp.string());
+        std::string line;
+        while (std::getline(mf, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            std::string low = model_lower(line);
+            auto take = [&](std::string& slot, const char* key) {
+                if (slot.empty() && low.rfind(key, 0) == 0)
+                    slot_file(slot, model_last_token(line.substr(std::strlen(key))));
+            };
+            take(base, "map_kd");
+            take(base, "map_ka");
+            take(nrm, "map_kn");
+            take(nrm, "map_bump");
+            take(nrm, "bump");
+            take(nrm, "norm");
+            take(metal, "map_pm");
+            take(metal, "map_metallic");
+            take(rough, "map_pr");
+            take(rough, "map_roughness");
+            take(height, "map_disp");
+            take(height, "disp");
+            take(height, "map_height");
+        }
+    }
+    std::string packed;
+    std::string nrmPath;
+    std::string ao;
+    std::string stem = model_lower(std::filesystem::path(objPath).stem().string());
+    auto rank = [&](const std::string& path) {
+        std::string n = model_lower(std::filesystem::path(path).stem().string());
+        if (n == stem || n.rfind(stem + "_", 0) == 0) return 2;
+        return 1;
+    };
+    std::vector<std::filesystem::path> files;
+    auto gather = [&](const std::filesystem::path& d) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(d, ec)) return;
+        for (const auto& ent : std::filesystem::directory_iterator(d, ec)) {
+            if (ec) break;
+            if (ent.is_regular_file()) files.push_back(ent.path());
+        }
+    };
+    std::filesystem::path folder(dir);
+    gather(folder);
+    gather(folder / "textures");
+    gather(folder / "texture");
+    for (const auto& f : files) {
+        std::string ext = model_lower(f.extension().string());
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp" && ext != ".tga") continue;
+        std::string name = model_lower(f.stem().string());
+        auto take = [&](std::string& slot, bool match) {
+            if (!match) return;
+            if (slot.empty() || rank(f.string()) > rank(slot)) slot = f.string();
+        };
+        /* OcclusionRoughnessMetallic is one picture: red occlusion, green
+           roughness, blue metal. It is split below instead of sampled as red. */
+        bool orm = name.find("occlusion") != std::string::npos
+                && name.find("rough") != std::string::npos;
+        if (orm && (packed.empty() || rank(f.string()) > rank(packed))) packed = f.string();
+        bool aoMap = !orm && (name.find("ambientocclusion") != std::string::npos
+                           || name.find("occlusion") != std::string::npos);
+        if (aoMap && (ao.empty() || rank(f.string()) > rank(ao))) ao = f.string();
+        take(rough, !orm && name.find("rough") != std::string::npos);
+        take(metal, !orm && name.find("metal") != std::string::npos);
+        take(height, name.find("height") != std::string::npos || name.find("displac") != std::string::npos);
+        if (nrm.empty() && (name.find("normal") != std::string::npos || name.find("nrm") != std::string::npos))
+            nrmPath = f.string();
+        take(nrm, name.find("normal") != std::string::npos || name.find("nrm") != std::string::npos);
+        take(base, name.find("basecolor") != std::string::npos || name.find("base_color") != std::string::npos
+                   || name.find("albedo") != std::string::npos || name.find("diffuse") != std::string::npos);
+    }
+    model_load_image(base, m.base);
+    model_load_image(nrm, m.nrm);
+    model_load_image(metal, m.metal);
+    model_load_image(rough, m.rough);
+    model_load_image(height, m.height);
+    if (!packed.empty()) {
+        MapImg orm;
+        if (model_load_image(packed, orm)) {
+            model_bake_ao(m.base, orm);
+            m.rough = model_gray_channel(orm, 1);
+            m.metal = model_gray_channel(orm, 2);
+        }
+    } else if (!ao.empty()) {
+        MapImg occ;
+        if (model_load_image(ao, occ)) model_bake_ao(m.base, occ);
+    }
+    if (nrmPath.find("+-+") != std::string::npos) model_flip_green(m.nrm);
+}
+
+/* A face whose texture window covers a big slice of the picture pulls in
+   whatever sits next to its chart. On a packed atlas that is the floor
+   checker and the empty gap, which is the black opening at the end of a
+   hall. Those faces are retiled from the wood chart the other walls use. */
+struct WideBox {
+    int x0, y0, z0, x1, y1, z1;
+    bool operator==(const WideBox& o) const {
+        return x0 == o.x0 && y0 == o.y0 && z0 == o.z0 && x1 == o.x1 && y1 == o.y1 && z1 == o.z1;
+    }
+};
+struct WideBoxHash {
+    size_t operator()(const WideBox& k) const {
+        size_t h = (size_t)k.x0 * 73856093u ^ (size_t)k.y0 * 19349663u ^ (size_t)k.z0 * 83492791u;
+        h ^= (size_t)k.x1 * 73856093u ^ (size_t)k.y1 * 19349663u ^ (size_t)k.z1 * 83492791u;
+        return h;
+    }
+};
+
+static void model_fix_wide_uvs(Model& m) {
+    const int ntri = (int)m.tri.size() / 3;
+    if (ntri < 1 || (int)m.cuv.size() < ntri * 6 || m.pos.empty()) return;
+    struct Chart {
+        int n = 0;
+        float u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
+        double scaleSum = 0;
+        int scaleN = 0;
+    };
+    std::unordered_map<int, Chart> bins;
+    std::vector<char> bad((size_t)ntri, 0);
+    int badN = 0;
+    for (int t = 0; t < ntri; ++t) {
+        float u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
+        for (int c = 0; c < 3; ++c) {
+            float u = m.cuv[(size_t)(t * 3 + c) * 2];
+            float v = m.cuv[(size_t)(t * 3 + c) * 2 + 1];
+            u0 = std::min(u0, u); u1 = std::max(u1, u);
+            v0 = std::min(v0, v); v1 = std::max(v1, v);
+        }
+        float du = u1 - u0, dv = v1 - v0;
+        /* A face stretched across most of the atlas smears the ceiling and
+           the join in the middle of the hall. Both-wide faces are the end
+           walls; one long span is the cornice. */
+        if ((du > 0.15f && dv > 0.15f) || du > 0.40f || dv > 0.40f) {
+            bad[(size_t)t] = 1;
+            ++badN;
+            continue;
+        }
+        if (du > 0.08f || dv > 0.08f || du < 1e-5f || dv < 1e-5f) continue;
+        int ia = m.tri[t * 3], ib = m.tri[t * 3 + 1], ic = m.tri[t * 3 + 2];
+        if (ia < 0 || ib < 0 || ic < 0) continue;
+        if (ia >= (int)m.pos.size() || ib >= (int)m.pos.size() || ic >= (int)m.pos.size()) continue;
+        V3 a = m.pos[ia], b = m.pos[ib], c = m.pos[ic];
+        V3 nrm = cross(b - a, c - a);
+        float nl = std::sqrt(dot(nrm, nrm));
+        if (nl < 1e-8f || std::fabs(nrm.y / nl) > 0.45f) continue;
+        int key = (int)std::floor(((u0 + u1) * 0.5f) * 20.f) * 1000
+                + (int)std::floor(((v0 + v1) * 0.5f) * 20.f);
+        Chart& ch = bins[key];
+        ch.n++;
+        ch.u0 = std::min(ch.u0, u0); ch.u1 = std::max(ch.u1, u1);
+        ch.v0 = std::min(ch.v0, v0); ch.v1 = std::max(ch.v1, v1);
+        float edge = std::sqrt(dot(b - a, b - a));
+        float ue = m.cuv[(size_t)(t * 3) * 2] - m.cuv[(size_t)(t * 3 + 1) * 2];
+        float ve = m.cuv[(size_t)(t * 3) * 2 + 1] - m.cuv[(size_t)(t * 3 + 1) * 2 + 1];
+        float duv = std::sqrt(ue * ue + ve * ve);
+        if (duv > 1e-5f) { ch.scaleSum += edge / duv; ch.scaleN++; }
+    }
+    if (!badN || bins.empty()) return;
+    int bestKey = 0, bestAny = 0, bestN = -1, bestAnyN = -1;
+    for (const auto& kv : bins) {
+        if (kv.second.n > bestAnyN) { bestAnyN = kv.second.n; bestAny = kv.first; }
+        if (kv.first / 1000 >= 8 && kv.second.n > bestN) { bestN = kv.second.n; bestKey = kv.first; }
+    }
+    if (bestN < 0) bestKey = bestAny;
+    Chart chart = bins[bestKey];
+    for (int step = 1; step <= 4; ++step) {
+        auto it = bins.find(bestKey + step * 1000);
+        if (it == bins.end() || it->second.n * 5 < chart.n) break;
+        chart.u0 = std::min(chart.u0, it->second.u0);
+        chart.u1 = std::max(chart.u1, it->second.u1);
+        chart.v0 = std::min(chart.v0, it->second.v0);
+        chart.v1 = std::max(chart.v1, it->second.v1);
+    }
+    if (chart.scaleN < 1) return;
+    if (chart.u1 - chart.u0 > 0.30f) chart.u1 = chart.u0 + 0.30f;
+    if (chart.v1 - chart.v0 > 0.30f) chart.v1 = chart.v0 + 0.30f;
+    if (chart.u1 - chart.u0 < 1e-4f || chart.v1 - chart.v0 < 1e-4f) return;
+    float per = (float)(chart.scaleSum / chart.scaleN);
+    float tileU = (chart.u1 - chart.u0) * per;
+    float tileV = (chart.v1 - chart.v0) * per;
+    if (tileU < 1e-6f || tileV < 1e-6f) return;
+
+    auto box_of = [&](int t) {
+        V3 a = m.pos[m.tri[t * 3]], b = m.pos[m.tri[t * 3 + 1]], c = m.pos[m.tri[t * 3 + 2]];
+        WideBox k;
+        k.x0 = (int)std::lround(std::min(a.x, std::min(b.x, c.x)) * 10000.f);
+        k.y0 = (int)std::lround(std::min(a.y, std::min(b.y, c.y)) * 10000.f);
+        k.z0 = (int)std::lround(std::min(a.z, std::min(b.z, c.z)) * 10000.f);
+        k.x1 = (int)std::lround(std::max(a.x, std::max(b.x, c.x)) * 10000.f);
+        k.y1 = (int)std::lround(std::max(a.y, std::max(b.y, c.y)) * 10000.f);
+        k.z1 = (int)std::lround(std::max(a.z, std::max(b.z, c.z)) * 10000.f);
+        return k;
+    };
+    std::unordered_map<WideBox, int, WideBoxHash> boxCount;
+    for (int t = 0; t < ntri; ++t) if (bad[(size_t)t]) boxCount[box_of(t)]++;
+
+    std::vector<int> tri;
+    std::vector<V3> cn;
+    std::vector<float> cuv;
+    tri.reserve(m.tri.size() + (size_t)badN * 24);
+    cn.reserve(m.cn.size() + (size_t)badN * 24);
+    cuv.reserve(m.cuv.size() + (size_t)badN * 48);
+    std::unordered_map<WideBox, int, WideBoxHash> filled;
+    auto push_corner = [&](int index, V3 nrm, float u, float v) {
+        tri.push_back(index);
+        cn.push_back(nrm);
+        cuv.push_back(u);
+        cuv.push_back(v);
+    };
+    for (int t = 0; t < ntri; ++t) {
+        if (!bad[(size_t)t]) {
+            for (int c = 0; c < 3; ++c) {
+                V3 nrm = (t * 3 + c < (int)m.cn.size()) ? m.cn[(size_t)(t * 3 + c)] : v3(0, 1, 0);
+                push_corner(m.tri[t * 3 + c], nrm,
+                            m.cuv[(size_t)(t * 3 + c) * 2], m.cuv[(size_t)(t * 3 + c) * 2 + 1]);
+            }
+            continue;
+        }
+        WideBox bk = box_of(t);
+        if (filled[bk]) continue;
+        filled[bk] = 1;
+        V3 a = m.pos[m.tri[t * 3]], b = m.pos[m.tri[t * 3 + 1]], c = m.pos[m.tri[t * 3 + 2]];
+        float minx = std::min(a.x, std::min(b.x, c.x)), maxx = std::max(a.x, std::max(b.x, c.x));
+        float miny = std::min(a.y, std::min(b.y, c.y)), maxy = std::max(a.y, std::max(b.y, c.y));
+        float minz = std::min(a.z, std::min(b.z, c.z)), maxz = std::max(a.z, std::max(b.z, c.z));
+        float ex = maxx - minx, ey = maxy - miny, ez = maxz - minz;
+        int axis = 0;
+        if (ey <= ex && ey <= ez) axis = 1;
+        else if (ez <= ex && ez <= ey) axis = 2;
+        float s0, s1, t0, t1;
+        if (axis == 0) { s0 = minz; s1 = maxz; t0 = miny; t1 = maxy; }
+        else if (axis == 1) { s0 = minx; s1 = maxx; t0 = minz; t1 = maxz; }
+        else { s0 = minx; s1 = maxx; t0 = miny; t1 = maxy; }
+        if (s1 - s0 < 1e-6f || t1 - t0 < 1e-6f) continue;
+        V3 faceN = norm(cross(b - a, c - a));
+        float boxArea = (axis == 0 ? ez * ey : axis == 1 ? ex * ez : ex * ey);
+        float triArea = std::sqrt(dot(cross(b - a, c - a), cross(b - a, c - a))) * 0.5f;
+        bool grid = boxCount[bk] >= 2 && triArea > boxArea * 0.35f;
+        auto at = [&](float s, float tv) {
+            if (axis == 0) return v3((minx + maxx) * 0.5f, tv, s);
+            if (axis == 1) return v3(s, (miny + maxy) * 0.5f, tv);
+            return v3(s, tv, (minz + maxz) * 0.5f);
+        };
+        auto emit = [&](V3 p, V3 q, V3 r, float pu, float pv, float qu, float qv, float ru, float rv) {
+            if (dot(cross(q - p, r - p), faceN) < 0) {
+                std::swap(q, r);
+                std::swap(qu, ru);
+                std::swap(qv, rv);
+            }
+            int base = (int)m.pos.size();
+            m.pos.push_back(p);
+            m.pos.push_back(q);
+            m.pos.push_back(r);
+            push_corner(base, faceN, pu, pv);
+            push_corner(base + 1, faceN, qu, qv);
+            push_corner(base + 2, faceN, ru, rv);
+        };
+        if (!grid) {
+            auto uv_of = [&](V3 p, float& u, float& v) {
+                float s, tv;
+                if (axis == 0) { s = p.z; tv = p.y; }
+                else if (axis == 1) { s = p.x; tv = p.z; }
+                else { s = p.x; tv = p.y; }
+                u = chart.u0 + (s - s0) / (s1 - s0) * (chart.u1 - chart.u0);
+                v = chart.v0 + (tv - t0) / (t1 - t0) * (chart.v1 - chart.v0);
+            };
+            float ua, va, ub, vb, uc, vc;
+            uv_of(a, ua, va); uv_of(b, ub, vb); uv_of(c, uc, vc);
+            emit(a, b, c, ua, va, ub, vb, uc, vc);
+            continue;
+        }
+        int ns = std::max(1, (int)std::ceil((s1 - s0) / tileU));
+        int nt = std::max(1, (int)std::ceil((t1 - t0) / tileV));
+        if (ns > 32) ns = 32;
+        if (nt > 32) nt = 32;
+        float stepS = (s1 - s0) / (float)ns;
+        float stepT = (t1 - t0) / (float)nt;
+        for (int i = 0; i < ns; ++i) {
+            for (int j = 0; j < nt; ++j) {
+                float sa = s0 + stepS * (float)i, sb = sa + stepS;
+                float ta = t0 + stepT * (float)j, tb = ta + stepT;
+                emit(at(sa, ta), at(sb, ta), at(sb, tb), chart.u0, chart.v0, chart.u1, chart.v0, chart.u1, chart.v1);
+                emit(at(sa, ta), at(sb, tb), at(sa, tb), chart.u0, chart.v0, chart.u1, chart.v1, chart.u0, chart.v1);
+            }
+        }
+    }
+    m.tri.swap(tri);
+    m.cn.swap(cn);
+    m.cuv.swap(cuv);
+    engine_log("[model] repaired wide unwrap");
+}
+
 static const Model& model_load(const std::string& path) {
     auto it = g_models.find(path);
     if (it != g_models.end()) return it->second;
     Model& m = g_models[path];
     std::ifstream f(path);
     if (!f) return m;
-    std::vector<V3> raw;
+    std::vector<V3> raw, rawN;
+    std::vector<float> rawUv;
+    std::string mtllib;
     std::string line;
+    auto fix = [](int idx, int n) {
+        if (idx < 0) return n + idx;
+        return idx - 1;
+    };
     while (std::getline(f, line)) {
-        if (line.size() > 2 && line[0] == 'v' && line[1] == ' ') {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() > 7 && model_lower(line.substr(0, 7)) == "mtllib ") {
+            mtllib = model_last_token(line);
+        } else if (line.size() > 2 && line[0] == 'v' && line[1] == ' ') {
             V3 p{};
             if (sscanf(line.c_str() + 2, "%f %f %f", &p.x, &p.y, &p.z) == 3) raw.push_back(p);
+        } else if (line.size() > 3 && line[0] == 'v' && line[1] == 't' && line[2] == ' ') {
+            float u = 0, v = 0;
+            if (sscanf(line.c_str() + 3, "%f %f", &u, &v) >= 1) {
+                rawUv.push_back(u);
+                rawUv.push_back(v);
+            }
+        } else if (line.size() > 3 && line[0] == 'v' && line[1] == 'n' && line[2] == ' ') {
+            V3 p{};
+            if (sscanf(line.c_str() + 3, "%f %f %f", &p.x, &p.y, &p.z) == 3) rawN.push_back(p);
         } else if (line.size() > 2 && line[0] == 'f' && line[1] == ' ') {
             std::istringstream ss(line.substr(2));
             std::string tok;
-            std::vector<int> face;
+            std::vector<int> face, fuv, fn;
             while (ss >> tok) {
-                int idx = atoi(tok.c_str());
-                if (idx < 0) idx = (int)raw.size() + idx; else idx -= 1;
-                if (idx >= 0) face.push_back(idx);
+                int vi = 0, ti = 0, ni = 0;
+                int slashes = 0;
+                for (char c : tok) if (c == '/') ++slashes;
+                bool okTok = false;
+                if (tok.find("//") != std::string::npos) {
+                    okTok = sscanf(tok.c_str(), "%d//%d", &vi, &ni) == 2;
+                    ti = 0;
+                } else if (slashes >= 2) {
+                    okTok = sscanf(tok.c_str(), "%d/%d/%d", &vi, &ti, &ni) == 3;
+                } else if (slashes == 1) {
+                    okTok = sscanf(tok.c_str(), "%d/%d", &vi, &ti) == 2;
+                } else {
+                    okTok = sscanf(tok.c_str(), "%d", &vi) == 1;
+                }
+                if (!okTok || vi == 0) continue;
+                face.push_back(fix(vi, (int)raw.size()));
+                fuv.push_back(ti == 0 ? -1 : fix(ti, (int)rawUv.size() / 2));
+                fn.push_back(ni == 0 ? -1 : fix(ni, (int)rawN.size()));
             }
             for (size_t k = 1; k + 1 < face.size(); ++k) {
-                m.tri.push_back(face[0]);
-                m.tri.push_back(face[k]);
-                m.tri.push_back(face[k + 1]);
+                int corner[3] = { 0, (int)k, (int)k + 1 };
+                for (int c = 0; c < 3; ++c) {
+                    int vi = face[corner[c]];
+                    if (vi < 0 || vi >= (int)raw.size()) vi = 0;
+                    m.tri.push_back(vi);
+                    int ti = fuv[corner[c]];
+                    if (ti >= 0 && (ti + 1) * 2 <= (int)rawUv.size()) {
+                        m.cuv.push_back(rawUv[ti * 2]);
+                        m.cuv.push_back(rawUv[ti * 2 + 1]);
+                    } else {
+                        m.cuv.push_back(0);
+                        m.cuv.push_back(0);
+                    }
+                    int ni = fn[corner[c]];
+                    if (ni >= 0 && ni < (int)rawN.size()) m.cn.push_back(rawN[ni]);
+                    else m.cn.push_back(v3(0, 0, 0));
+                }
             }
         }
     }
@@ -372,8 +1029,24 @@ static const Model& model_load(const std::string& path) {
     float ext = std::max({ hi.x - lo.x, hi.y - lo.y, hi.z - lo.z });
     if (ext <= 0) ext = 1;
     for (const V3& p : raw) m.pos.push_back((p - mid) * (1.0f / ext));
-    for (int& i : m.tri) if (i >= (int)m.pos.size()) i = 0;
+    for (int& i : m.tri) if (i < 0 || i >= (int)m.pos.size()) i = 0;
+    /* That retile is for the hallway atlas. On any other mesh it pulls
+       real islands apart, including the flashlight body. */
+    if (model_lower(path).find("horror corridor") != std::string::npos)
+        model_fix_wide_uvs(m);
     m.ok = !m.tri.empty();
+    if (m.ok) {
+        model_bind_maps(m, path, mtllib);
+        if (m.base.w || m.nrm.w || m.metal.w || m.rough.w || m.height.w) {
+            std::string note = "[model] maps";
+            if (m.base.w) note += " base";
+            if (m.nrm.w) note += " normal";
+            if (m.metal.w) note += " metallic";
+            if (m.rough.w) note += " roughness";
+            if (m.height.w) note += " height";
+            engine_log(note.c_str());
+        }
+    }
     return m;
 }
 
@@ -383,7 +1056,13 @@ static void mesh_model(const Model& m, const Xform& x, int r, int g_, int b, int
         V3 n = norm(cross(b2 - a, c - a));
         /* models may be open or wound either way: light the side facing us */
         if (dot(n, C.eye - a) < 0) n = n * -1.0f;
-        draw_tri_world(a, b2, c, n, n, n, r, g_, b, id);
+        int tr = r, tg = g_, tb = b;
+        if (m.base.w > 0 && (k + 2) * 2 + 1 < m.cuv.size()) {
+            float u = (m.cuv[k * 2] + m.cuv[(k + 1) * 2] + m.cuv[(k + 2) * 2]) / 3.f;
+            float v = (m.cuv[k * 2 + 1] + m.cuv[(k + 1) * 2 + 1] + m.cuv[(k + 2) * 2 + 1]) / 3.f;
+            model_sample(m.base, u, v, tr, tg, tb);
+        }
+        draw_tri_world(a, b2, c, n, n, n, tr, tg, tb, id);
     }
 }
 
@@ -420,11 +1099,43 @@ static void collect_lights() {
     }
 }
 
+/* A scene with no lights gets the same sun and lamp as the 3D starter.
+   One hard sun leaves every face a single shade. The lamp falls off across
+   a face, which is the smooth look. */
+static void add_default_lights() {
+    if (!g_lights.empty()) return;
+    Light sun{};
+    sun.type = 0;
+    sun.dir = kDefaultLight * -1.0f;
+    float k = 60.0f / 100.0f / 255.0f;
+    sun.r = 255.0f * k;
+    sun.g = 244.0f * k;
+    sun.b = 214.0f * k;
+    g_lights.push_back(sun);
+    g_light = kDefaultLight;
+
+    V3 gap = C.eye - C.target;
+    float dist = std::sqrt(dot(gap, gap));
+    if (dist < 4.0f) dist = 4.0f;
+    Light lamp{};
+    lamp.type = 1;
+    lamp.pos = C.target + v3(dist * 0.15f, dist * 0.45f, dist * 0.10f);
+    float ki = 160.0f / 100.0f / 255.0f;
+    lamp.r = 255.0f * ki;
+    lamp.g = 170.0f * ki;
+    lamp.b = 90.0f * ki;
+    lamp.range = dist * 1.1f;
+    lamp.dir = v3(0, -1, 0);
+    g_lights.push_back(lamp);
+}
+
 /* ----- OpenGL backend -------------------------------------------------------------
  * The same picture drawn by the GPU: an off-screen multisampled framebuffer on a
  * hidden window's context, resolved and read back into the DIB that is blitted
  * to the back buffer. The rasterizer above stays as the fallback for machines
  * without framebuffer objects. */
+
+static int g_viewSlot = -1;
 
 namespace glb {
 
@@ -472,6 +1183,7 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb);
 static void entity33(const Entity& e, int slot);
 static void line33(V3 a, V3 b, int r, int g, int bl, int alpha);
 static void cover33(const V3* pts, int ntri, int r, int g, int b, int alpha);
+static void cover_model33(const Entity& e, int r, int g, int b, int alpha);
 static void painted33(const float* v, int ntri);
 static void screen_rect33(float x0, float y0, float x1, float y1, int r, int g, int b, int a);
 static void sector33(const V3* pts, int ntri, int r, int g, int b, int a);
@@ -634,9 +1346,8 @@ static void build_lists() {
     glEndList();
 }
 
-/* The picture window sits on top of the engine window. Clicks belong to the
-   parent (UI buttons, the editor). A click that still lands here is forwarded
-   once, in the parent's client coordinates. */
+/* The picture window sits on top of the engine window. Every click and move
+   is handed to the parent in the parent's client coordinates, once. */
 static int gl_forward_mouse(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     HWND parent = GetParent(hwnd);
     if (!parent) return 0;
@@ -648,12 +1359,11 @@ static int gl_forward_mouse(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 static LRESULT CALLBACK gl_view_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_NCHITTEST) return HTTRANSPARENT;
     if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_LBUTTONDBLCLK ||
         msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
         msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP ||
-        msg == WM_MOUSEWHEEL) {
+        msg == WM_MOUSEMOVE || msg == WM_MOUSEWHEEL) {
         if (gl_forward_mouse(hwnd, msg, wp, lp)) return 0;
     }
     if (msg == WM_ERASEBKGND) return 1;
@@ -717,7 +1427,7 @@ static bool ready() {
     register_gl_class();
     HWND parent = g.hwnd;
     DWORD style = parent ? (WS_CHILD | WS_CLIPSIBLINGS) : WS_POPUP;
-    DWORD ex = parent ? (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT) : 0;
+    DWORD ex = parent ? WS_EX_NOACTIVATE : 0;
     S.wnd = CreateWindowExA(ex, "EyescireGLView", "", style, 0, 0, 16, 16, parent, nullptr,
                             GetModuleHandleA(nullptr), nullptr);
     if (!S.wnd) return false;
@@ -781,6 +1491,15 @@ static void shape(const Entity& e) {
     } else if (e.kind == "cylinder") {
         glScalef(w * kUnit, h * kUnit, w * kUnit);
         glCallList(S.listCyl);
+    } else if (e.kind == "capsule") {
+        glScalef(w * kUnit, h * kUnit, w * kUnit);
+        CapsuleLocal cap = capsule_local(w, h);
+        glBegin(GL_TRIANGLES);
+        capsule_emit(cap, w * kUnit, h * kUnit, w * kUnit, [](float px, float py, float pz, float nx, float ny, float nz) {
+            glNormal3f(nx, ny, nz);
+            glVertex3f(px, py, pz);
+        });
+        glEnd();
     } else {
         const Model* m = nullptr;
         if (e.kind == "model" && !e.model.empty()) m = &model_load(model_path(e.model));
@@ -798,6 +1517,24 @@ static void shape(const Entity& e) {
         }
     }
     glPopMatrix();
+}
+
+/* The real mesh, drawn as a translucent coat. A grid-snapped copy fills the
+   holes in a hallway or any other concave model. */
+static void cover_model(const Entity& e, int r, int g, int b, int alpha) {
+    if (S.core) { cover_model33(e, r, g, b, alpha); return; }
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
+    glColor4ub((GLubyte)r, (GLubyte)g, (GLubyte)b, (GLubyte)std::clamp(alpha, 0, 255));
+    shape(e);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glEnable(GL_LIGHTING);
 }
 
 static GLuint g_skyTex11[6] = {};
@@ -884,12 +1621,33 @@ static void sky_draw11(int br, int bg, int bb) {
 
 static bool begin(int w, int h, double fov_deg, int br, int bg, int bb) {
     place(C.sx, C.sy, w, h);
-    if (S.core) return begin33(w, h, fov_deg, br, bg, bb);
-    if (!wglMakeCurrent(S.dc, S.rc) || !ensure_buffers(w, h)) return false;
+    /* The window stays the size of the view. High definition draws a small
+       view (the editor pane) into a buffer twice as wide and tall, and the
+       present scales it back down. Play in 3D is the whole monitor: doubling
+       that, on top of multisampling, is a 4K frame of the lit hall. That is
+       what stalls the play window while the editor stays smooth. A view that
+       is already 1080p or larger is drawn at 1080p and scaled up. */
+    int rw = w, rh = h;
+    if (g_hd && w < 1920 && h < 1080) {
+        rw = w * 2;
+        rh = h * 2;
+        if (rw > 4096) rw = 4096;
+        if (rh > 4096) rh = 4096;
+    } else if (w > 1920 || h > 1080) {
+        double sx = 1920.0 / (double)w;
+        double sy = 1080.0 / (double)h;
+        double s = sx < sy ? sx : sy;
+        rw = (int)(w * s);
+        rh = (int)(h * s);
+        if (rw < 1) rw = 1;
+        if (rh < 1) rh = 1;
+    }
+    if (S.core) return begin33(rw, rh, fov_deg, br, bg, bb);
+    if (!wglMakeCurrent(S.dc, S.rc) || !ensure_buffers(rw, rh)) return false;
     swap_interval();
     S.selected.clear();
     S.bindFb(kFramebuffer, S.fbo);
-    glViewport(0, 0, w, h);
+    glViewport(0, 0, rw, rh);
     glDepthMask(GL_TRUE);
     glStencilMask(0xFF);
     glClearStencil(0);
@@ -933,7 +1691,22 @@ static bool begin(int w, int h, double fov_deg, int br, int bg, int bb) {
        only ever add. */
     float amb[4] = { 0.55f, 0.55f, 0.55f, 1 };
     bool any_ambient = false, any_sun = false;
-    for (const Light& l : g_lights) if (l.type == 0) any_sun = true;
+    for (const Light& l : g_lights) {
+        if (l.type == 0) any_sun = true;
+        if (l.type == 3) {
+            if (!any_ambient) { amb[0] = amb[1] = amb[2] = 0; any_ambient = true; }
+            amb[0] += l.r; amb[1] += l.g; amb[2] += l.b;
+        }
+    }
+    /* Same fill as the 3.3 path: a brighter ambient gives the sun less of the
+       picture, so the intensity change is visible on faces the sun already lit. */
+    float directScale = 1.0f;
+    if (any_ambient) {
+        float lift = (amb[0] + amb[1] + amb[2]) / 3.0f;
+        if (lift < 0) lift = 0;
+        if (lift > 1) lift = 1;
+        directScale = 1.0f - lift;
+    }
     int n = 0;
     auto plain = [&](GLenum id) {
         glLightfv(id, GL_AMBIENT, zero);
@@ -943,24 +1716,22 @@ static bool begin(int w, int h, double fov_deg, int br, int bg, int bb) {
         glLightf(id, GL_LINEAR_ATTENUATION, 0.0f);
         glLightf(id, GL_QUADRATIC_ATTENUATION, 0.0f);
     };
-    if (!any_sun) {
+    bool has_lamp = false;
+    for (const Light& l : g_lights) if (l.type == 1 || l.type == 2) has_lamp = true;
+    if (!any_sun && !has_lamp) {
         const GLenum id = GL_LIGHT0 + n++;
         const float p[4] = { kDefaultLight.x, kDefaultLight.y, kDefaultLight.z, 0 };
-        const float dif[4] = { 0.95f, 0.95f, 0.95f, 1 };
+        const float dif[4] = { 0.95f * directScale, 0.95f * directScale, 0.95f * directScale, 1 };
         plain(id);
         glLightfv(id, GL_POSITION, p);
         glLightfv(id, GL_DIFFUSE, dif);
         glEnable(id);
     }
     for (const Light& l : g_lights) {
-        if (l.type == 3) {
-            if (!any_ambient) { amb[0] = amb[1] = amb[2] = 0; any_ambient = true; }
-            amb[0] += l.r; amb[1] += l.g; amb[2] += l.b;
-            continue;
-        }
+        if (l.type == 3) continue;
         if (n >= 8) continue;      /* fixed-function limit */
         const GLenum id = GL_LIGHT0 + n++;
-        const float dif[4] = { l.r, l.g, l.b, 1 };
+        const float dif[4] = { l.r * directScale, l.g * directScale, l.b * directScale, 1 };
         plain(id);
         glLightfv(id, GL_DIFFUSE, dif);
         if (l.type == 0) {
@@ -1246,8 +2017,14 @@ static void show_window(const void* bits, int w, int h) {
     GetClientRect(S.wnd, &cr);
     int ww = cr.right > 0 ? cr.right : S.w;
     int hh = cr.bottom > 0 ? cr.bottom : S.h;
-    S.blit(0, 0, S.w, S.h, 0, hh, ww, 0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    /* A larger buffer is the high-definition picture. Linear filtering is the
+       downsample. A matching size stays nearest so it is not softened. */
+    GLenum filt = (S.w == ww && S.h == hh) ? GL_NEAREST : GL_LINEAR;
+    S.blit(0, 0, S.w, S.h, 0, hh, ww, 0, GL_COLOR_BUFFER_BIT, filt);
     S.bindFb(kFramebuffer, 0);
+    /* The scene buffer can be larger than the window. The menu and gizmos
+       are in window pixels, so the draw area has to match the window. */
+    glViewport(0, 0, ww, hh);
     if (bits && w > 0 && h > 0 && (!S.core || S.bgra)) {
         using UseFn = void (APIENTRY *)(GLuint);
         auto use = (UseFn)wglGetProcAddress("glUseProgram");
@@ -1255,13 +2032,11 @@ static void show_window(const void* bits, int w, int h) {
         if (!ovTex) glGenTextures(1, &ovTex);
         glBindTexture(GL_TEXTURE_2D, ovTex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        if (ovW != w || ovH != h) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, kBgra, GL_UNSIGNED_BYTE, bits);
-            ovW = w;
-            ovH = h;
-        } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, kBgra, GL_UNSIGNED_BYTE, bits);
-        }
+        /* A fresh store each frame. Replacing the live texture waits until
+           the previous fullscreen menu upload has finished, which stalls Play. */
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, kBgra, GL_UNSIGNED_BYTE, bits);
+        ovW = w;
+        ovH = h;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glDisable(GL_DEPTH_TEST);
@@ -1296,6 +2071,44 @@ static void show_window(const void* bits, int w, int h) {
 static bool g_useGL = false;           /* this frame is drawn by glb */
 static std::vector<int> g_drawn;       /* slots drawn this frame, for picking */
 
+static float ray_sphere_t(V3 o, V3 d, V3 c, float R) {
+    V3 oc = o - c;
+    float A = dot(d, d), B = 2 * dot(oc, d), Cq = dot(oc, oc) - R * R;
+    float disc = B * B - 4 * A * Cq;
+    if (A < 1e-12f || disc < 0) return -1;
+    float s = std::sqrt(disc);
+    float t = (-B - s) / (2 * A);
+    if (t > 0) return t;
+    t = (-B + s) / (2 * A);
+    return t > 0 ? t : -1;
+}
+
+/* Capsule along Y, segment half-length hy, radius R. t matches the incoming ray. */
+static float ray_capsule_t(V3 o, V3 d, float hy, float R) {
+    float best = 1e30f;
+    float A = d.x * d.x + d.z * d.z;
+    if (A > 1e-12f) {
+        float B = 2 * (o.x * d.x + o.z * d.z);
+        float Cq = o.x * o.x + o.z * o.z - R * R;
+        float disc = B * B - 4 * A * Cq;
+        if (disc >= 0) {
+            float s = std::sqrt(disc);
+            float t0 = (-B - s) / (2 * A), t1 = (-B + s) / (2 * A);
+            float ts[2] = { t0, t1 };
+            for (float t : ts) {
+                if (t <= 0) continue;
+                float y = o.y + t * d.y;
+                if (y >= -hy && y <= hy && t < best) best = t;
+            }
+        }
+    }
+    float top = ray_sphere_t(o, d, v3(0, hy, 0), R);
+    float bot = ray_sphere_t(o, d, v3(0, -hy, 0), R);
+    if (top > 0 && top < best) best = top;
+    if (bot > 0 && bot < best) best = bot;
+    return best < 1e29f ? best : -1.f;
+}
+
 /* Nearest hit of a world-space ray on an entity's shape, or < 0. */
 static float ray_entity(const Entity& e, V3 o, V3 dir) {
     float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
@@ -1304,7 +2117,7 @@ static float ray_entity(const Entity& e, V3 o, V3 dir) {
     V3 sc = v3(w * kUnit, h * kUnit, d * kUnit);
     bool sphere = e.kind == "sphere";
     if (sphere) { float dm = std::min(w, h) * kUnit; sc = v3(dm, dm, dm); }
-    else if (e.kind == "cylinder") sc = v3(w * kUnit, h * kUnit, w * kUnit);
+    else if (e.kind == "cylinder" || e.kind == "capsule") sc = v3(w * kUnit, h * kUnit, w * kUnit);
     else if (e.kind == "model") { float sz = std::max(w, h) * kUnit; sc = v3(sz, sz, sz); }
     float om[16];
     ::orient_matrix(om, e.rotX, e.rotY, e.rotDeg);
@@ -1321,6 +2134,12 @@ static float ray_entity(const Entity& e, V3 o, V3 dir) {
         if (A < 1e-12f || disc < 0) return -1;
         float t = (-B - std::sqrt(disc)) / (2 * A);
         return t > 0 ? t : -1;
+    }
+    if (e.kind == "capsule") {
+        V3 rs = v3(lo.x * sc.x, lo.y * sc.y, lo.z * sc.z);
+        V3 rd = v3(ld.x * sc.x, ld.y * sc.y, ld.z * sc.z);
+        CapsuleLocal cg = capsule_local(w, h);
+        return ray_capsule_t(rs, rd, cg.cy * sc.y, cg.rx * sc.x);
     }
     float t0 = 0, t1 = 1e30f;
     const float po[3] = { lo.x, lo.y, lo.z }, pd[3] = { ld.x, ld.y, ld.z };
@@ -1401,10 +2220,13 @@ extern "C" void engine_r3d_begin(int x, int y, int w, int h,
     ensure_target(w, h);
     if (!T.px) return;
     C.eye = v3((float)ex, (float)ey, (float)ez);
+    C.target = v3((float)tx, (float)ty, (float)tz);
     C.fwd = norm(v3((float)(tx - ex), (float)(ty - ey), (float)(tz - ez)));
-    V3 up = v3(0, 1, 0);
-    if (std::fabs(dot(up, C.fwd)) > 0.999f) up = v3(0, 0, -1);
-    C.right = norm(cross(C.fwd, up));
+    /* World up. A hard swap when the view is steep rolls the picture; the
+       horizontal right stays valid until the view is exactly straight up. */
+    V3 right = cross(C.fwd, v3(0, 1, 0));
+    if (dot(right, right) < 1e-8f) right = cross(C.fwd, v3(0, 0, 1));
+    C.right = norm(right);
     C.up = cross(C.right, C.fwd);
     C.f = (h * 0.5f) / (float)std::tan(fov_deg * 0.5 * 3.14159265358979 / 180.0);
     C.sx = x;
@@ -1413,6 +2235,7 @@ extern "C" void engine_r3d_begin(int x, int y, int w, int h,
     g_drawn.clear();
     g_lookCam = -1;
     collect_lights();
+    add_default_lights();
     g_useGL = glb::ready() && glb::begin(w, h, fov_deg, br, bg, bb);
     if (g_useGL) return;
     for (int yy = 0; yy < h; ++yy) {
@@ -1443,6 +2266,7 @@ static bool pawn_hidden(const Entity& e) {
 }
 
 extern "C" void engine_r3d_hide_pawn(int on) { g_hidePawn = on ? 1 : 0; }
+extern "C" void engine_r3d_view_hold(int slot) { r3d::g_viewSlot = slot; }
 
 extern "C" void engine_r3d_entity(int s) {
     using namespace r3d;
@@ -1464,6 +2288,9 @@ extern "C" void engine_r3d_entity(int s) {
     } else if (e.kind == "cylinder") {
         xf.scale = v3(w * kUnit, h * kUnit, w * kUnit);
         mesh_cylinder(xf, e.r, e.g, e.b, s);
+    } else if (e.kind == "capsule") {
+        xf.scale = v3(w * kUnit, h * kUnit, w * kUnit);
+        mesh_capsule(xf, w, h, e.r, e.g, e.b, s);
     } else if (e.kind == "model") {
         const Model* m = nullptr;
         if (!e.model.empty()) m = &model_load(model_path(e.model));
@@ -1481,49 +2308,29 @@ extern "C" void engine_r3d_entity(int s) {
     }
 }
 
-/* Solid coat on the mesh, the same placement the model is drawn with. */
+/* Solid coat on the real mesh, so a hallway stays hollow. */
 extern "C" void engine_r3d_hitbox(int s) {
     using namespace r3d;
     if (!C.valid || !active_slot(s)) return;
     const Entity& e = g.entities[s];
     if (e.hitbox <= 0 || e.kind != "model" || e.model.empty()) return;
-    const std::vector<float>& skin = hitbox_skin(e);
-    if (skin.size() < 9) return;
-    float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
+    float w = (float)e.w, h = (float)e.h;
     if (w <= 0 || h <= 0) return;
+    if (g_useGL) {
+        glb::cover_model(e, 70, 210, 120, 90);
+        return;
+    }
+    const Model* m = &model_load(model_path(e.model));
+    if (!m->ok) return;
+    float d = (float)depth_of(e);
     Xform xf;
     xf.center = v3((e.x + w * 0.5f) * kUnit, -(e.y + h * 0.5f) * kUnit, -(e.z + d * 0.5f) * kUnit);
     xform_orient(xf, e);
     float sz = std::max(w, h) * kUnit;
     xf.scale = v3(sz, sz, sz);
-    const float push = 0.012f;
-    std::vector<V3> world;
-    world.reserve(skin.size() / 3);
-    for (size_t i = 0; i + 8 < skin.size(); i += 9) {
-        V3 p0 = v3(skin[i], skin[i + 1], skin[i + 2]);
-        V3 p1 = v3(skin[i + 3], skin[i + 4], skin[i + 5]);
-        V3 p2 = v3(skin[i + 6], skin[i + 7], skin[i + 8]);
-        V3 cr = cross(p1 - p0, p2 - p0);
-        float len2 = dot(cr, cr);
-        if (len2 < 1e-12f) continue;
-        V3 n = cr * (1.0f / std::sqrt(len2));
-        world.push_back(xf.point(p0 + n * push));
-        world.push_back(xf.point(p1 + n * push));
-        world.push_back(xf.point(p2 + n * push));
-    }
-    if (world.empty()) return;
-    int ntri = (int)world.size() / 3;
-    if (g_useGL) {
-        glb::cover(world.data(), ntri, 70, 210, 120, 140);
-        return;
-    }
     int saved = meshA;
-    meshA = 140;
-    for (int t = 0; t < ntri; ++t) {
-        V3 p0 = world[(size_t)t * 3], p1 = world[(size_t)t * 3 + 1], p2 = world[(size_t)t * 3 + 2];
-        V3 n = norm(cross(p1 - p0, p2 - p0));
-        draw_tri_world(p0, p1, p2, n, n, n, 70, 210, 120, s);
-    }
+    meshA = 90;
+    mesh_model(*m, xf, 70, 210, 120, -1);
     meshA = saved;
 }
 
@@ -1720,7 +2527,7 @@ static HWND g_ov = nullptr;
 /* Outline every selected entity's silhouette (outline_rgb >= 0), then show. */
 extern "C" void engine_r3d_end(int or_, int og, int ob) {
     using namespace r3d;
-    if (!C.valid || !g.backDC) return;
+    if (!C.valid || !g.backDC) { g_viewSlot = -1; return; }
     if (g_useGL) {
         glb::particles_gl();
         if (or_ >= 0) glb::outline(or_, og, ob);
@@ -1734,6 +2541,7 @@ extern "C" void engine_r3d_end(int or_, int og, int ob) {
         FillRect(g.backDC, &rc, br);
         DeleteObject(br);
         g_glFrame = true;
+        g_viewSlot = -1;
         return;
     } else {
         stamp_particles();
@@ -1754,6 +2562,7 @@ extern "C" void engine_r3d_end(int or_, int og, int ob) {
         }
     }
     BitBlt(g.backDC, C.sx, C.sy, T.w, T.h, T.dc, 0, 0, SRCCOPY);
+    g_viewSlot = -1;
 }
 
 /* Entity under a back-buffer pixel in the last frame, or -1. */

@@ -3611,7 +3611,7 @@ fn inspector_draw_one(s: int) {
         yy = yy + 48;
         if (ent_is_camera_ent(s) == 1) {
             th_font(11);
-            draw_text(x, yy - 4, "3D: Rotation tilts the view; Z sets the focus depth.", col_text_dim());
+            draw_text(x, yy - 4, "Red ring tilts. Green ring turns. Z is the focus depth.", col_text_dim());
             th_font(14);
             yy = yy + 18;
         }
@@ -3963,7 +3963,7 @@ fn inspector_draw_one(s: int) {
                 lv = lv + 1;
             }
             yy = yy + 30;
-            draw_text(x, yy, "1 is a coarse cover. 5 matches the mesh.", col_text_dim());
+            draw_text(x, yy, "Floors and walls are solid. The open space inside stays empty.", col_text_dim());
             yy = yy + 18;
             if (ent_hitbox_count(s) == 0) {
                 draw_text(x, yy, "No mesh loaded, so it stays a box.", col_text_dim());
@@ -4946,15 +4946,8 @@ fn draw_entity_body(slot: int, sx: int, sy: int, sw: int, sh: int) {
     if (kind == "label") {
         let txt: string = ent_text(slot);
         if (txt.len() == 0) txt = ent_name(slot);
-        if (scene_render3d() == 1) {
-            let sc: int = sh / 8;
-            if (sc < 1) sc = 1;
-            eng_text_px(sx, sy, txt, ent_r(slot), ent_g(slot), ent_b(slot), sc);
-        } else {
-            th_font_mono(ui_label_font_px(sh));
-            draw_text(sx, sy, txt, rgb(ent_r(slot), ent_g(slot), ent_b(slot)));
-            th_font(14);
-        }
+        ui_draw_label(sx, sy, sw, sh, txt, ent_r(slot), ent_g(slot), ent_b(slot), ent_sprite(slot));
+        th_font(14);
     } else if (ent_is_3d_kind(slot) == 1) {
         shape3d_draw_flat(slot, sx, sy, sw, sh);
     } else if (ent_sprite_id(slot) != 0) {
@@ -5937,6 +5930,7 @@ let mv3_recorded: int = 0;
 let rt3_grab: float = 0.0;          /* cursor angle when a 3D rotate drag started */
 let rt3_applied: int = 0;           /* degrees already applied this drag */
 let rt3_axis: int = 3;              /* ring being turned: 1 x, 2 y, 3 z */
+let rt3_base: int = 0;              /* camera angle when this drag started */
 let sc3_axis: int = 0;              /* 0 uniform, 1 x, 2 y, 3 z */
 let sc3_dist_grab: float = 16.0;
 let sc3_px: int = 0;                /* screen center frozen when the scale drag started */
@@ -5970,30 +5964,59 @@ fn ent_is_mesh3d(slot: int): int {
     return 1;
 }
 
-/* Where this camera sits and where it looks. Rotation tilts the eye the same
-   way player3d.nxa's setup_camera does. Writes gc_t* (look-at) and gc_e* (eye). */
+fn cam_signed(d: int): int {
+    if (d > 180) return d - 360;
+    return d;
+}
+
+/* Where this camera sits and where it looks. Same rules as player3d.nxa's
+   setup_camera. Writes gc_t* (look-at) and gc_e* (eye). */
 fn camera_place(slot: int, aspect: float) {
     let cw: float = ent_w(slot);
     let ch: float = ent_h(slot);
     if (cw < 4.0) cw = 4.0;
     if (ch < 4.0) ch = 4.0;
+    if (ent_text(slot) == "look") {
+        let ex: float = ent_x(slot) + cw / 2.0;
+        let ey: float = ent_y(slot) + ch / 2.0;
+        let ez: float = ent_z(slot) + ent_depth(slot) / 2.0;
+        let pitch: float = ent_look_pitch(slot);
+        if (pitch > 89.0) pitch = 89.0;
+        if (pitch < -89.0) pitch = -89.0;
+        let yaw: float = ent_look_yaw(slot);
+        let lx: float = m3_cos(pitch) * m3_cos(yaw);
+        let ly: float = 0.0 - m3_sin(pitch);
+        let lz: float = m3_cos(pitch) * m3_sin(yaw);
+        let reach: float = 400.0;
+        ex = ex + lx * 42.0;
+        ey = ey + ly * 42.0;
+        ez = ez + lz * 42.0;
+        gc_ex = ex * V3_UNIT;
+        gc_ey = 0.0 - ey * V3_UNIT;
+        gc_ez = 0.0 - ez * V3_UNIT;
+        gc_tx = (ex + lx * reach) * V3_UNIT;
+        gc_ty = 0.0 - (ey + ly * reach) * V3_UNIT;
+        gc_tz = 0.0 - (ez + lz * reach) * V3_UNIT;
+        return;
+    }
     let cx: float = ent_x(slot) + cw / 2.0;
     let cy: float = ent_y(slot) + ch / 2.0;
     let cz: float = ent_z(slot);
-    let rot: int = ent_rot(slot);
-    if (rot > 180) rot = rot - 360;
-    if (rot > 80) rot = 80;
-    if (rot < -80) rot = -80;
-    let t: float = m3_tan(scene_fov() * 0.5);
-    let dist: float = (ch * 0.5 * V3_UNIT) / t;
-    let dist_w: float = (cw * 0.5 * V3_UNIT) / (t * aspect);
+    let tilt: int = cam_signed(ent_rot(slot));
+    if (tilt > 80) tilt = 80;
+    if (tilt < -80) tilt = -80;
+    let turn: int = ent_rot_y(slot);
+    let tf: float = m3_tan(scene_fov() * 0.5);
+    let dist: float = (ch * 0.5 * V3_UNIT) / tf;
+    let dist_w: float = (cw * 0.5 * V3_UNIT) / (tf * aspect);
     if (dist_w > dist) dist = dist_w;
     gc_tx = cx * V3_UNIT;
     gc_ty = 0.0 - cy * V3_UNIT;
     gc_tz = 0.0 - cz * V3_UNIT;
-    gc_ex = gc_tx;
-    gc_ey = gc_ty + m3_sin(rot) * dist;
-    gc_ez = gc_tz + m3_cos(rot) * dist;
+    let cosp: float = m3_cos(tilt);
+    gc_ex = gc_tx + m3_sin(turn) * cosp * dist;
+    gc_ey = gc_ty + m3_sin(tilt) * dist;
+    gc_ez = gc_tz + m3_cos(turn) * cosp * dist;
 }
 
 /* The main camera frames its rect at its z; rotation tilts it (player3d.nxa's setup_camera). */
@@ -6124,21 +6147,25 @@ fn view3d_draw_meshes(show_cameras: int) {
         if (ent_is_camera_ent(c) == 1 && ent_shown(c) == 1) {
             camera_place(c, 1280.0 / 720.0);
             let col: Color = camera_gizmo_color(c);
-            let fx0: float = ent_x(c) * V3_UNIT;
-            let fy0: float = 0.0 - ent_y(c) * V3_UNIT;
-            let fx1: float = (ent_x(c) + ent_w(c)) * V3_UNIT;
-            let fy1: float = 0.0 - (ent_y(c) + ent_h(c)) * V3_UNIT;
-            let fz: float = 0.0 - ent_z(c) * V3_UNIT;
             let a: int = 170;
             if (ent_selected(c) == 1) a = 255;
-            r3d_line(fx0, fy0, fz, fx1, fy0, fz, col.r, col.g, col.b, a);
-            r3d_line(fx1, fy0, fz, fx1, fy1, fz, col.r, col.g, col.b, a);
-            r3d_line(fx1, fy1, fz, fx0, fy1, fz, col.r, col.g, col.b, a);
-            r3d_line(fx0, fy1, fz, fx0, fy0, fz, col.r, col.g, col.b, a);
-            r3d_line(gc_ex, gc_ey, gc_ez, fx0, fy0, fz, col.r, col.g, col.b, a);
-            r3d_line(gc_ex, gc_ey, gc_ez, fx1, fy0, fz, col.r, col.g, col.b, a);
-            r3d_line(gc_ex, gc_ey, gc_ez, fx1, fy1, fz, col.r, col.g, col.b, a);
-            r3d_line(gc_ex, gc_ey, gc_ez, fx0, fy1, fz, col.r, col.g, col.b, a);
+            if (ent_text(c) == "look") {
+                r3d_line(gc_ex, gc_ey, gc_ez, gc_tx, gc_ty, gc_tz, col.r, col.g, col.b, a);
+            } else {
+                let fx0: float = ent_x(c) * V3_UNIT;
+                let fy0: float = 0.0 - ent_y(c) * V3_UNIT;
+                let fx1: float = (ent_x(c) + ent_w(c)) * V3_UNIT;
+                let fy1: float = 0.0 - (ent_y(c) + ent_h(c)) * V3_UNIT;
+                let fz: float = 0.0 - ent_z(c) * V3_UNIT;
+                r3d_line(fx0, fy0, fz, fx1, fy0, fz, col.r, col.g, col.b, a);
+                r3d_line(fx1, fy0, fz, fx1, fy1, fz, col.r, col.g, col.b, a);
+                r3d_line(fx1, fy1, fz, fx0, fy1, fz, col.r, col.g, col.b, a);
+                r3d_line(fx0, fy1, fz, fx0, fy0, fz, col.r, col.g, col.b, a);
+                r3d_line(gc_ex, gc_ey, gc_ez, fx0, fy0, fz, col.r, col.g, col.b, a);
+                r3d_line(gc_ex, gc_ey, gc_ez, fx1, fy0, fz, col.r, col.g, col.b, a);
+                r3d_line(gc_ex, gc_ey, gc_ez, fx1, fy1, fz, col.r, col.g, col.b, a);
+                r3d_line(gc_ex, gc_ey, gc_ez, fx0, fy1, fz, col.r, col.g, col.b, a);
+            }
             view3d_draw_camera_body(c, col, a);
         }
         c = ent_iter_next(c + 1);
@@ -6149,9 +6176,9 @@ fn view3d_draw_meshes(show_cameras: int) {
    units across, so it sits next to the move gizmo instead of only existing
    as a frame the size of the whole view. */
 fn view3d_draw_camera_body(slot: int, col: Color, a: int) {
-    let x: float = v3_center_x(slot);
-    let y: float = v3_center_y(slot);
-    let z: float = v3_center_z(slot);
+    let x: float = gc_ex;
+    let y: float = gc_ey;
+    let z: float = gc_ez;
     let hw: float = 0.7;
     let hh: float = 0.45;
     let hd: float = 0.4;
@@ -6451,6 +6478,10 @@ fn v3_center_x(slot: int): float { return (ent_x(slot) + ent_w(slot) / 2.0) * V3
 fn v3_center_y(slot: int): float { return 0.0 - (ent_y(slot) + ent_h(slot) / 2.0) * V3_UNIT; }
 fn v3_center_z(slot: int): float {
     if (ent_is_light(slot) == 1 || ent_is_empty(slot) == 1) return 0.0 - ent_z(slot) * V3_UNIT;
+    if (ent_is_camera_ent(slot) == 1) {
+        if (ent_text(slot) == "look") return 0.0 - (ent_z(slot) + ent_depth(slot) / 2.0) * V3_UNIT;
+        return 0.0 - ent_z(slot) * V3_UNIT;
+    }
     return 0.0 - (ent_z(slot) + ent_depth3d(slot) / 2.0) * V3_UNIT;
 }
 
@@ -6500,7 +6531,8 @@ fn view3d_scene_center(slot: int) {
     mv3_cx = ent_x(slot) + ent_w(slot) / 2.0;
     mv3_cy = ent_y(slot) + ent_h(slot) / 2.0;
     mv3_cz = ent_z(slot);
-    if (ent_is_light(slot) == 0 && ent_is_empty(slot) == 0) mv3_cz = ent_z(slot) + ent_depth3d(slot) / 2.0;
+    if (ent_is_camera_ent(slot) == 1 && ent_text(slot) == "look") mv3_cz = ent_z(slot) + ent_depth(slot) / 2.0;
+    else if (ent_is_light(slot) == 0 && ent_is_empty(slot) == 0 && ent_is_camera_ent(slot) == 0) mv3_cz = ent_z(slot) + ent_depth3d(slot) / 2.0;
 }
 
 /* Mouse ray in scene px. Direction is one world unit long. */
@@ -6823,7 +6855,8 @@ fn view3d_cursor_angle(slot: int, mx: int, my: int): float {
     let cx: float = ent_x(slot) + ent_w(slot) / 2.0;
     let cy: float = ent_y(slot) + ent_h(slot) / 2.0;
     let cz: float = ent_z(slot);
-    if (ent_is_light(slot) == 0 && ent_is_empty(slot) == 0) cz = ent_z(slot) + ent_depth3d(slot) / 2.0;
+    if (ent_is_camera_ent(slot) == 1 && ent_text(slot) == "look") cz = ent_z(slot) + ent_depth(slot) / 2.0;
+    else if (ent_is_light(slot) == 0 && ent_is_empty(slot) == 0 && ent_is_camera_ent(slot) == 0) cz = ent_z(slot) + ent_depth3d(slot) / 2.0;
     if (r3d_plane_hit(mx, my, cz) == 1) {
         return angle_deg_at(m3_round(cx), m3_round(cy), m3_round(r3d_hx()), m3_round(r3d_hy()));
     }
@@ -7112,11 +7145,40 @@ fn view3d_scale_apply(factor: float) {
     xform_grab_scale(factor, sc3_axis);
 }
 
+fn view3d_clamp_pitch(v: int, limit: int): int {
+    if (v > limit) return limit;
+    if (v < 0 - limit) return 0 - limit;
+    return v;
+}
+
+/* Cameras are not meshes. A mesh spin rewrites pitch, yaw, and roll together,
+   and the picture only reads one of them, so the aim jumps. Each ring writes
+   the angle that ring is. */
+fn view3d_apply_camera_rotate(slot: int, delta: int) {
+    let look: int = 0;
+    if (ent_text(slot) == "look") look = 1;
+    let next: int = rt3_base + delta;
+    if (look == 1) {
+        if (rt3_axis == 1) ent_set_rot_x(slot, view3d_clamp_pitch(next, 89));
+        else if (rt3_axis == 2) ent_set_rot_y(slot, next);
+        return;
+    }
+    if (rt3_axis == 1) ent_set_rot(slot, view3d_clamp_pitch(next, 80));
+    else if (rt3_axis == 2) ent_set_rot_y(slot, next);
+}
+
 fn view3d_apply_rotate(mx: int, my: int) {
     let s0: int = sel_first();
     if (s0 < 0) return;
     let want: int = m3_round(view3d_angle_delta(view3d_spin_angle(s0, rt3_axis, mx, my), rt3_grab));
     if (want == rt3_applied) return;
+    if (ent_is_camera_ent(s0) == 1) {
+        if (rt3_axis == 3) return;
+        view3d_undo_record();
+        view3d_apply_camera_rotate(s0, want);
+        rt3_applied = want;
+        return;
+    }
     view3d_undo_record();
     xform_grab_spin(rt3_axis, want);
     rt3_applied = want;
@@ -7143,6 +7205,7 @@ fn view3d_tool_press(mx: int, my: int): int {
         }
         if (ent_selected(hit) == 0) { sel_clear(); ent_set_selected(hit, 1); }
         rt3_axis = 3;
+        if (ent_is_camera_ent(hit) == 1) rt3_axis = 1;
         orb_mode = 7;
         return 1;
     }
@@ -7217,6 +7280,13 @@ fn view3d_mesh_hits(slot: int, x0: int, y0: int, x1: int, y1: int): int {
         sx = dm; sy = dm; sz = dm;
     } else if (k == "cylinder") {
         sz = w * V3_UNIT;
+    } else if (k == "capsule") {
+        sz = w * V3_UNIT;
+        if (h < w) {
+            let dm: float = h * V3_UNIT;
+            sx = dm;
+            sz = dm;
+        }
     } else if (k == "model") {
         let dm: float = w;
         if (h > dm) dm = h;
@@ -7364,6 +7434,17 @@ fn viewport3d_input() {
                         let s0: int = sel_first();
                         if (s0 >= 0) rt3_grab = view3d_spin_angle(s0, rt3_axis, mx, my);
                         rt3_applied = 0;
+                        rt3_base = 0;
+                        if (s0 >= 0 && ent_is_camera_ent(s0) == 1) {
+                            if (ent_text(s0) == "look") {
+                                if (rt3_axis == 1) rt3_base = cam_signed(ent_rot_x(s0));
+                                else rt3_base = cam_signed(ent_rot_y(s0));
+                            } else if (rt3_axis == 2) {
+                                rt3_base = cam_signed(ent_rot_y(s0));
+                            } else {
+                                rt3_base = cam_signed(ent_rot(s0));
+                            }
+                        }
                         view3d_rotate_capture();
                     } else if (orb_mode == 8 || orb_mode == 9) {
                         orb_ax = mx;
@@ -7700,7 +7781,7 @@ fn attach_asset_to(slot: int, path: string, rel: string) {
     if (path_is_obj(rel) == 1 || path_is_obj(path) == 1) {
         ent_set_model(slot, path);
         let k: string = ent_kind(slot);
-        if (k == "cube" || k == "sphere" || k == "cylinder" || k == "rect" || k == "empty" || k == "model") {
+        if (k == "cube" || k == "sphere" || k == "cylinder" || k == "capsule" || k == "rect" || k == "empty" || k == "model") {
             ent_set_kind(slot, "model");
         }
         eng_log("[asset] model " + rel + " -> " + ent_name(slot));
@@ -8143,7 +8224,7 @@ fn cm_draw_3d_submenu(): int {
 
     let dw: int = 180;
     let item_h: int = 22;
-    let dh: int = 6 + item_h * 9 + 26 + 6;
+    let dh: int = 6 + item_h * 10 + 26 + 6;
 
     let rx: int = context_sub2_x;
     let ry: int = context_sub2_y;
@@ -8160,7 +8241,7 @@ fn cm_draw_3d_submenu(): int {
     /* lights: the second group, under the shapes */
     let lkinds  = ["light_directional", "light_point", "light_spot", "light_ambient"];
     let llabels = ["Directional Light", "Point Light", "Spot Light", "Ambient Light"];
-    let ly: int = ry + 4 + item_h * 5;
+    let ly: int = ry + 4 + item_h * 6;
     chrome_hsep(rx + 8, ly + 5, dw - 16);
     th_caption(rx + 12, ly + 11, "LIGHT");
     ly = ly + 26;
@@ -8179,14 +8260,14 @@ fn cm_draw_3d_submenu(): int {
         ly = ly + item_h;
         li = li + 1;
     }
-    if (point_in_rect(mx, my, rect(rx, ry + 4 + item_h * 5, dw, 26))) lhover = 1;
+    if (point_in_rect(mx, my, rect(rx, ry + 4 + item_h * 6, dw, 26))) lhover = 1;
 
-    let kinds  = ["cube", "sphere", "cylinder", "model"];
-    let labels = ["Cube", "Sphere", "Cylinder", "Model (.obj)..."];
+    let kinds  = ["cube", "sphere", "cylinder", "capsule", "model"];
+    let labels = ["Cube", "Sphere", "Cylinder", "Capsule", "Model (.obj)..."];
     let yy: int = ry + 4;
     let any_hover: int = 0;
     let i: int = 0;
-    while (i < 4) {
+    while (i < 5) {
         let row: Rect = rect(rx + 2, yy, dw - 4, item_h);
         if (point_in_rect(mx, my, row)) any_hover = 1;
         if (menu_item(row.x, row.y, row.w, labels[i], "") == 1) {
@@ -9186,6 +9267,7 @@ fn hier_icon_name(slot: int): string {
     if (kind == "cube") return "cube";
     if (kind == "sphere") return "sphere";
     if (kind == "cylinder") return "cylinder";
+    if (kind == "capsule") return "capsule";
     if (kind == "model") return "model";
     if (ui_ent_is_button(slot) == 1 || ui_ent_is_check(slot) == 1 || ui_ent_is_toggle(slot) == 1) return "button";
     if (ent_is_ui(slot) == 1) return "panel";
@@ -9527,17 +9609,23 @@ fn spawn_shape3d_at(kind: string, x_screen: int, y_screen: int): int {
         if (model.len() == 0) return -1;
     }
     spawn_locate(x_screen, y_screen);
-    let wx: int = spawn_wx - 32.0;
-    let wy: int = spawn_wy - 32.0;
     let r: int = 110;
     let g: int = 160;
     let b: int = 240;
     if (kind == "sphere")   { r = 240; g = 120; b = 110; }
     if (kind == "cylinder") { r = 110; g = 210; b = 150; }
+    if (kind == "capsule")  { r = 176; g = 140; b = 220; }
     if (kind == "model")    { r = 200; g = 200; b = 210; }
-    let s: int = ent_create(kind, kind, wx, wy, 64, 64, r, g, b);
+    let ew: int = 64;
+    let eh: int = 64;
+    if (kind == "capsule") eh = 160;
+    let wx: int = spawn_wx - ew / 2;
+    let wy: int = spawn_wy - eh / 2;
+    let name: string = kind;
+    if (kind == "capsule") name = "Capsule";
+    let s: int = ent_create(kind, name, wx, wy, ew, eh, r, g, b);
     if (s >= 0) {
-        let sz: int = spawn_wz - 32.0;      /* centered in depth too */
+        let sz: int = spawn_wz - ew / 2;    /* centered in depth too */
         if (view3d_active() == 1) ent_set_z(s, sz);
     }
     if (s >= 0 && model.len() > 0) ent_set_model(s, model);
@@ -10089,6 +10177,14 @@ fn build_game_begin() {
     compile_begin("export");
 }
 
+fn export_is_source(rel: string): int {
+    let n: int = rel.len();
+    if (n < 4) return 0;
+    let e: string = rel.substring(n - 4, 4);
+    if (e == ".nxa" || e == ".ebp") return 1;
+    return 0;
+}
+
 fn do_export() {
     if (proj_loaded() == 0) return;
 
@@ -10140,9 +10236,11 @@ fn do_export() {
         let i: int = 0;
         while (i < n) {
             let rel: string = export_used_rel(i);
-            let src: string = proj_path_join(root, rel);
-            let dst: string = proj_path_join(dist_dir, rel);
-            if (eng_fs_copy_file(src, dst) == 0) eng_log("[export] FAILED to copy " + rel);
+            if (export_is_source(rel) == 0) {
+                let src: string = proj_path_join(root, rel);
+                let dst: string = proj_path_join(dist_dir, rel);
+                if (eng_fs_copy_file(src, dst) == 0) eng_log("[export] FAILED to copy " + rel);
+            }
             i = i + 1;
         }
     } else {
@@ -10510,6 +10608,8 @@ fn enter_play() {
 }
 
 fn exit_play() {
+    eng_mouse_lock(0);
+    eng_music_stop();
     sfx_set_live(0);
     tilemap_destroy();
     phys_end();
@@ -10532,12 +10632,24 @@ fn exit_play() {
     eng_log("[play] stopped, scene reloaded, DLLs unloaded");
 }
 
+fn scene_has_pause(): int {
+    let s: int = ent_iter_next(0);
+    while (s >= 0) {
+        if (ent_script(s) == "pause.nxa") return 1;
+        s = ent_iter_next(s + 1);
+    }
+    return 0;
+}
+
 fn play_dispatch_scripts() {
     if (play_paused == 1) return;
+    let paused: int = eng_paused();
     let s: int = ent_iter_next(0);
     while (s >= 0) {
         let sc: string = ent_script(s);
-        if (sc.len() > 0) {
+        let run: int = 1;
+        if (paused == 1 && sc != "pause.nxa") run = 0;
+        if (run == 1 && sc.len() > 0) {
             let dll: string = proj_path_join(proj_path_join(proj_root(), "bin"),
                                              sc.replace(".nxa", ".dll"));
             if (eng_fs_exists(dll) == 1) {
@@ -10579,6 +10691,7 @@ fn play_draw_overlay() {
     if (play_paused == 1) label = "PAUSED";
     th_font(11);
     let hint: string = "Esc to stop";
+    if (scene_has_pause() == 1) hint = "Esc to pause";
     let hw: int = eng_text_width(hint);
     let card: Rect = rect(v.x + v.w - hw - 110, v.y + v.h - 34, hw + 102, 26);
     viewport_hud_card(card.x, card.y, card.w, card.h);
@@ -11244,6 +11357,13 @@ fn settings_page_graphics(x: int, y: int, w: int) {
     settings_onoff(x, y, "VSync", "vsync", 1);
     y = y + 36;
     draw_text(x, y, "On waits for the monitor. The editor and the game both use it.", col_text_dim());
+    y = y + 36;
+    settings_onoff(x, y, "High definition", "hd", 0);
+    y = y + 36;
+    draw_text(x, y, "On draws the 3D picture at twice the resolution. Sharper, and slower.", col_text_dim());
+    y = y + 20;
+    draw_text(x, y, "The editor view, Play, and an exported 3D game all use it.", col_text_dim());
+    settings_bottom = y + 28;
 }
 
 fn settings_page_audio(x: int, y: int, w: int) {
@@ -11314,7 +11434,7 @@ fn settings_draw() {
     else settings_page_build(x, y, w);
     eng_clear_clip();
     let max_scroll: int = 0;
-    if (settings_page == 0 || settings_page == 1) {
+    if (settings_page == 0 || settings_page == 1 || settings_page == 4) {
         let content_h: int = settings_bottom + settings_scroll - (p.y + 22);
         max_scroll = content_h - (p.h - 80);
         if (max_scroll < 0) max_scroll = 0;
@@ -11417,10 +11537,12 @@ fn edit_frame() {
             compile_begin("play");
         }
     }
-    if (app_state == "play" && want_stop == 1) {
+    if (eng_take_leave_play() == 1 && app_state == "play") {
+        exit_play();
+    } else if (app_state == "play" && want_stop == 1) {
         want_stop = 0;
         exit_play();
-    } else if (app_state == "play" && viewport_mode == "play" && settings_open == 0 && edit_target.len() == 0 && key_pressed(VK_ESCAPE)) {
+    } else if (app_state == "play" && viewport_mode == "play" && settings_open == 0 && edit_target.len() == 0 && key_pressed(VK_ESCAPE) && scene_has_pause() == 0) {
         exit_play();
     }
 }
@@ -11470,8 +11592,9 @@ fn main() {
         frame_begin();
         th_font(14);   /* chrome font; widgets that switch face restore it */
         running = eng_pump();
-        /* the look-around lock never outlives the right button */
-        if (mouse_down(MOUSE_RIGHT) == false) eng_mouse_lock(0);
+        /* Editing looks around only while the right button is held.
+           Play keeps a blueprint lock until Stop. */
+        if (app_state != "play" && mouse_down(MOUSE_RIGHT) == false) eng_mouse_lock(0);
         /* lay out to the window instead of stretching a fixed-size frame;
            below the minimum the layout is scaled down as before */
         if (eng_client_w() > 64 && eng_client_h() > 64) {

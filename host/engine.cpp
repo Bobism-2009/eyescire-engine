@@ -35,6 +35,38 @@
 
 namespace fs = std::filesystem;
 
+static int  g_rawDx = 0, g_rawDy = 0;
+static bool g_rawMouse = false;
+
+static void raw_mouse_enable(HWND hwnd, bool on) {
+    RAWINPUTDEVICE rid{};
+    rid.usUsagePage = 0x01;
+    rid.usUsage = 0x02;
+    rid.dwFlags = on ? 0 : RIDEV_REMOVE;
+    rid.hwndTarget = on ? hwnd : nullptr;
+    if (RegisterRawInputDevices(&rid, 1, sizeof(rid))) g_rawMouse = on;
+    else if (!on) g_rawMouse = false;
+}
+
+static void raw_mouse_msg(LPARAM lp) {
+    UINT size = 0;
+    if (GetRawInputData((HRAWINPUT)lp, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)) != 0) return;
+    if (size == 0 || size > 256) return;
+    BYTE buf[256];
+    if (GetRawInputData((HRAWINPUT)lp, RID_INPUT, buf, &size, sizeof(RAWINPUTHEADER)) != size) return;
+    RAWINPUT* raw = (RAWINPUT*)buf;
+    if (raw->header.dwType != RIM_TYPEMOUSE) return;
+    if (raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) return;
+    g_rawDx += raw->data.mouse.lLastX;
+    g_rawDy += raw->data.mouse.lLastY;
+}
+
+static void raw_mouse_take(int& dx, int& dy) {
+    dx = g_rawDx;
+    dy = g_rawDy;
+    g_rawDx = g_rawDy = 0;
+}
+
 namespace {
 
 constexpr const char* kClassName = "EyescireEngineWindow";
@@ -154,6 +186,9 @@ struct Entity {
     int         rotDeg     = 0;    /* roll around Z, degrees. 0..359 */
     int         rotX       = 0;    /* pitch around X, degrees. Scene fields 55 and 56. */
     int         rotY       = 0;    /* yaw around Y, degrees */
+    float       lookYaw    = 0.f;  /* sub-degree look, used while lookFine */
+    float       lookPitch  = 0.f;
+    bool        lookFine   = false;
     bool        isCamera   = false; /* main scene camera (editor play mode) */
     /* 3D (scene v7): x/y stay the 2D/physics plane; z is how far into the
      * screen the entity starts, depth how far it extends (0 = kind default).
@@ -661,6 +696,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             update_display_layout();
             return 0;
 
+        case WM_LBUTTONDBLCLK:
         case WM_LBUTTONDOWN:
             map_client_mouse((int)(short)LOWORD(lp), (int)(short)HIWORD(lp));
             g.mouseDown[0]    = true;
@@ -698,6 +734,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_MOUSEWHEEL:
             g.mouseWheelAccum += GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA;
+            return 0;
+        case WM_INPUT:
+            raw_mouse_msg(lp);
             return 0;
 
         case WM_KEYDOWN:
@@ -1072,6 +1111,7 @@ namespace r3d { void overlay_present(); }
 /* 1 waits for the monitor. The 3D view uses the GL swap interval. A 2D frame
    has no GL swap, so present waits with DwmFlush instead. */
 static int g_vsync = 1;
+static int g_hd = 0;          /* 1: the 3D picture is drawn at twice the resolution */
 static int g_glPresented = 0;
 
 extern "C" int engine_vsync() { return g_vsync ? 1 : 0; }
@@ -1162,11 +1202,16 @@ extern "C" void engine_mouse_lock(int on) {
     if (want == g_mouseLocked) return;
     g_mouseLocked = want;
     g_mouseLockDx = g_mouseLockDy = 0;
+    g_rawDx = g_rawDy = 0;
     if (want) {
         GetCursorPos(&g_mouseLockAt);
-        if (g.hwnd) SetCapture(g.hwnd);
+        if (g.hwnd) {
+            SetCapture(g.hwnd);
+            raw_mouse_enable(g.hwnd, true);
+        }
         ShowCursor(FALSE);
     } else {
+        raw_mouse_enable(g.hwnd, false);
         SetCursorPos(g_mouseLockAt.x, g_mouseLockAt.y);
         ShowCursor(TRUE);
         if (!g.mouseDown[0]) ReleaseCapture();
@@ -1176,6 +1221,13 @@ extern "C" int engine_mouse_locked() { return g_mouseLocked ? 1 : 0; }
 extern "C" void engine_mouse_lock_poll() {
     g_mouseLockDx = g_mouseLockDy = 0;
     if (!g_mouseLocked) return;
+    if (g_rawMouse) {
+        raw_mouse_take(g_mouseLockDx, g_mouseLockDy);
+        POINT p{};
+        if (GetCursorPos(&p) && (p.x != g_mouseLockAt.x || p.y != g_mouseLockAt.y))
+            SetCursorPos(g_mouseLockAt.x, g_mouseLockAt.y);
+        return;
+    }
     POINT p{};
     if (!GetCursorPos(&p)) return;
     g_mouseLockDx = p.x - g_mouseLockAt.x;
@@ -1923,6 +1975,37 @@ extern "C" void engine_image_cache_clear() {
 
 extern "C" int engine_mouse_x() { return g.mouseX; }
 extern "C" int engine_mouse_y() { return g.mouseY; }
+
+static int g_uiOx = 0, g_uiOy = 0;
+static float g_uiSx = 1.f, g_uiSy = 1.f;
+
+extern "C" void engine_ui_set_map(int ox, int oy, int sx_milli, int sy_milli) {
+    float sx = sx_milli / 1000.f;
+    float sy = sy_milli / 1000.f;
+    if (sx < 0.0001f) sx = 1.f;
+    if (sy < 0.0001f) sy = 1.f;
+    g_uiOx = ox;
+    g_uiOy = oy;
+    g_uiSx = sx;
+    g_uiSy = sy;
+}
+extern "C" int engine_ui_screen_x(int x) { return g_uiOx + (int)std::lround(x * g_uiSx); }
+extern "C" int engine_ui_screen_y(int y) { return g_uiOy + (int)std::lround(y * g_uiSy); }
+extern "C" int engine_ui_screen_w(int w) {
+    int v = (int)std::lround(w * g_uiSx);
+    return v < 1 ? 1 : v;
+}
+extern "C" int engine_ui_screen_h(int h) {
+    int v = (int)std::lround(h * g_uiSy);
+    return v < 1 ? 1 : v;
+}
+extern "C" int engine_ui_hover(int x, int y, int w, int h) {
+    int sx = engine_ui_screen_x(x);
+    int sy = engine_ui_screen_y(y);
+    int sw = engine_ui_screen_w(w);
+    int sh = engine_ui_screen_h(h);
+    return g.mouseX >= sx && g.mouseY >= sy && g.mouseX < sx + sw && g.mouseY < sy + sh ? 1 : 0;
+}
 extern "C" int engine_mouse_down(int btn) { return (btn >= 0 && btn < 3 && g.mouseDown[btn]) ? 1 : 0; }
 extern "C" int engine_mouse_pressed(int btn) { return (btn >= 0 && btn < 3 && g.mousePressed[btn]) ? 1 : 0; }
 extern "C" int engine_mouse_released(int btn) { return (btn >= 0 && btn < 3 && g.mouseReleased[btn]) ? 1 : 0; }
@@ -2048,6 +2131,32 @@ extern "C" void engine_entity_set_rot_x(int s, int v) {
 extern "C" void engine_entity_set_rot_y(int s, int v) {
     if (!active_slot(s)) return;
     g.entities[s].rotY = wrap360(v);
+    g.entities[s].lookFine = false;
+}
+extern "C" void engine_entity_set_look(int s, float yaw, float pitch) {
+    if (!active_slot(s)) return;
+    Entity& e = g.entities[s];
+    if (pitch > 89.f) pitch = 89.f;
+    if (pitch < -89.f) pitch = -89.f;
+    e.lookYaw = yaw;
+    e.lookPitch = pitch;
+    e.lookFine = true;
+    e.rotY = wrap360((int)std::lround(yaw));
+    int p = (int)std::lround(pitch);
+    if (p < 0) p += 360;
+    e.rotX = wrap360(p);
+}
+extern "C" float engine_entity_look_yaw(int s) {
+    if (!active_slot(s)) return 0.f;
+    if (g.entities[s].lookFine) return g.entities[s].lookYaw;
+    return (float)g.entities[s].rotY;
+}
+extern "C" float engine_entity_look_pitch(int s) {
+    if (!active_slot(s)) return 0.f;
+    if (g.entities[s].lookFine) return g.entities[s].lookPitch;
+    int p = g.entities[s].rotX;
+    if (p > 180) p -= 360;
+    return (float)p;
 }
 
 /* Column-major. R = Ry(rotY) * Rx(rotX) * Rz(-rotDeg).
@@ -2147,7 +2256,7 @@ extern "C" void engine_xform_grab_add(int slot) {
     row.rot = e.rotDeg; row.rotX = e.rotX; row.rotY = e.rotY;
     row.autoDepth = e.depth <= 0 ? 1 : 0;
     if (e.kind == "sphere" || e.kind == "model") row.kind = 2;
-    else if (e.kind == "cylinder") row.kind = 1;
+    else if (e.kind == "cylinder" || e.kind == "capsule") row.kind = 1;
     g_xgrab.push_back(row);
 }
 extern "C" void engine_xform_grab_scale(double factor, int axis) {
@@ -2502,6 +2611,135 @@ static std::string asset_resolve(const std::string& s) {
         return (fs::path(g.projRoot) / p).string();
     }
     return s;
+}
+
+/* A .ttf beside the project is not an installed Windows font. Reading its
+   family name and adding it for this process lets labels draw with it. */
+static bool path_is_font_file(const std::string& p) {
+    if (p.size() < 4) return false;
+    std::string e = p.substr(p.size() - 4);
+    for (char& c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    return e == ".ttf" || e == ".otf";
+}
+
+static std::string ttf_family_name(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return {};
+    std::vector<unsigned char> b((std::istreambuf_iterator<char>(f)), {});
+    if (b.size() < 12) return {};
+    auto ru16 = [&](size_t o) -> int {
+        if (o + 2 > b.size()) return 0;
+        return ((int)b[o] << 8) | (int)b[o + 1];
+    };
+    auto ru32 = [&](size_t o) -> unsigned {
+        if (o + 4 > b.size()) return 0;
+        return ((unsigned)b[o] << 24) | ((unsigned)b[o + 1] << 16) |
+               ((unsigned)b[o + 2] << 8) | (unsigned)b[o + 3];
+    };
+    int ntab = ru16(4);
+    unsigned nameOff = 0, nameLen = 0;
+    for (int i = 0; i < ntab; ++i) {
+        size_t o = 12 + (size_t)i * 16;
+        if (o + 16 > b.size()) break;
+        if (b[o] == 'n' && b[o + 1] == 'a' && b[o + 2] == 'm' && b[o + 3] == 'e') {
+            nameOff = ru32(o + 8);
+            nameLen = ru32(o + 12);
+        }
+    }
+    if (nameLen < 6 || nameOff + nameLen > b.size()) return {};
+    int count = ru16(nameOff + 2);
+    int store = ru16(nameOff + 4);
+    std::string mac, win;
+    for (int i = 0; i < count; ++i) {
+        size_t o = nameOff + 6 + (size_t)i * 12;
+        if (o + 12 > b.size()) break;
+        int plat = ru16(o), nid = ru16(o + 6), len = ru16(o + 8), noff = ru16(o + 10);
+        if (nid != 1) continue;
+        size_t s = nameOff + store + noff;
+        if (s + len > b.size()) continue;
+        std::string face;
+        if (plat == 3 || plat == 0) {
+            for (int k = 0; k + 1 < len; k += 2)
+                face.push_back((char)b[s + k + 1]);
+        } else {
+            face.assign((const char*)b.data() + s, (size_t)len);
+        }
+        if (face.empty()) continue;
+        if (plat == 3) win = face;
+        else if (mac.empty()) mac = face;
+    }
+    return !win.empty() ? win : mac;
+}
+
+static std::unordered_map<std::string, std::string> g_fontFamilies;
+static std::unordered_map<std::string, HFONT> g_fileFonts;
+
+static std::string font_family_for(const std::string& rel) {
+    if (!path_is_font_file(rel)) return {};
+    std::string full = asset_resolve(rel);
+    auto it = g_fontFamilies.find(full);
+    if (it != g_fontFamilies.end()) return it->second;
+    std::string face = ttf_family_name(full);
+    if (face.empty()) {
+        g_fontFamilies[full] = "";
+        return {};
+    }
+    int n = MultiByteToWideChar(CP_ACP, 0, full.c_str(), -1, nullptr, 0);
+    if (n <= 0) return {};
+    std::wstring w((size_t)n, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, full.c_str(), -1, w.data(), n);
+    if (AddFontResourceExW(w.c_str(), 0x10 /* FR_PRIVATE */, nullptr) == 0) {
+        g_fontFamilies[full] = "";
+        return {};
+    }
+    g_fontFamilies[full] = face;
+    return face;
+}
+
+static HFONT font_cached(const std::string& face, int px) {
+    if (px < 6) px = 6;
+    if (px > 400) px = 400;
+    std::string key = face + "|" + std::to_string(px) + "|file";
+    auto it = g_fileFonts.find(key);
+    if (it != g_fileFonts.end()) return it->second;
+    HFONT f = CreateFontA(
+        -px, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY, FF_DONTCARE, face.c_str());
+    if (f) g_fileFonts[key] = f;
+    return f;
+}
+
+static HFONT font_select_file(const char* path, int px) {
+    if (!g.backDC || !path || !*path) return nullptr;
+    std::string face = font_family_for(path);
+    if (face.empty()) return nullptr;
+    HFONT f = font_cached(face, px);
+    if (!f) return nullptr;
+    SelectObject(g.backDC, f);
+    return f;
+}
+
+extern "C" int engine_text_file_width(const char* s, int px, const char* path) {
+    if (!s) return 0;
+    HFONT prev = g.font;
+    if (!font_select_file(path, px)) {
+        if (prev) SelectObject(g.backDC, prev);
+        return 0;
+    }
+    int w = engine_text_width(s);
+    if (prev) SelectObject(g.backDC, prev);
+    return w;
+}
+
+extern "C" void engine_text_file(int x, int y, const char* s, int r, int g_, int b, int px, const char* path) {
+    HFONT prev = g.font;
+    if (!font_select_file(path, px)) {
+        if (g.backDC && prev) SelectObject(g.backDC, prev);
+        return;
+    }
+    engine_text(x, y, s, r, g_, b);
+    if (prev) SelectObject(g.backDC, prev);
 }
 
 static bool music_path_is_wav(const std::string& p) {
@@ -2914,7 +3152,7 @@ extern "C" void engine_set_self(int s) { g.selfSlot = s; }
 static int solid_depth(const Entity& e) {
     if (e.depth > 0) return e.depth;
     if (e.kind == "cube" || e.kind == "cylinder") return e.w > 0 ? e.w : 1;
-    if (e.kind == "sphere") return e.w < e.h ? e.w : e.h;
+    if (e.kind == "sphere" || e.kind == "capsule") return e.w < e.h ? e.w : e.h;
     if (e.kind == "model") return e.w > e.h ? e.w : e.h;
     return 0;
 }
@@ -3600,15 +3838,6 @@ bool model_local(const Entity& e, std::vector<float>& xyz, std::vector<int>& tri
     return true;
 }
 
-bool point_in_tri(float px, float py, float ax, float ay, float bx, float by, float cx, float cy) {
-    float c1 = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-    float c2 = (cx - bx) * (py - by) - (cy - by) * (px - bx);
-    float c3 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
-    bool neg = c1 < 0.f || c2 < 0.f || c3 < 0.f;
-    bool pos = c1 > 0.f || c2 > 0.f || c3 > 0.f;
-    return !(neg && pos);
-}
-
 const HitCache& hitbox_cache(const Entity& e) {
     static const HitCache none;
     if (e.hitbox <= 0 || e.kind != "model") return none;
@@ -3628,96 +3857,179 @@ const HitCache& hitbox_cache(const Entity& e) {
     std::vector<int> tris;
     if (model_local(e, xyz, tris)) {
         int n = hitbox_cells(e.hitbox);
-        bool exact = e.hitbox >= 5;
-        auto snap = [&](float v) {
-            if (exact) return v;
-            float g = std::round((v + 0.5f) * (float)n) / (float)n - 0.5f;
-            if (g < -0.5f) g = -0.5f;
-            if (g > 0.5f) g = 0.5f;
-            return g;
-        };
         float size = (float)std::max(e.w, e.h);
         if (size < 4.f) size = 4.f;
-        float cell = size / (float)n;
-        std::vector<char> occ((size_t)n * n, 0);
-        auto mark = [&](float x, float y) {
-            int i = (int)std::floor((x + size * 0.5f) / cell);
-            int j = (int)std::floor((y + size * 0.5f) / cell);
-            if (i < 0) i = 0;
-            if (j < 0) j = 0;
-            if (i >= n) i = n - 1;
-            if (j >= n) j = n - 1;
-            occ[(size_t)j * n + i] = 1;
+        float bminx = 1e9f, bminy = 1e9f, bminz = 1e9f;
+        float bmaxx = -1e9f, bmaxy = -1e9f, bmaxz = -1e9f;
+        for (size_t vi = 0; vi + 2 < xyz.size(); vi += 3) {
+            bminx = std::min(bminx, xyz[vi]); bmaxx = std::max(bmaxx, xyz[vi]);
+            bminy = std::min(bminy, xyz[vi + 1]); bmaxy = std::max(bmaxy, xyz[vi + 1]);
+            bminz = std::min(bminz, xyz[vi + 2]); bmaxz = std::max(bmaxz, xyz[vi + 2]);
+        }
+        /* Skin thickness follows the thin axis. A long hall stays a shell:
+           the floor and walls are solid, and the air between them is not. */
+        /* A hall is long into the screen. Flattening it stacks the whole
+           length into one slab and the player is pushed out through the floor.
+           Those meshes are solved in 3D from the real triangles. */
+        bool walk3d = (bmaxz - bminz) > (bmaxy - bminy) * 1.25f;
+        float cross = std::min(bmaxx - bminx, std::min(bmaxy - bminy, bmaxz - bminz)) * size;
+        if (cross < 8.f) cross = 8.f;
+        float thick = cross / (float)n;
+        if (thick < 6.f) thick = 6.f;
+        if (thick > cross * 0.3f) thick = cross * 0.3f;
+        struct Span { float a, b; };
+        struct Band { std::vector<Span> spans; double acc = 0; int count = 0; };
+        std::unordered_map<int, Band> floors, walls;
+        auto add_span = [&](Band& band, float a, float b, float center) {
+            if (b < a) std::swap(a, b);
+            if (b - a < 0.5f) return;
+            band.spans.push_back(Span{a, b});
+            band.acc += center;
+            band.count += 1;
+        };
+        auto y_on_slice = [&](float lo, float hi, float ax, float ay, float bx, float by,
+                              float cx, float cy, float& ylo, float& yhi) {
+            ylo = 1e9f;
+            yhi = -1e9f;
+            auto edge = [&](float xA, float yA, float xB, float yB) {
+                if (xA > xB) { std::swap(xA, xB); std::swap(yA, yB); }
+                float a = std::max(lo, xA);
+                float b = std::min(hi, xB);
+                if (b < a - 0.01f) return;
+                float denom = xB - xA;
+                float t0 = std::fabs(denom) < 1e-6f ? 0.f : (a - xA) / denom;
+                float t1 = std::fabs(denom) < 1e-6f ? 1.f : (b - xA) / denom;
+                float ya = yA + (yB - yA) * t0;
+                float yb = yA + (yB - yA) * t1;
+                ylo = std::min(ylo, std::min(ya, yb));
+                yhi = std::max(yhi, std::max(ya, yb));
+            };
+            edge(ax, ay, bx, by);
+            edge(bx, by, cx, cy);
+            edge(cx, cy, ax, ay);
+            return yhi >= ylo;
         };
         for (size_t t = 0; t + 2 < tris.size(); t += 3) {
             int ia = tris[t], ib = tris[t + 1], ic = tris[t + 2];
             if (ia < 0 || ib < 0 || ic < 0) continue;
             if ((ia + 1) * 3 > (int)xyz.size() || (ib + 1) * 3 > (int)xyz.size() || (ic + 1) * 3 > (int)xyz.size()) continue;
-            float ax = snap(xyz[ia * 3]), ay = snap(xyz[ia * 3 + 1]), az = snap(xyz[ia * 3 + 2]);
-            float bx = snap(xyz[ib * 3]), by = snap(xyz[ib * 3 + 1]), bz = snap(xyz[ib * 3 + 2]);
-            float cx = snap(xyz[ic * 3]), cy = snap(xyz[ic * 3 + 1]), cz = snap(xyz[ic * 3 + 2]);
+            float ax = xyz[ia * 3], ay = xyz[ia * 3 + 1], az = xyz[ia * 3 + 2];
+            float bx = xyz[ib * 3], by = xyz[ib * 3 + 1], bz = xyz[ib * 3 + 2];
+            float cx = xyz[ic * 3], cy = xyz[ic * 3 + 1], cz = xyz[ic * 3 + 2];
             float ex = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
             float ey = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
             float ez = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-            if (ex * ex + ey * ey + ez * ez < 1e-12f) continue;
-            built.skin.insert(built.skin.end(), { ax, ay, az, bx, by, bz, cx, cy, cz });
+            float el2 = ex * ex + ey * ey + ez * ez;
+            if (el2 < 1e-12f) continue;
+            if (walk3d) {
+                built.skin.push_back(ax * size); built.skin.push_back(-ay * size); built.skin.push_back(-az * size);
+                built.skin.push_back(bx * size); built.skin.push_back(-by * size); built.skin.push_back(-bz * size);
+                built.skin.push_back(cx * size); built.skin.push_back(-cy * size); built.skin.push_back(-cz * size);
+                continue;
+            }
+            bool yFace = std::fabs(ey) >= std::fabs(ex) && std::fabs(ey) >= std::fabs(ez);
+            bool xFace = !yFace && std::fabs(ex) >= std::fabs(ez);
+            /* A face looking down the hall flattens across the whole opening. */
+            if (!yFace && !xFace) continue;
             /* model +Y is up; the physics plane's +Y is down the screen */
             float sax = ax * size, say = -ay * size;
             float sbx = bx * size, sby = -by * size;
             float scx = cx * size, scy = -cy * size;
-            float minx = std::min(sax, std::min(sbx, scx));
-            float maxx = std::max(sax, std::max(sbx, scx));
-            float miny = std::min(say, std::min(sby, scy));
-            float maxy = std::max(say, std::max(sby, scy));
-            int i0 = (int)std::floor((minx + size * 0.5f) / cell);
-            int i1 = (int)std::floor((maxx + size * 0.5f) / cell);
-            int j0 = (int)std::floor((miny + size * 0.5f) / cell);
-            int j1 = (int)std::floor((maxy + size * 0.5f) / cell);
-            if (i0 < 0) i0 = 0;
-            if (j0 < 0) j0 = 0;
-            if (i1 >= n) i1 = n - 1;
-            if (j1 >= n) j1 = n - 1;
-            for (int j = j0; j <= j1; ++j) {
-                for (int i = i0; i <= i1; ++i) {
-                    float px = -size * 0.5f + (i + 0.5f) * cell;
-                    float py = -size * 0.5f + (j + 0.5f) * cell;
-                    if (point_in_tri(px, py, sax, say, sbx, sby, scx, scy))
-                        occ[(size_t)j * n + i] = 1;
+            if (yFace) {
+                float x0 = std::min(sax, std::min(sbx, scx));
+                float x1 = std::max(sax, std::max(sbx, scx));
+                float y0 = std::min(say, std::min(sby, scy));
+                float y1 = std::max(say, std::max(sby, scy));
+                int slices = 1;
+                if (y1 - y0 > thick * 1.5f) {
+                    slices = (int)std::ceil((x1 - x0) / std::max(thick, 1.f));
+                    if (slices < 1) slices = 1;
+                    if (slices > n * 2) slices = n * 2;
                 }
-            }
-            int steps = n;
-            for (int s = 0; s <= steps; ++s) {
-                float u = (float)s / (float)steps;
-                mark(sax + (sbx - sax) * u, say + (sby - say) * u);
-                mark(sbx + (scx - sbx) * u, sby + (scy - sby) * u);
-                mark(scx + (sax - scx) * u, scy + (say - scy) * u);
+                float nudge = (ey > 0.f ? 1.f : -1.f) * thick * 0.5f;
+                for (int s = 0; s < slices; ++s) {
+                    float xa = x0 + (x1 - x0) * ((float)s / (float)slices);
+                    float xb = x0 + (x1 - x0) * ((float)(s + 1) / (float)slices);
+                    float ylo = 0.f, yhi = 0.f;
+                    if (!y_on_slice(xa, xb, sax, say, sbx, sby, scx, scy, ylo, yhi)) continue;
+                    float surf = (ylo + yhi) * 0.5f;
+                    float center = surf + nudge;
+                    int key = (int)std::lround(center / thick);
+                    add_span(floors[key], xa, xb, center);
+                }
+            } else {
+                float y0 = std::min(say, std::min(sby, scy));
+                float y1 = std::max(say, std::max(sby, scy));
+                float x0 = std::min(sax, std::min(sbx, scx));
+                float x1 = std::max(sax, std::max(sbx, scx));
+                int slices = 1;
+                if (x1 - x0 > thick * 1.5f) {
+                    slices = (int)std::ceil((y1 - y0) / std::max(thick, 1.f));
+                    if (slices < 1) slices = 1;
+                    if (slices > n * 2) slices = n * 2;
+                }
+                float nudge = (ex > 0.f ? -1.f : 1.f) * thick * 0.5f;
+                for (int s = 0; s < slices; ++s) {
+                    float ya = y0 + (y1 - y0) * ((float)s / (float)slices);
+                    float yb = y0 + (y1 - y0) * ((float)(s + 1) / (float)slices);
+                    float xlo = 0.f, xhi = 0.f;
+                    if (!y_on_slice(ya, yb, say, sax, sby, sbx, scy, scx, xlo, xhi)) continue;
+                    float surf = (xlo + xhi) * 0.5f;
+                    float center = surf + nudge;
+                    int key = (int)std::lround(center / thick);
+                    add_span(walls[key], ya, yb, center);
+                }
             }
         }
-        std::vector<char> used = occ;
-        for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < n; ++i) {
-                if (!used[(size_t)j * n + i]) continue;
-                int i1 = i + 1;
-                while (i1 < n && used[(size_t)j * n + i1]) ++i1;
-                int j1 = j + 1;
-                while (j1 < n) {
-                    bool row = true;
-                    for (int k = i; k < i1; ++k) if (!used[(size_t)j1 * n + k]) row = false;
-                    if (!row) break;
-                    ++j1;
+        auto flush = [&](std::unordered_map<int, Band>& bands, bool horizontal) {
+            for (auto& kv : bands) {
+                auto& spans = kv.second.spans;
+                if (spans.empty() || kv.second.count <= 0) continue;
+                std::sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) { return a.a < b.a; });
+                float fixed = (float)(kv.second.acc / (double)kv.second.count);
+                float ca = spans[0].a, cb = spans[0].b;
+                auto emit = [&](float a, float b) {
+                    HitPiece p;
+                    if (horizontal) {
+                        p.cx = (a + b) * 0.5f;
+                        p.cy = fixed;
+                        p.hw = (b - a) * 0.5f;
+                        p.hh = thick * 0.5f;
+                    } else {
+                        p.cx = fixed;
+                        p.cy = (a + b) * 0.5f;
+                        p.hw = thick * 0.5f;
+                        p.hh = (b - a) * 0.5f;
+                    }
+                    if (p.hw < 0.5f) p.hw = 0.5f;
+                    if (p.hh < 0.5f) p.hh = 0.5f;
+                    p.x0 = p.y0 = p.z0 = p.x1 = p.y1 = p.z1 = 0.f;
+                    built.pieces.push_back(p);
+                };
+                for (size_t i = 1; i < spans.size(); ++i) {
+                    if (spans[i].a <= cb + thick) cb = std::max(cb, spans[i].b);
+                    else { emit(ca, cb); ca = spans[i].a; cb = spans[i].b; }
                 }
-                for (int jj = j; jj < j1; ++jj)
-                    for (int ii = i; ii < i1; ++ii)
-                        used[(size_t)jj * n + ii] = 0;
-                float x0 = -size * 0.5f + i * cell;
-                float x1 = -size * 0.5f + i1 * cell;
-                float y0 = -size * 0.5f + j * cell;
-                float y1 = -size * 0.5f + j1 * cell;
+                emit(ca, cb);
+            }
+        };
+        if (!walk3d) {
+            flush(floors, true);
+            flush(walls, false);
+        }
+        if (!walk3d && built.pieces.empty()) {
+            float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+            for (size_t vi = 0; vi + 2 < xyz.size(); vi += 3) {
+                float sx = xyz[vi] * size, sy = -xyz[vi + 1] * size;
+                minx = std::min(minx, sx); maxx = std::max(maxx, sx);
+                miny = std::min(miny, sy); maxy = std::max(maxy, sy);
+            }
+            if (maxx > minx && maxy > miny) {
                 HitPiece p;
-                p.cx = (x0 + x1) * 0.5f;
-                p.cy = (y0 + y1) * 0.5f;
-                p.hw = (x1 - x0) * 0.5f;
-                p.hh = (y1 - y0) * 0.5f;
+                p.cx = (minx + maxx) * 0.5f;
+                p.cy = (miny + maxy) * 0.5f;
+                p.hw = (maxx - minx) * 0.5f;
+                p.hh = (maxy - miny) * 0.5f;
                 if (p.hw < 0.5f) p.hw = 0.5f;
                 if (p.hh < 0.5f) p.hh = 0.5f;
                 p.x0 = p.y0 = p.z0 = p.x1 = p.y1 = p.z1 = 0.f;
@@ -3764,9 +4076,11 @@ void physics_create_body(Entity& e) {
     b2PolygonShape box;
     b2CircleShape circle;
     const std::vector<HitPiece>* mesh = nullptr;
+    bool shell = false;
     if (e.hitbox > 0 && e.kind == "model") {
-        const std::vector<HitPiece>& pieces = hitbox_pieces(e);
-        if (!pieces.empty()) mesh = &pieces;
+        const HitCache& cache = hitbox_cache(e);
+        if (!cache.pieces.empty()) mesh = &cache.pieces;
+        else if (!cache.skin.empty()) shell = true;
     }
     if (mesh) {
         for (const HitPiece& p : *mesh) {
@@ -3779,12 +4093,38 @@ void physics_create_body(Entity& e) {
             fd.shape = &poly;
             body->CreateFixture(&fd);
         }
+    } else if (shell) {
+        /* The triangles are tested in 3D after the step. A flat box here
+           would seal the hallway. */
     } else if (e.kind == "sphere") {
         float rad = (float)(w < h ? w : h) * 0.5f / ppm;
         if (rad < 0.05f) rad = 0.05f;
         circle.m_radius = rad;
         fd.shape = &circle;
         body->CreateFixture(&fd);
+    } else if (e.kind == "capsule") {
+        /* Front view of the upright capsule: a stadium. Ends are circles. */
+        float rad = (float)(w < h ? w : h) * 0.5f / ppm;
+        if (rad < 0.05f) rad = 0.05f;
+        if (h <= w) {
+            circle.m_radius = rad;
+            fd.shape = &circle;
+            body->CreateFixture(&fd);
+        } else {
+            float bodyH = (h - w) * 0.5f / ppm;
+            if (bodyH < 0.01f) bodyH = 0.01f;
+            box.SetAsBox((w * 0.5f) / ppm, bodyH);
+            fd.shape = &box;
+            body->CreateFixture(&fd);
+            circle.m_radius = (w * 0.5f) / ppm;
+            if (circle.m_radius < 0.05f) circle.m_radius = 0.05f;
+            circle.m_p.Set(0.f, bodyH);
+            fd.shape = &circle;
+            body->CreateFixture(&fd);
+            circle.m_p.Set(0.f, -bodyH);
+            fd.shape = &circle;
+            body->CreateFixture(&fd);
+        }
     } else {
         box.SetAsBox((w / 2.0f) / ppm, (h / 2.0f) / ppm);
         fd.shape = &box;
@@ -3850,8 +4190,178 @@ extern "C" void engine_physics_begin() {
     }
 }
 
+/* Keep a moving body on a mesh shell: stand on the floor under its feet
+   and slide out of walls. The shell is stored as pixel offsets from the
+   model center, with scene Y down and scene Z into the screen. */
+static void mesh_hold(int slot) {
+    if (!active_slot(slot)) return;
+    Entity& m = g.entities[slot];
+    if (m.bodyType == 0 || !m.body) return;
+    int depth = solid_depth(m);
+    if (depth < 4) depth = m.w > 0 ? m.w : 4;
+    float R = std::min((float)m.w, (float)depth) * 0.45f;
+    if (R < 8.f) R = 8.f;
+    /* The look camera sits 42px in front of the body. A tighter radius lets
+       the eyes pass through a wall and see outside. */
+    bool eyes = m.text == "look";
+    if (!eyes) {
+        for (const Entity& c : g.entities) {
+            if (c.active && c.parentSlot == slot && c.text == "look") { eyes = true; break; }
+        }
+    }
+    if (eyes && R < 56.f) R = 56.f;
+    float px = m.x + m.w * 0.5f;
+    float pz = m.z + depth * 0.5f;
+    auto in_tri = [](float x, float y, float ax, float ay, float bx, float by, float cx, float cy) {
+        float c1 = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+        float c2 = (cx - bx) * (y - by) - (cy - by) * (x - bx);
+        float c3 = (ax - cx) * (y - cy) - (ay - cy) * (x - cx);
+        bool neg = c1 < -0.5f || c2 < -0.5f || c3 < -0.5f;
+        bool pos = c1 > 0.5f || c2 > 0.5f || c3 > 0.5f;
+        return !(neg && pos);
+    };
+    for (int pass = 0; pass < 3; ++pass) {
+        float head = (float)m.y;
+        float feet = head + m.h;
+        for (int s = 0; s < (int)g.entities.size(); ++s) {
+            if (s == slot) continue;
+            const Entity& o = g.entities[s];
+            if (!o.active || !o.hasBody || o.bodyType != 0) continue;
+            if (o.kind != "model" || o.hitbox <= 0) continue;
+            const std::vector<float>& skin = hitbox_cache(o).skin;
+            if (skin.size() < 9) continue;
+            int od = solid_depth(o);
+            float ocx = o.x + o.w * 0.5f;
+            float ocy = o.y + o.h * 0.5f;
+            float ocz = o.z + od * 0.5f;
+            for (size_t i = 0; i + 8 < skin.size(); i += 9) {
+                float ax = ocx + skin[i],     ay = ocy + skin[i + 1], az = ocz + skin[i + 2];
+                float bx = ocx + skin[i + 3], by = ocy + skin[i + 4], bz = ocz + skin[i + 5];
+                float cx = ocx + skin[i + 6], cy = ocy + skin[i + 7], cz = ocz + skin[i + 8];
+                float minx = std::min(ax, std::min(bx, cx)) - R;
+                float maxx = std::max(ax, std::max(bx, cx)) + R;
+                float minz = std::min(az, std::min(bz, cz)) - R;
+                float maxz = std::max(az, std::max(bz, cz)) + R;
+                if (px < minx || px > maxx || pz < minz || pz > maxz) continue;
+                float ex = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+                float ey = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+                float ez = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+                float el2 = ex * ex + ey * ey + ez * ez;
+                if (el2 < 1.f) continue;
+                if (std::fabs(ey) >= std::fabs(ex) && std::fabs(ey) >= std::fabs(ez)) continue;
+                float y0 = std::min(ay, std::min(by, cy));
+                float y1 = std::max(ay, std::max(by, cy));
+                if (feet < y0 || head > y1) continue;
+                float qx = px, qz = pz;
+                float best = 1e30f;
+                auto seg = [&](float xA, float zA, float xB, float zB) {
+                    float abx = xB - xA, abz = zB - zA;
+                    float apx = px - xA, apz = pz - zA;
+                    float ab2 = abx * abx + abz * abz;
+                    float t = ab2 > 1e-6f ? (apx * abx + apz * abz) / ab2 : 0.f;
+                    if (t < 0.f) t = 0.f;
+                    if (t > 1.f) t = 1.f;
+                    float sx = xA + abx * t, sz = zA + abz * t;
+                    float dx = px - sx, dz = pz - sz;
+                    float d2 = dx * dx + dz * dz;
+                    if (d2 < best) { best = d2; qx = sx; qz = sz; }
+                };
+                seg(ax, az, bx, bz);
+                seg(bx, bz, cx, cz);
+                seg(cx, cz, ax, az);
+                if (best >= R * R) continue;
+                float dx = px - qx, dz = pz - qz;
+                float d = std::sqrt(best);
+                if (d > 0.5f) {
+                    float push = (R - d) / d;
+                    px += dx * push;
+                    pz += dz * push;
+                } else {
+                    float el = std::sqrt(el2);
+                    float nx = ex / el, nz = ez / el;
+                    float mx3 = (ax + bx + cx) / 3.f, mz3 = (az + bz + cz) / 3.f;
+                    if (nx * (px - mx3) + nz * (pz - mz3) < 0.f) { nx = -nx; nz = -nz; }
+                    float nlen = std::sqrt(nx * nx + nz * nz);
+                    if (nlen > 1e-4f) { px += nx / nlen * R; pz += nz / nlen * R; }
+                }
+            }
+        }
+    }
+    float head = (float)m.y;
+    float feet = head + m.h;
+    bool any = false;
+    float surf = 0.f;
+    float gap = 0.f;
+    for (int s = 0; s < (int)g.entities.size(); ++s) {
+        if (s == slot) continue;
+        const Entity& o = g.entities[s];
+        if (!o.active || !o.hasBody || o.bodyType != 0) continue;
+        if (o.kind != "model" || o.hitbox <= 0) continue;
+        const std::vector<float>& skin = hitbox_cache(o).skin;
+        if (skin.size() < 9) continue;
+        int od = solid_depth(o);
+        float ocx = o.x + o.w * 0.5f;
+        float ocy = o.y + o.h * 0.5f;
+        float ocz = o.z + od * 0.5f;
+        for (size_t i = 0; i + 8 < skin.size(); i += 9) {
+            float ax = ocx + skin[i],     ay = ocy + skin[i + 1], az = ocz + skin[i + 2];
+            float bx = ocx + skin[i + 3], by = ocy + skin[i + 4], bz = ocz + skin[i + 5];
+            float cx = ocx + skin[i + 6], cy = ocy + skin[i + 7], cz = ocz + skin[i + 8];
+            float minx = std::min(ax, std::min(bx, cx)) - 4.f;
+            float maxx = std::max(ax, std::max(bx, cx)) + 4.f;
+            float minz = std::min(az, std::min(bz, cz)) - 4.f;
+            float maxz = std::max(az, std::max(bz, cz)) + 4.f;
+            if (px < minx || px > maxx || pz < minz || pz > maxz) continue;
+            float ex = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+            float ey = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+            float ez = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+            float el2 = ex * ex + ey * ey + ez * ez;
+            if (el2 < 1.f) continue;
+            if (!(std::fabs(ey) >= std::fabs(ex) && std::fabs(ey) >= std::fabs(ez) && ey < 0.f)) continue;
+            if (!in_tri(px, pz, ax, az, bx, bz, cx, cz)) continue;
+            float yhit = ay - (ex * (px - ax) + ez * (pz - az)) / ey;
+            bool straddle = head < yhit && feet > yhit;
+            bool close = yhit <= feet + 8.f && yhit >= feet - 8.f;
+            if (!straddle && !close) continue;
+            float g = std::fabs(yhit - feet);
+            if (!any || g < gap) { any = true; gap = g; surf = yhit; }
+        }
+    }
+    int nx = (int)std::lround(px - m.w * 0.5f);
+    int nz = (int)std::lround(pz - depth * 0.5f);
+    int ny = any ? (int)std::lround(surf - m.h) : m.y;
+    if (nx == m.x && ny == m.y && nz == m.z) return;
+    g_physWriteback = 1;
+    engine_entity_set_x(slot, nx);
+    engine_entity_set_y(slot, ny);
+    g_physWriteback = 0;
+    engine_entity_set_z(slot, nz);
+    if (!m.body) return;
+    float ppm = g.pixelsPerMeter;
+    if (ppm < 1.f) ppm = 50.f;
+    b2Vec2 v = m.body->GetLinearVelocity();
+    if (any && v.y > 0.f) v.y = 0.f;
+    m.body->SetLinearVelocity(v);
+    m.body->SetTransform(b2Vec2((m.x + m.w * 0.5f) / ppm, (m.y + m.h * 0.5f) / ppm), m.body->GetAngle());
+}
+
+static int g_gamePaused = 0;
+static int g_leavePlay = 0;
+
+extern "C" void engine_set_paused(int on) {
+    g_gamePaused = on ? 1 : 0;
+    if (g_gamePaused) engine_mouse_lock(0);
+}
+extern "C" int engine_paused() { return g_gamePaused; }
+extern "C" void engine_request_leave_play() { g_leavePlay = 1; }
+extern "C" int engine_take_leave_play() {
+    int v = g_leavePlay;
+    g_leavePlay = 0;
+    return v;
+}
+
 extern "C" void engine_physics_step(double dt) {
-    if (!g.physWorld) return;
+    if (!g.physWorld || g_gamePaused) return;
     float step = (float)dt;
     if (step <= 0.0f) step = 1.0f / 60.0f;
     if (step > 0.05f) step = 0.05f;   /* clamp so a stall can't explode the sim */
@@ -3878,6 +4388,7 @@ extern "C" void engine_physics_step(double dt) {
             if (deg < 0) deg += 360;
             e.rotDeg = deg;
         }
+        mesh_hold(s);
     }
 }
 
@@ -4260,6 +4771,7 @@ extern "C" int engine_scene_load(const char* path) {
     }
     part_reset();
     sfx_on_scene_loaded();
+    g_gamePaused = 0;
     return header_ok;
 }
 
@@ -5132,6 +5644,23 @@ void proj_scan_dir(const std::string& dir,
     proj_scan_tree(fs::path(dir), { suf }, out);
 }
 
+/* Export ships bin/<name>.dll and leaves the .nxa source behind. A script
+   still has to be found so script_init runs and can load its pictures. */
+void proj_note_compiled_scripts() {
+    std::vector<std::string> dlls;
+    proj_scan_dir(proj_join(g.projRoot, "bin"), ".dll", dlls);
+    for (const std::string& rel : dlls) {
+        if (rel.size() < 5) continue;
+        std::string name = rel;
+        name.replace(name.size() - 4, 4, ".nxa");
+        bool have = false;
+        for (const std::string& s : g.projScripts) {
+            if (same_rel(s, name)) { have = true; break; }
+        }
+        if (!have) g.projScripts.push_back(name);
+    }
+}
+
 void proj_scan_dir_multi(const std::string& dir,
                          std::initializer_list<const char*> suffixes,
                          std::vector<std::string>& out) {
@@ -5195,10 +5724,10 @@ extern "C" const char* engine_project_path_join(const char* a, const char* b) {
 
 static const char* kPrefKey[] = {
     "grid", "show_grid", "snap", "autosave", "renderer",
-    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync"
+    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd"
 };
-static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1 };
-static const int kPrefCount = 12;
+static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0 };
+static const int kPrefCount = 13;
 
 static int pref_clamp_key(const std::string& key, int v) {
     if (key == "grid") {
@@ -5211,7 +5740,7 @@ static int pref_clamp_key(const std::string& key, int v) {
         }
         return best;
     }
-    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync")
+    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd")
         return v != 0 ? 1 : 0;
     if (key == "renderer") return v == 11 ? 11 : 33;
     if (key == "music" || key == "sfx") {
@@ -5241,6 +5770,7 @@ static void pref_apply_key(const std::string& key, int v) {
         else engine_r3d_renderer("OpenGL 3.3");
     }
     else if (key == "vsync") g_vsync = v ? 1 : 0;
+    else if (key == "hd") g_hd = v ? 1 : 0;
 }
 
 static void pref_write() {
@@ -5335,6 +5865,7 @@ extern "C" int engine_project_open(const char* path) {
     }
     if (!header) return 0;
     proj_scan_dir(proj_join(g.projRoot, "scripts"), ".nxa", g.projScripts);
+    proj_note_compiled_scripts();
     proj_scan_dir(proj_join(g.projRoot, "scripts"), ".ebp", g.projBlueprints);
     proj_scan_dir(proj_join(g.projRoot, "prefabs"), ".prefab", g.projPrefabs);
     proj_scan_dir_multi(proj_join(g.projRoot, "assets"),
@@ -6021,6 +6552,7 @@ extern "C" const char* engine_project_script_dll(int i) {
 extern "C" void engine_project_rescan_scripts() {
     if (!g.projLoaded) return;
     proj_scan_dir(proj_join(g.projRoot, "scripts"), ".nxa", g.projScripts);
+    proj_note_compiled_scripts();
     proj_scan_dir(proj_join(g.projRoot, "scripts"), ".ebp", g.projBlueprints);
 }
 
@@ -6319,6 +6851,38 @@ static bool export_scannable(const std::string& ext) {
            ext == ".obj" || ext == ".mtl" || ext == ".cfg";
 }
 
+static bool export_image_ext(const std::string& ext) {
+    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga";
+}
+
+static void export_enqueue_rel(const std::string& rel);
+
+static void export_enqueue_dir_images(const fs::path& dir) {
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return;
+    fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
+    fs::directory_iterator end;
+    while (!ec && it != end) {
+        std::error_code rec;
+        if (it->is_regular_file(rec) && !rec) {
+            std::string ext = export_ext(export_norm(it->path().filename().string()));
+            if (export_image_ext(ext)) {
+                std::string rel = fs::relative(it->path(), fs::path(g.projRoot), rec).generic_string();
+                if (!rec && !rel.empty()) export_enqueue_rel(rel);
+            }
+        }
+        it.increment(ec);
+        if (ec) ec.clear();
+    }
+}
+
+static void export_enqueue_model_images(const std::string& objRel) {
+    fs::path folder = (fs::path(g.projRoot) / fs::path(objRel)).parent_path();
+    export_enqueue_dir_images(folder);
+    export_enqueue_dir_images(folder / "textures");
+    export_enqueue_dir_images(folder / "texture");
+}
+
 static void export_enqueue(int idx);
 
 static std::string export_read(const std::string& rel) {
@@ -6355,14 +6919,18 @@ static void export_scan(int idx) {
         if (n.cat == idx) continue;
         if (export_hay_has(hay, n.text)) export_enqueue(n.cat);
     }
+    /* Model pictures are chosen by filename in the model folder. The OBJ
+       usually never writes those names down, so a text scan misses them. */
+    if (ext == ".obj") export_enqueue_model_images(g_xcat[idx].rel);
 }
 
 static void export_enqueue(int idx) {
     if (idx < 0 || idx >= (int)g_xcat.size()) return;
     const std::string& key = g_xcat[idx].key;
     if (!g_exportKeys.insert(key).second) return;
-    g_exportUsed.push_back(g_xcat[idx].rel);
     std::string ext = export_ext(key);
+    /* The game runs bin/<name>.dll. The .nxa and .ebp files are the source. */
+    if (ext != ".nxa" && ext != ".ebp") g_exportUsed.push_back(g_xcat[idx].rel);
     if (export_scannable(ext)) g_xqueue.push_back(idx);
     if (ext == ".nxa" && key.rfind("scripts/", 0) == 0 && key.size() > 12) {
         std::string dll = "bin/" + key.substr(8);

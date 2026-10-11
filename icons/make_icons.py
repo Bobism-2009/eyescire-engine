@@ -658,6 +658,16 @@ def build_all():
     ic.save("cylinder")
 
     ic = Icon()
+    ic.gfill_rrect((7.2, 3.2, 16.8, 20.8), 4.8, 150)
+    cap, cd = ic._mask()
+    cd.ellipse((px(7.6), px(3.6), px(14.4), px(10.4)), fill=255)
+    cut, kd = ic._mask()
+    kd.ellipse((px(10.0), px(6.4), px(18.4), px(16.6)), fill=255)
+    cap = ImageChops.multiply(cap, ImageChops.invert(cut))
+    ic.stamp(cap, 255)
+    ic.save("capsule")
+
+    ic = Icon()
     ic.gstroke([(12, 3.6), (20.2, 15.4)], 1.45)
     ic.gstroke([(20.2, 15.4), (3.8, 15.4)], 1.45)
     ic.gstroke([(3.8, 15.4), (12, 3.6)], 1.45)

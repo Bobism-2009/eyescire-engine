@@ -74,9 +74,7 @@ fn draw_entity_at(slot: int, sx: int, sy: int, sw: int, sh: int) {
     if (kind == "label") {
         let txt: string = ent_text(slot);
         if (txt.len() == 0) txt = ent_name(slot);
-        eng_set_font_size(ui_label_font_px(sh));
-        draw_text(sx, sy, txt, rgb(ent_r(slot), ent_g(slot), ent_b(slot)));
-        eng_set_font_size(14);
+        ui_draw_label(sx, sy, sw, sh, txt, ent_r(slot), ent_g(slot), ent_b(slot), ent_sprite(slot));
     } else if (ent_is_3d_kind(slot) == 1) {
         shape3d_draw_flat(slot, sx, sy, sw, sh);
     } else if (ent_sprite_id(slot) != 0) {

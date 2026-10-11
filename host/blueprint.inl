@@ -1527,22 +1527,30 @@ void emit_node(Emit& e, int node, int ind) {
         o << "let bp_o" << node << ": int = " << object_ref(n) << ";\n";
         indent_nxa(o, ind);
         o << "if (bp_o" << node << " >= 0) {\n";
-        indent_nxa(o, ind + 1);
-        o << "ent_set_x(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 1, 0) << "));\n";
-        indent_nxa(o, ind + 1);
-        o << "ent_set_y(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 2, 0) << "));\n";
-        indent_nxa(o, ind + 1);
-        o << "ent_set_z(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 3, 0) << "));\n";
-        indent_nxa(o, ind + 1);
-        o << "ent_set_rot(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 4, 0) << "));\n";
         auto linked = [&](int pin) {
             for (const BpLink& L : e.d->links)
                 if (L.to_node == node && L.to_pin == pin) return true;
             return false;
         };
+        if (linked(1)) {
+            indent_nxa(o, ind + 1);
+            o << "ent_set_x(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 1, 0) << "));\n";
+        }
+        if (linked(2)) {
+            indent_nxa(o, ind + 1);
+            o << "ent_set_y(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 2, 0) << "));\n";
+        }
+        if (linked(3)) {
+            indent_nxa(o, ind + 1);
+            o << "ent_set_z(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 3, 0) << "));\n";
+        }
+        if (linked(4)) {
+            indent_nxa(o, ind + 1);
+            o << "ent_set_rot(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 4, 0) << "));\n";
+        }
         if (linked(12)) {
             indent_nxa(o, ind + 1);
-            o << "bp_set_yaw(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 12, 0) << "));\n";
+            o << "bp_set_yaw(bp_o" << node << ", " << expr_in_raw(*e.d, node, 12, 0) << ");\n";
         }
         if (linked(13)) {
             indent_nxa(o, ind + 1);
@@ -1558,7 +1566,7 @@ void emit_node(Emit& e, int node, int ind) {
         emit_from(e, node, 3, ind);
     } else if (n.kind == BP_YAW) {
         indent_nxa(o, ind);
-        o << "if (me >= 0) bp_set_yaw(me, (int)(" << expr_in_raw(*e.d, node, 1, 0) << "));\n";
+        o << "if (me >= 0) bp_set_yaw(me, " << expr_in_raw(*e.d, node, 1, 0) << ");\n";
         emit_from(e, node, 2, ind);
     } else if (n.kind == BP_LOOK) {
         indent_nxa(o, ind);
@@ -1626,7 +1634,7 @@ void emit_node(Emit& e, int node, int ind) {
         indent_nxa(o, ind + 1);
         o << "ent_set_z(bp_e" << node << ", (int)(" << expr_in_raw(*e.d, node, 3, 0) << "));\n";
         indent_nxa(o, ind + 1);
-        o << "bp_set_yaw(bp_e" << node << ", (int)(" << expr_in_raw(*e.d, node, 4, 0) << "));\n";
+        o << "bp_set_yaw(bp_e" << node << ", " << expr_in_raw(*e.d, node, 4, 0) << ");\n";
         indent_nxa(o, ind + 1);
         o << "bp_set_pitch(bp_e" << node << ", " << expr_in_raw(*e.d, node, 7, 0) << ");\n";
         if (!script.empty()) {
@@ -1829,26 +1837,31 @@ std::string generate_nxa(const BpDoc& src) {
     o << "extern \"C\" void engine_entity_set_x(int, int);\n";
     o << "extern \"C\" void engine_entity_set_y(int, int);\n";
     o << "extern \"C\" void engine_entity_set_z(int, int);\n";
+    o << "extern \"C\" void engine_entity_set_look(int, float, float);\n";
+    o << "extern \"C\" float engine_entity_look_yaw(int);\n";
+    o << "extern \"C\" float engine_entity_look_pitch(int);\n";
     o << "}\n";
-    o << "fn bp_yaw(slot: int): int {\n";
-    o << "    let r: int = 0;\n";
-    o << "    inline_cpp! { r = engine_entity_rot_y(slot); }\n";
+    o << "fn bp_yaw(slot: int): float {\n";
+    o << "    let r: float = 0.0;\n";
+    o << "    inline_cpp! { r = engine_entity_look_yaw(slot); }\n";
     o << "    return r;\n";
     o << "}\n";
-    o << "fn bp_set_yaw(slot: int, deg: int) {\n";
-    o << "    inline_cpp! { engine_entity_set_rot_y(slot, deg); }\n";
+    o << "fn bp_set_yaw(slot: int, deg: float) {\n";
+    o << "    let pitch: float = 0.0;\n";
+    o << "    inline_cpp! { pitch = engine_entity_look_pitch(slot); }\n";
+    o << "    inline_cpp! { engine_entity_set_look(slot, deg, pitch); }\n";
     o << "}\n";
     o << "fn bp_pitch(slot: int): float {\n";
-    o << "    let r: int = 0;\n";
-    o << "    inline_cpp! { r = engine_entity_rot_x(slot); }\n";
-    o << "    if (r > 180) { r = r - 360; }\n";
-    o << "    let f: float = r;\n";
-    o << "    return f;\n";
+    o << "    let r: float = 0.0;\n";
+    o << "    inline_cpp! { r = engine_entity_look_pitch(slot); }\n";
+    o << "    return r;\n";
     o << "}\n";
     o << "fn bp_set_pitch(slot: int, deg: float) {\n";
     o << "    if (deg > 85.0) { deg = 85.0; }\n";
     o << "    if (deg < -85.0) { deg = -85.0; }\n";
-    o << "    inline_cpp! { engine_entity_set_rot_x(slot, (int)deg); }\n";
+    o << "    let yaw: float = 0.0;\n";
+    o << "    inline_cpp! { yaw = engine_entity_look_yaw(slot); }\n";
+    o << "    inline_cpp! { engine_entity_set_look(slot, yaw, deg); }\n";
     o << "}\n";
     o << "fn bp_axis(pos: int, neg: int): float {\n";
     o << "    let v: float = 0.0;\n";

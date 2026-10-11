@@ -51,11 +51,39 @@ fn script_dll_for(slot: int): string {
     return proj_path_join(proj_path_join(proj_root(), "bin"), sc.replace(".nxa", ".dll"));
 }
 
-fn dispatch_scripts() {
+fn dispatch_draw() {
     let s: int = ent_iter_next(0);
     while (s >= 0) {
         let dll: string = script_dll_for(s);
         if (dll.len() > 0 && eng_fs_exists(dll) == 1) {
+            let h: int = eng_dll_load(dll);
+            if (h != 0) {
+                eng_set_self(s);
+                eng_dll_call(h, "script_draw");
+            }
+        }
+        s = ent_iter_next(s + 1);
+    }
+    eng_set_self(-1);
+}
+
+fn scene_has_pause(): int {
+    let s: int = ent_iter_next(0);
+    while (s >= 0) {
+        if (ent_script(s) == "pause.nxa") return 1;
+        s = ent_iter_next(s + 1);
+    }
+    return 0;
+}
+
+fn dispatch_scripts() {
+    let paused: int = eng_paused();
+    let s: int = ent_iter_next(0);
+    while (s >= 0) {
+        let run: int = 1;
+        if (paused == 1 && ent_script(s) != "pause.nxa") run = 0;
+        let dll: string = script_dll_for(s);
+        if (run == 1 && dll.len() > 0 && eng_fs_exists(dll) == 1) {
             let h: int = eng_dll_load(dll);
             if (h != 0) {
                 eng_set_self(s);
@@ -115,13 +143,10 @@ fn setup_camera() {
             let ex: float = ent_x(cam) + ent_w(cam) / 2.0;
             let ey: float = ent_y(cam) + ent_h(cam) / 2.0;
             let ez: float = ent_z(cam) + ent_depth(cam) / 2.0;
-            let yaw_i: int = ent_rot_y(cam);
-            let pitch_i: int = ent_rot_x(cam);
-            if (pitch_i > 180) pitch_i = pitch_i - 360;
-            if (pitch_i > 89) pitch_i = 89;
-            if (pitch_i < -89) pitch_i = -89;
-            let yaw: float = yaw_i;
-            let pitch: float = pitch_i;
+            let yaw: float = ent_look_yaw(cam);
+            let pitch: float = ent_look_pitch(cam);
+            if (pitch > 89.0) pitch = 89.0;
+            if (pitch < -89.0) pitch = -89.0;
             let yr: float = yaw * math.pi / 180.0;
             let pr: float = pitch * math.pi / 180.0;
             let lx: float = math.cos(pr) * math.cos(yr);
@@ -150,6 +175,27 @@ fn setup_camera() {
         if (rot > 80) rot = 80;
         if (rot < -80) rot = -80;
         tilt = rot;
+        let frame_yaw: int = ent_rot_y(cam);
+        let cam_yaw: float = frame_yaw * math.pi / 180.0;
+        let cam_pitch: float = tilt * math.pi / 180.0;
+        let vw0: int = eng_window_w();
+        let vh0: int = eng_window_h();
+        if (vw0 < 1) vw0 = WIN_W;
+        if (vh0 < 1) vh0 = WIN_H;
+        let aspect0: float = vw0;
+        aspect0 = aspect0 / vh0;
+        let t0: float = math.tan(scene_fov() * 0.5 * math.pi / 180.0);
+        let dist0: float = (ch * 0.5 * UNIT) / t0;
+        let dist_w0: float = (cw * 0.5 * UNIT) / (t0 * aspect0);
+        if (dist_w0 > dist0) dist0 = dist_w0;
+        cam_tx = cx * UNIT;
+        cam_ty = 0.0 - cy * UNIT;
+        cam_tz = 0.0 - cz * UNIT;
+        let cp0: float = math.cos(cam_pitch);
+        cam_ex = cam_tx + math.sin(cam_yaw) * cp0 * dist0;
+        cam_ey = cam_ty + math.sin(cam_pitch) * dist0;
+        cam_ez = cam_tz + math.cos(cam_yaw) * cp0 * dist0;
+        return;
     }
     let vw: int = eng_window_w();
     let vh: int = eng_window_h();
@@ -208,9 +254,7 @@ fn draw_ui_layer() {
             let txt: string = ent_text(i);
             if (ent_kind(i) == "label" || ent_kind(i) == "ui_label") {
                 if (txt.len() == 0) txt = ent_name(i);
-                let sc: int = sh / 8;
-                if (sc < 1) sc = 1;
-                eng_text_px(sx, sy, txt, r, g, b, sc);
+                ui_draw_label(sx, sy, sw, sh, txt, r, g, b, ent_sprite(i));
             } else {
                 ui_draw_box(i, sx, sy, sw, sh);
                 if (txt.len() > 0 && ui_ent_owns_caption(i) == 0) {
@@ -272,11 +316,11 @@ fn main() {
     while (eng_pump() == 1) {
         frame_begin();
         eng_fit_buffer(eng_client_w(), eng_client_h());
-        if (eng_key_pressed(VK_ESC) == 1) break;
-
         ui_canvas_layout_game_view(rect(0, 0, eng_window_w(), eng_window_h()));
         ui_poll_buttons();
         dispatch_scripts();
+        if (eng_take_leave_play() == 1) break;
+        if (eng_key_pressed(VK_ESC) == 1 && scene_has_pause() == 0) break;
         phys_step(eng_dt_seconds());
 
         /* 28,32,40 is both the 3D clear and the color present punches out,
@@ -288,6 +332,7 @@ fn main() {
                   scene_clear_r(), scene_clear_g(), scene_clear_b());
         draw_world3d();
         r3d_end(-1, 0, 0);
+        dispatch_draw();
         draw_ui_layer();
         eng_present();
         frame_end();

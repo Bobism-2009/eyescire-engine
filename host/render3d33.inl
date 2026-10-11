@@ -67,24 +67,32 @@ struct Proc33 {
 struct Pipe {
     Proc33 P;
     GLuint prog = 0, vao = 0, vboBg = 0, vboLine = 0;
-    GLuint vboBox = 0, vboSphere = 0, vboCyl = 0;
+    GLuint vboBox = 0, vboSphere = 0, vboCyl = 0, vboCap = 0;
     GLsizei nBox = 0, nSphere = 0, nCyl = 0;
     std::unordered_map<const Model*, std::pair<GLuint, GLsizei>> models;
     float proj[16]{};
     float cam[16]{};
     float color[3]{1, 1, 1};
     float amb[3]{0.55f, 0.55f, 0.55f};
-    float lpos[32]{};
-    float ldif[24]{};
-    float lspot[24]{};
-    float lsp[24]{};
+    float lpos[64]{};
+    float ldif[48]{};
+    float lspot[48]{};
+    float lsp[48]{};
     int lights = 0;
-    float lit = 1, two = 0, vert = 0, alpha = 1, ndcX = 0, ndcY = 0;
+    float lit = 1, two = 0, vert = 0, alpha = 1, ndcX = 0, ndcY = 0, fill = 0;
     bool wideLines = true;
     GLint uMvp = -1, uMv = -1, uN = -1, uColor = -1, uAmb = -1;
-    GLint uLit = -1, uTwo = -1, uVert = -1, uAlpha = -1, uNdc = -1, uLN = -1;
+    GLint uLit = -1, uTwo = -1, uVert = -1, uAlpha = -1, uNdc = -1, uLN = -1, uFill = -1;
     GLint uPos = -1, uDif = -1, uSpot = -1, uSp = -1;
     std::unordered_map<GLuint, GLuint> meshVao;
+    GLuint matProg = 0;
+    GLint muMvp = -1, muMv = -1, muN = -1, muColor = -1, muAmb = -1, muFill = -1;
+    GLint muLit = -1, muAlpha = -1, muNdc = -1, muLN = -1, muMap = -1;
+    GLint muPos = -1, muDif = -1, muSpot = -1, muSp = -1;
+    GLint muBase = -1, muNrm = -1, muMetal = -1, muRough = -1, muHeight = -1;
+    std::unordered_map<const Model*, GLuint> matTex;
+    std::unordered_map<const Model*, GLuint> matVao;
+    std::unordered_map<const Model*, std::pair<GLuint, GLsizei>> matMesh;
     GLuint skyProg = 0, skyVao = 0, skyVbo = 0, skyTex[6]{};
     GLint skyUView = -1, skyUFace[6]{};
     std::string skyStamp;
@@ -310,20 +318,21 @@ uniform mat4 uMv;
 uniform mat3 uNmat;
 uniform vec3 uColor;
 uniform vec3 uAmb;
+uniform float uFill;
 uniform float uLit;
 uniform float uTwo;
 uniform float uVert;
 uniform vec2 uNdc;
 uniform int uLN;
-uniform vec4 uLPos[8];
-uniform vec3 uLDif[8];
-uniform vec3 uLSpot[8];
-uniform vec3 uLSp[8];
+uniform vec4 uLPos[16];
+uniform vec3 uLDif[16];
+uniform vec3 uLSpot[16];
+uniform vec3 uLSp[16];
 out vec3 vFront;
 out vec3 vBack;
 vec3 shade(vec3 n, vec3 pe, vec3 mat) {
-    vec3 c = mat * uAmb;
-    for (int i = 0; i < 8; i++) {
+    vec3 direct = vec3(0.0);
+    for (int i = 0; i < 16; i++) {
         if (i >= uLN) break;
         vec3 toL;
         float att = 1.0;
@@ -341,9 +350,17 @@ vec3 shade(vec3 n, vec3 pe, vec3 mat) {
             if (s < uLSp[i].x) spot = 0.0;
             else spot = pow(max(s, 0.0), uLSp[i].y);
         }
-        c += mat * uLDif[i] * max(dot(n, toL), 0.0) * att * spot;
+        direct += uLDif[i] * max(dot(n, toL), 0.0) * att * spot;
     }
-    return clamp(c, 0.0, 1.0);
+    vec3 lit = uAmb + direct;
+    /* An ambient light fills whatever the sun left dark. Added on top, it
+       was clipped away on any face the sun had already lit, so intensity
+       looked like it did nothing. */
+    if (uFill > 0.5) {
+        vec3 d = clamp(direct, 0.0, 1.0);
+        lit = d + uAmb * (vec3(1.0) - d);
+    }
+    return clamp(lit * mat, 0.0, 1.0);
 }
 void main() {
     vec4 eye = uMv * vec4(aPos, 1.0);
@@ -408,6 +425,122 @@ void main() {
 }
 )GLSL";
 
+static const char* kMatVs = R"GLSL(
+#version 330
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNrm;
+layout(location = 2) in vec4 aTan;
+layout(location = 3) in vec2 aUv;
+uniform mat4 uMvp;
+uniform mat4 uMv;
+uniform mat3 uNmat;
+uniform vec2 uNdc;
+out vec3 vEye;
+out vec3 vN;
+out vec3 vT;
+out vec3 vB;
+out vec2 vUv;
+void main() {
+    vec4 eye = uMv * vec4(aPos, 1.0);
+    gl_Position = uMvp * vec4(aPos, 1.0);
+    gl_Position.xy += uNdc * gl_Position.w;
+    vEye = eye.xyz;
+    vN = normalize(uNmat * aNrm);
+    vT = normalize(uNmat * aTan.xyz);
+    vB = cross(vN, vT) * aTan.w;
+    vUv = aUv;
+}
+)GLSL";
+
+static const char* kMatFs = R"GLSL(
+#version 330
+in vec3 vEye;
+in vec3 vN;
+in vec3 vT;
+in vec3 vB;
+in vec2 vUv;
+uniform vec3 uColor;
+uniform vec3 uAmb;
+uniform float uFill;
+uniform float uLit;
+uniform float uAlpha;
+uniform int uLN;
+uniform int uMap;
+uniform vec4 uLPos[16];
+uniform vec3 uLDif[16];
+uniform vec3 uLSpot[16];
+uniform vec3 uLSp[16];
+uniform sampler2D uBase;
+uniform sampler2D uNrm;
+uniform sampler2D uMetal;
+uniform sampler2D uRough;
+uniform sampler2D uHeight;
+out vec4 frag;
+vec3 shade(vec3 n, vec3 pe, vec3 albedo, float metal, float rough) {
+    vec3 direct = vec3(0.0);
+    vec3 spec = vec3(0.0);
+    vec3 V = normalize(-pe);
+    float shin = mix(96.0, 6.0, clamp(rough, 0.0, 1.0));
+    vec3 F0 = mix(vec3(0.04), albedo, metal);
+    for (int i = 0; i < 16; i++) {
+        if (i >= uLN) break;
+        vec3 toL;
+        float att = 1.0;
+        if (uLPos[i].w == 0.0) {
+            toL = normalize(uLPos[i].xyz);
+        } else {
+            vec3 d = uLPos[i].xyz - pe;
+            float dist = length(d);
+            if (dist < 1e-5) toL = vec3(0.0, 0.0, 1.0);
+            else { toL = d / dist; att = 1.0 / (1.0 + uLSp[i].z * dist * dist); }
+        }
+        float spot = 1.0;
+        if (uLSp[i].x < 1.5) {
+            float s = dot(-toL, normalize(uLSpot[i]));
+            if (s < uLSp[i].x) spot = 0.0;
+            else spot = pow(max(s, 0.0), uLSp[i].y);
+        }
+        float ndl = max(dot(n, toL), 0.0);
+        float lamp = ndl * att * spot;
+        direct += uLDif[i] * lamp;
+        vec3 H = normalize(toL + V);
+        spec += uLDif[i] * pow(max(dot(n, H), 0.0), shin) * att * spot;
+    }
+    vec3 lit = uAmb + direct;
+    if (uFill > 0.5) {
+        vec3 d = clamp(direct, 0.0, 1.0);
+        lit = d + uAmb * (vec3(1.0) - d);
+    }
+    vec3 diff = albedo * (1.0 - metal);
+    return clamp(lit * diff + spec * F0 * 0.18, 0.0, 1.0);
+}
+void main() {
+    vec2 uv = vUv;
+    vec3 nrm = normalize(gl_FrontFacing ? vN : -vN);
+    vec3 tan = normalize(gl_FrontFacing ? vT : -vT);
+    vec3 bit = normalize(gl_FrontFacing ? vB : -vB);
+    vec3 albedo = ((uMap & 1) != 0) ? texture(uBase, uv).rgb : uColor;
+    if ((uMap & 2) != 0) {
+        vec3 tn = texture(uNrm, uv).rgb * 2.0 - 1.0;
+        nrm = normalize(tan * tn.x + bit * tn.y + nrm * tn.z);
+    }
+    /* Height stays on this chart. Sliding the coordinate would pull the
+       doorway onto the floor picture beside it in the texture. */
+    if ((uMap & 16) != 0) {
+        float h = texture(uHeight, uv).r;
+        vec2 dx = dFdx(uv);
+        vec2 dy = dFdy(uv);
+        float hx = texture(uHeight, uv + dx).r - h;
+        float hy = texture(uHeight, uv + dy).r - h;
+        nrm = normalize(nrm - tan * hx * 4.0 - bit * hy * 4.0);
+    }
+    float metal = ((uMap & 4) != 0) ? texture(uMetal, uv).r : 0.0;
+    float rough = ((uMap & 8) != 0) ? texture(uRough, uv).r : 0.55;
+    vec3 col = (uLit < 0.5) ? albedo : shade(nrm, vEye, albedo, metal, rough);
+    frag = vec4(col, uAlpha);
+}
+)GLSL";
+
 static GLuint compile_one(GLenum kind, const char* src) {
     GLuint s = K.P.CreateShader(kind);
     if (!s) return 0;
@@ -454,6 +587,7 @@ static bool build_program() {
     K.uN = K.P.GetLoc(K.prog, "uNmat");
     K.uColor = K.P.GetLoc(K.prog, "uColor");
     K.uAmb = K.P.GetLoc(K.prog, "uAmb");
+    K.uFill = K.P.GetLoc(K.prog, "uFill");
     K.uLit = K.P.GetLoc(K.prog, "uLit");
     K.uTwo = K.P.GetLoc(K.prog, "uTwo");
     K.uVert = K.P.GetLoc(K.prog, "uVert");
@@ -465,6 +599,55 @@ static bool build_program() {
     K.uSpot = K.P.GetLoc(K.prog, "uLSpot[0]");
     K.uSp = K.P.GetLoc(K.prog, "uLSp[0]");
     if (!(K.uMvp >= 0 && K.uMv >= 0 && K.uN >= 0)) return false;
+    GLuint mvs = compile_one(0x8B31, kMatVs);
+    GLuint mfs = compile_one(0x8B30, kMatFs);
+    if (mvs && mfs) {
+        K.matProg = K.P.CreateProgram();
+        if (K.matProg) {
+            K.P.Attach(K.matProg, mvs);
+            K.P.Attach(K.matProg, mfs);
+            K.P.Link(K.matProg);
+            GLint mok = 0;
+            K.P.GetProgramiv(K.matProg, 0x8B82, &mok);
+            if (!mok) {
+                char log[1024];
+                GLsizei n = 0;
+                if (K.P.ProgLog) K.P.ProgLog(K.matProg, 1023, &n, log);
+                log[n > 0 ? n : 0] = 0;
+                std::fprintf(stderr, "OpenGL 3.3 material: %s\n", log);
+                K.matProg = 0;
+            } else {
+                K.P.Use(K.matProg);
+                K.muMvp = K.P.GetLoc(K.matProg, "uMvp");
+                K.muMv = K.P.GetLoc(K.matProg, "uMv");
+                K.muN = K.P.GetLoc(K.matProg, "uNmat");
+                K.muColor = K.P.GetLoc(K.matProg, "uColor");
+                K.muAmb = K.P.GetLoc(K.matProg, "uAmb");
+                K.muFill = K.P.GetLoc(K.matProg, "uFill");
+                K.muLit = K.P.GetLoc(K.matProg, "uLit");
+                K.muAlpha = K.P.GetLoc(K.matProg, "uAlpha");
+                K.muNdc = K.P.GetLoc(K.matProg, "uNdc");
+                K.muLN = K.P.GetLoc(K.matProg, "uLN");
+                K.muMap = K.P.GetLoc(K.matProg, "uMap");
+                K.muPos = K.P.GetLoc(K.matProg, "uLPos[0]");
+                K.muDif = K.P.GetLoc(K.matProg, "uLDif[0]");
+                K.muSpot = K.P.GetLoc(K.matProg, "uLSpot[0]");
+                K.muSp = K.P.GetLoc(K.matProg, "uLSp[0]");
+                K.muBase = K.P.GetLoc(K.matProg, "uBase");
+                K.muNrm = K.P.GetLoc(K.matProg, "uNrm");
+                K.muMetal = K.P.GetLoc(K.matProg, "uMetal");
+                K.muRough = K.P.GetLoc(K.matProg, "uRough");
+                K.muHeight = K.P.GetLoc(K.matProg, "uHeight");
+                if (K.muBase >= 0) K.P.Uni1i(K.muBase, 0);
+                if (K.muNrm >= 0) K.P.Uni1i(K.muNrm, 1);
+                if (K.muMetal >= 0) K.P.Uni1i(K.muMetal, 2);
+                if (K.muRough >= 0) K.P.Uni1i(K.muRough, 3);
+                if (K.muHeight >= 0) K.P.Uni1i(K.muHeight, 4);
+            }
+        }
+    }
+    if (mvs) K.P.DeleteShader(mvs);
+    if (mfs) K.P.DeleteShader(mfs);
     GLuint svs = compile_one(0x8B31, kSkyVs);
     GLuint sfs = compile_one(0x8B30, kSkyFs);
     if (!svs || !sfs) return true;
@@ -598,11 +781,12 @@ static bool alive() { return S.wnd != nullptr; }
 static void upload_lights() {
     K.P.Use(K.prog);
     K.P.Uni3fv(K.uAmb, 1, K.amb);
+    if (K.uFill >= 0) K.P.Uni1f(K.uFill, K.fill);
     K.P.Uni1i(K.uLN, K.lights);
-    if (K.uPos >= 0) K.P.Uni4fv(K.uPos, 8, K.lpos);
-    if (K.uDif >= 0) K.P.Uni3fv(K.uDif, 8, K.ldif);
-    if (K.uSpot >= 0) K.P.Uni3fv(K.uSpot, 8, K.lspot);
-    if (K.uSp >= 0) K.P.Uni3fv(K.uSp, 8, K.lsp);
+    if (K.uPos >= 0) K.P.Uni4fv(K.uPos, 16, K.lpos);
+    if (K.uDif >= 0) K.P.Uni3fv(K.uDif, 16, K.ldif);
+    if (K.uSpot >= 0) K.P.Uni3fv(K.uSpot, 16, K.lspot);
+    if (K.uSp >= 0) K.P.Uni3fv(K.uSp, 16, K.lsp);
 }
 
 /* The vertex format never changes (position, normal, color). One VAO per
@@ -666,6 +850,148 @@ static void draw_mesh(GLuint vbo, GLsizei n, const float* mvp, const float* mv,
     glDrawArrays(mode, 0, n);
 }
 
+static bool model_has_maps(const Model& m) {
+    return m.base.w > 0 || m.nrm.w > 0 || m.metal.w > 0 || m.rough.w > 0 || m.height.w > 0;
+}
+
+static GLuint upload_map(const MapImg& im) {
+    if (im.w < 1 || im.rgb.empty()) return 0;
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    if (!id) return 0;
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812F);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812F);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, im.w, im.h, 0, GL_RGB, GL_UNSIGNED_BYTE, im.rgb.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return id;
+}
+
+static int model_map_bits(const Model& m) {
+    int bits = 0;
+    if (m.base.w > 0) bits |= 1;
+    if (m.nrm.w > 0) bits |= 2;
+    if (m.metal.w > 0) bits |= 4;
+    if (m.rough.w > 0) bits |= 8;
+    if (m.height.w > 0) bits |= 16;
+    return bits;
+}
+
+static GLuint model_mat_vbo(const Model& m, GLsizei* n) {
+    auto it = K.matMesh.find(&m);
+    if (it != K.matMesh.end()) { *n = it->second.second; return it->second.first; }
+    std::vector<float> v;
+    v.reserve(m.tri.size() * 12);
+    for (size_t k = 0; k + 2 < m.tri.size(); k += 3) {
+        V3 p[3], nm[3];
+        float u[3], vv[3];
+        for (int c = 0; c < 3; ++c) {
+            p[c] = m.pos[m.tri[k + c]];
+            nm[c] = (k + c < m.cn.size() && dot(m.cn[k + c], m.cn[k + c]) > 1e-8f)
+                ? norm(m.cn[k + c]) : v3(0, 0, 0);
+            u[c] = (k + c) * 2 + 1 < m.cuv.size() ? m.cuv[(k + c) * 2] : 0;
+            vv[c] = (k + c) * 2 + 1 < m.cuv.size() ? m.cuv[(k + c) * 2 + 1] : 0;
+        }
+        V3 face = norm(cross(p[1] - p[0], p[2] - p[0]));
+        V3 e1 = p[1] - p[0], e2 = p[2] - p[0];
+        float du1 = u[1] - u[0], dv1 = vv[1] - vv[0];
+        float du2 = u[2] - u[0], dv2 = vv[2] - vv[0];
+        float det = du1 * dv2 - du2 * dv1;
+        V3 tan = v3(1, 0, 0), bit = v3(0, 1, 0);
+        if (std::fabs(det) > 1e-8f) {
+            float r = 1.0f / det;
+            tan = norm((e1 * dv2 - e2 * dv1) * r);
+            bit = (e2 * du1 - e1 * du2) * r;
+        }
+        float hand = dot(cross(face, tan), bit) < 0.f ? -1.f : 1.f;
+        for (int c = 0; c < 3; ++c) {
+            V3 nrm = dot(nm[c], nm[c]) > 0.5f ? nm[c] : face;
+            V3 t = norm(tan - nrm * dot(nrm, tan));
+            v.push_back(p[c].x); v.push_back(p[c].y); v.push_back(p[c].z);
+            v.push_back(nrm.x); v.push_back(nrm.y); v.push_back(nrm.z);
+            v.push_back(t.x); v.push_back(t.y); v.push_back(t.z); v.push_back(hand);
+            v.push_back(u[c]); v.push_back(vv[c]);
+        }
+    }
+    GLuint id = 0;
+    GLsizei count = (GLsizei)(v.size() / 12);
+    if (!v.empty()) {
+        K.P.GenBuffers(1, &id);
+        K.P.BindBuffer(kArray, id);
+        K.P.BufferData(kArray, (std::intptr_t)(v.size() * sizeof(float)), v.data(), kStatic);
+        GLuint vao = 0;
+        K.P.GenVao(1, &vao);
+        K.P.BindVao(vao);
+        K.P.BindBuffer(kArray, id);
+        const GLsizei stride = (GLsizei)(12 * sizeof(float));
+        K.P.EnableAttrib(0);
+        K.P.AttribPtr(0, 3, GL_FLOAT, GL_FALSE, stride, (const void*)0);
+        K.P.EnableAttrib(1);
+        K.P.AttribPtr(1, 3, GL_FLOAT, GL_FALSE, stride, (const void*)(3 * sizeof(float)));
+        K.P.EnableAttrib(2);
+        K.P.AttribPtr(2, 4, GL_FLOAT, GL_FALSE, stride, (const void*)(6 * sizeof(float)));
+        K.P.EnableAttrib(3);
+        K.P.AttribPtr(3, 2, GL_FLOAT, GL_FALSE, stride, (const void*)(10 * sizeof(float)));
+        K.P.BindVao(0);
+        K.matVao[&m] = vao;
+    }
+    K.matMesh[&m] = { id, count };
+    *n = count;
+    return id;
+}
+
+static void draw_model_maps(const Model& m, GLsizei n, const float* mvp, const float* mv) {
+    if (!K.matProg || !K.P.ActiveTex || n <= 0) return;
+    GLuint vbo = model_mat_vbo(m, &n);
+    auto vit = K.matVao.find(&m);
+    if (!vbo || vit == K.matVao.end()) return;
+    struct MapIds { GLuint id[5]; };
+    static std::unordered_map<const Model*, MapIds> maps;
+    if (!maps.count(&m)) {
+        MapIds set{};
+        set.id[0] = upload_map(m.base);
+        set.id[1] = upload_map(m.nrm);
+        set.id[2] = upload_map(m.metal);
+        set.id[3] = upload_map(m.rough);
+        set.id[4] = upload_map(m.height);
+        maps[&m] = set;
+    }
+    const GLuint* ids = maps[&m].id;
+    float nm[9];
+    normal_matrix(mv, nm);
+    K.P.Use(K.matProg);
+    K.P.UniMat4(K.muMvp, 1, GL_FALSE, mvp);
+    K.P.UniMat4(K.muMv, 1, GL_FALSE, mv);
+    K.P.UniMat3(K.muN, 1, GL_FALSE, nm);
+    if (K.muColor >= 0) K.P.Uni3fv(K.muColor, 1, K.color);
+    if (K.muAmb >= 0) K.P.Uni3fv(K.muAmb, 1, K.amb);
+    if (K.muFill >= 0) K.P.Uni1f(K.muFill, K.fill);
+    if (K.muLit >= 0) K.P.Uni1f(K.muLit, K.lit);
+    if (K.muAlpha >= 0) K.P.Uni1f(K.muAlpha, K.alpha);
+    if (K.muNdc >= 0) K.P.Uni2f(K.muNdc, K.ndcX, K.ndcY);
+    if (K.muLN >= 0) K.P.Uni1i(K.muLN, K.lights);
+    if (K.muMap >= 0) K.P.Uni1i(K.muMap, model_map_bits(m));
+    if (K.muPos >= 0) K.P.Uni4fv(K.muPos, 16, K.lpos);
+    if (K.muDif >= 0) K.P.Uni3fv(K.muDif, 16, K.ldif);
+    if (K.muSpot >= 0) K.P.Uni3fv(K.muSpot, 16, K.lspot);
+    if (K.muSp >= 0) K.P.Uni3fv(K.muSp, 16, K.lsp);
+    for (int i = 0; i < 5; ++i) {
+        K.P.ActiveTex(0x84C0 + i);
+        glBindTexture(GL_TEXTURE_2D, ids[i]);
+    }
+    K.P.BindVao(vit->second);
+    glDrawArrays(GL_TRIANGLES, 0, n);
+    for (int i = 0; i < 5; ++i) {
+        K.P.ActiveTex(0x84C0 + i);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    K.P.ActiveTex(0x84C0);
+    K.P.Use(K.prog);
+}
+
 static void shape33(const Entity& e) {
     float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
     if (w <= 0 || h <= 0) return;
@@ -673,6 +999,7 @@ static void shape33(const Entity& e) {
     GLuint vbo = K.vboBox;
     GLsizei n = K.nBox;
     float two = 0;
+    const Model* mapped = nullptr;
     if (e.kind == "sphere") {
         float dm = std::min(w, h) * kUnit;
         sx = sy = sz = dm;
@@ -680,6 +1007,19 @@ static void shape33(const Entity& e) {
     } else if (e.kind == "cylinder") {
         sx = w * kUnit; sy = h * kUnit; sz = w * kUnit;
         vbo = K.vboCyl; n = K.nCyl;
+    } else if (e.kind == "capsule") {
+        sx = w * kUnit; sy = h * kUnit; sz = w * kUnit;
+        CapsuleLocal cap = capsule_local(w, h);
+        static std::vector<float> verts;
+        verts.clear();
+        capsule_emit(cap, sx, sy, sz, [&](float px, float py, float pz, float nx, float ny, float nz) {
+            push9(verts, px, py, pz, nx, ny, nz, 1, 1, 1);
+        });
+        if (!K.vboCap) K.P.GenBuffers(1, &K.vboCap);
+        K.P.BindBuffer(kArray, K.vboCap);
+        K.P.BufferData(kArray, (std::intptr_t)(verts.size() * sizeof(float)), verts.data(), kDynamic);
+        vbo = K.vboCap;
+        n = (GLsizei)(verts.size() / 9);
     } else {
         const Model* m = nullptr;
         if (e.kind == "model" && !e.model.empty()) m = &model_load(model_path(e.model));
@@ -688,6 +1028,7 @@ static void shape33(const Entity& e) {
             sx = sy = sz = s;
             vbo = model_vbo(*m, &n);
             two = 1;
+            if (model_has_maps(*m) && K.matProg && K.lit > 0.5f) mapped = m;
         } else {
             sx = w * kUnit; sy = h * kUnit; sz = d * kUnit;
         }
@@ -705,13 +1046,14 @@ static void shape33(const Entity& e) {
     mul(mvp, K.proj, mv);
     float saved = K.two;
     K.two = two;
-    draw_mesh(vbo, n, mvp, mv);
+    if (mapped) draw_model_maps(*mapped, n, mvp, mv);
+    else draw_mesh(vbo, n, mvp, mv);
     K.two = saved;
 }
 
 static void add_light(int slot, const float* eye, float r, float g, float b,
                       const float* spot, float cutoffCos, float exponent, float attenQ) {
-    if (slot < 0 || slot >= 8) return;
+    if (slot < 0 || slot >= 16) return;
     K.lpos[slot * 4 + 0] = eye[0];
     K.lpos[slot * 4 + 1] = eye[1];
     K.lpos[slot * 4 + 2] = eye[2];
@@ -830,7 +1172,7 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
     std::memset(K.lpos, 0, sizeof(K.lpos));
     std::memset(K.ldif, 0, sizeof(K.ldif));
     std::memset(K.lspot, 0, sizeof(K.lspot));
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 16; ++i) {
         K.lpos[i * 4 + 2] = 1;
         K.lspot[i * 3 + 2] = -1;
         K.lsp[i * 3] = 2;
@@ -846,14 +1188,18 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
         eye[3] = 0;
         add_light(slot, eye, r, g, b, noSpot, 2, 0, 0);
     };
-    if (!any_sun) put_dir(n++, kDefaultLight.x, kDefaultLight.y, kDefaultLight.z, 0.95f, 0.95f, 0.95f);
+    /* A scene that already placed lamps keeps those pools. The standby sun
+       would wash the whole room and flip it bright or black as you turn. */
+    bool has_lamp = false;
+    for (const Light& l : g_lights) if (l.type == 1 || l.type == 2) has_lamp = true;
+    if (!any_sun && !has_lamp) put_dir(n++, kDefaultLight.x, kDefaultLight.y, kDefaultLight.z, 0.95f, 0.95f, 0.95f);
     for (const Light& l : g_lights) {
         if (l.type == 3) {
             if (!any_ambient) { K.amb[0] = K.amb[1] = K.amb[2] = 0; any_ambient = true; }
             K.amb[0] += l.r; K.amb[1] += l.g; K.amb[2] += l.b;
             continue;
         }
-        if (n >= 8) continue;
+        if (n >= 16) continue;
         if (l.type == 0) {
             put_dir(n++, -l.dir.x, -l.dir.y, -l.dir.z, l.r, l.g, l.b);
         } else {
@@ -874,6 +1220,7 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
     }
     K.lights = n;
     K.lit = 1; K.vert = 0; K.two = 0; K.alpha = 1;
+    K.fill = any_ambient ? 1.0f : 0.0f;
     upload_lights();
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
@@ -910,7 +1257,23 @@ static void entity33(const Entity& e, int slot) {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
+    /* A held prop stays in the near depth band so it does not slice into the
+       walls. A little fill keeps its color map visible; the cone still shades it. */
+    bool held = slot == g_viewSlot;
+    float amb0 = K.amb[0], amb1 = K.amb[1], amb2 = K.amb[2];
+    if (held) {
+        K.amb[0] = std::min(1.f, K.amb[0] + 0.28f);
+        K.amb[1] = std::min(1.f, K.amb[1] + 0.24f);
+        K.amb[2] = std::min(1.f, K.amb[2] + 0.18f);
+        glDepthRange(0.0, 0.18);
+    }
     shape33(e);
+    if (held) {
+        K.amb[0] = amb0;
+        K.amb[1] = amb1;
+        K.amb[2] = amb2;
+        glDepthRange(0.0, 1.0);
+    }
     if (aa < 255) glDisable(GL_BLEND);
     if (e.selected) S.selected.push_back(slot);
 }
@@ -947,6 +1310,45 @@ static void cover33(const V3* pts, int ntri, int r, int g, int b, int alpha) {
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     K.lit = 1; K.vert = 0; K.alpha = 1;
+}
+
+/* The model's own triangles, not a snapped stand-in. */
+static void cover_model33(const Entity& e, int r, int g, int b, int alpha) {
+    const Model* m = nullptr;
+    if (!e.model.empty()) m = &model_load(model_path(e.model));
+    if (!m || !m->ok) return;
+    float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
+    if (w <= 0 || h <= 0) return;
+    GLsizei n = 0;
+    GLuint vbo = model_vbo(*m, &n);
+    if (!vbo || n <= 0) return;
+    flush_lines33();
+    float sz = std::max(w, h) * kUnit;
+    float t[16], rm[16], sc[16], tr[16], shape[16], mv[16], mvp[16];
+    ident(t); ident(sc);
+    t[12] = (e.x + w * 0.5f) * kUnit;
+    t[13] = -(e.y + h * 0.5f) * kUnit;
+    t[14] = -(e.z + d * 0.5f) * kUnit;
+    ::orient_matrix(rm, e.rotX, e.rotY, e.rotDeg);
+    sc[0] = sc[5] = sc[10] = sz;
+    mul(tr, t, rm);
+    mul(shape, tr, sc);
+    mul(mv, K.cam, shape);
+    mul(mvp, K.proj, mv);
+    K.color[0] = r / 255.0f; K.color[1] = g / 255.0f; K.color[2] = b / 255.0f;
+    K.lit = 0; K.vert = 0; K.two = 1;
+    K.alpha = std::clamp(alpha, 0, 255) / 255.0f;
+    K.ndcX = K.ndcY = 0;
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
+    draw_mesh(vbo, n, mvp, mv);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    K.lit = 1; K.vert = 0; K.two = 0; K.alpha = 1;
 }
 
 static void painted33(const float* v, int ntri) {

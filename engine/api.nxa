@@ -118,6 +118,8 @@ extern "C" int    engine_text_baseline_y(int, int);
 extern "C" void   engine_set_font_size(int);
 extern "C" void   engine_set_font(const char*, int);
 extern "C" void   engine_set_font_bold(int);
+extern "C" void   engine_text_file(int, int, const char*, int, int, int, int, const char*);
+extern "C" int    engine_text_file_width(const char*, int, const char*);
 extern "C" void   engine_set_clip(int, int, int, int);
 extern "C" void   engine_clear_clip();
 
@@ -139,6 +141,12 @@ extern "C" void   engine_image_free(int);
 
 extern "C" int    engine_mouse_x();
 extern "C" int    engine_mouse_y();
+extern "C" void   engine_ui_set_map(int, int, int, int);
+extern "C" int    engine_ui_screen_x(int);
+extern "C" int    engine_ui_screen_y(int);
+extern "C" int    engine_ui_screen_w(int);
+extern "C" int    engine_ui_screen_h(int);
+extern "C" int    engine_ui_hover(int, int, int, int);
 extern "C" int    engine_mouse_down(int);
 extern "C" int    engine_mouse_pressed(int);
 extern "C" int    engine_mouse_released(int);
@@ -164,6 +172,9 @@ extern "C" int    engine_entity_h(int);
 extern "C" int    engine_entity_rot(int);
 extern "C" int    engine_entity_rot_x(int);
 extern "C" int    engine_entity_rot_y(int);
+extern "C" void   engine_entity_set_look(int, float, float);
+extern "C" float  engine_entity_look_yaw(int);
+extern "C" float  engine_entity_look_pitch(int);
 extern "C" int    engine_entity_is_camera(int);
 extern "C" int    engine_find_main_camera();
 extern "C" int    engine_entity_color_r(int);
@@ -338,6 +349,10 @@ extern "C" float  engine_physics_ppm();
 extern "C" void   engine_physics_set_ppm(float);
 extern "C" int    engine_physics_active();
 extern "C" void   engine_physics_begin();
+extern "C" void   engine_set_paused(int);
+extern "C" int    engine_paused();
+extern "C" void   engine_request_leave_play();
+extern "C" int    engine_take_leave_play();
 extern "C" void   engine_physics_step(double);
 extern "C" void   engine_physics_end();
 extern "C" int    engine_entity_has_body(int);
@@ -888,6 +903,14 @@ fn eng_text_baseline_y(rect_y: int, rect_h: int): int {
 fn eng_set_font_size(px: int) { inline_cpp! { engine_set_font_size(px); } }
 fn eng_set_font(face: string, px: int) { inline_cpp! { engine_set_font(face.c_str(), px); } }
 fn eng_set_font_bold(on: int) { inline_cpp! { engine_set_font_bold(on); } }
+fn eng_text_file(x: int, y: int, s: string, r: int, g: int, b: int, px: int, path: string) {
+    inline_cpp! { engine_text_file(x, y, s.c_str(), r, g, b, px, path.c_str()); }
+}
+fn eng_text_file_width(s: string, px: int, path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_text_file_width(s.c_str(), px, path.c_str()); }
+    return r;
+}
 fn eng_set_clip(x: int, y: int, w: int, h: int) { inline_cpp! { engine_set_clip(x, y, w, h); } }
 fn eng_clear_clip() { inline_cpp! { engine_clear_clip(); } }
 
@@ -937,6 +960,16 @@ fn eng_image_free(id: int) { inline_cpp! { engine_image_free(id); } }
 
 fn eng_mouse_x(): int { let r: int = 0; inline_cpp! { r = engine_mouse_x(); } return r; }
 fn eng_mouse_y(): int { let r: int = 0; inline_cpp! { r = engine_mouse_y(); } return r; }
+fn eng_ui_set_map(ox: int, oy: int, sx: float, sy: float) {
+    let mx: int = sx * 1000.0;
+    let my: int = sy * 1000.0;
+    inline_cpp! { engine_ui_set_map(ox, oy, mx, my); }
+}
+fn eng_ui_screen_x(x: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_x(x); } return r; }
+fn eng_ui_screen_y(y: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_y(y); } return r; }
+fn eng_ui_screen_w(w: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_w(w); } return r; }
+fn eng_ui_screen_h(h: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_h(h); } return r; }
+fn eng_ui_hover(x: int, y: int, w: int, h: int): int { let r: int = 0; inline_cpp! { r = engine_ui_hover(x, y, w, h); } return r; }
 fn eng_mouse_down(btn: int): int { let r: int = 0; inline_cpp! { r = engine_mouse_down(btn); } return r; }
 fn eng_mouse_pressed(btn: int): int { let r: int = 0; inline_cpp! { r = engine_mouse_pressed(btn); } return r; }
 fn eng_mouse_released(btn: int): int { let r: int = 0; inline_cpp! { r = engine_mouse_released(btn); } return r; }
@@ -966,6 +999,9 @@ fn ent_h(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_h(slo
 fn ent_rot(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_rot(slot); } return r; }
 fn ent_rot_x(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_rot_x(slot); } return r; }
 fn ent_rot_y(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_rot_y(slot); } return r; }
+fn ent_set_look(slot: int, yaw: float, pitch: float) { inline_cpp! { engine_entity_set_look(slot, yaw, pitch); } }
+fn ent_look_yaw(slot: int): float { let r: float = 0.0; inline_cpp! { r = engine_entity_look_yaw(slot); } return r; }
+fn ent_look_pitch(slot: int): float { let r: float = 0.0; inline_cpp! { r = engine_entity_look_pitch(slot); } return r; }
 fn ent_camera(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_is_camera(slot); } return r; }
 fn ent_find_main_camera(): int { let r: int = -1; inline_cpp! { r = engine_find_main_camera(); } return r; }
 fn ent_r(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_color_r(slot); } return r; }
@@ -1340,6 +1376,10 @@ fn phys_ppm(): float { let r: float = 50.0; inline_cpp! { r = engine_physics_ppm
 fn phys_set_ppm(ppm: float) { inline_cpp! { engine_physics_set_ppm(ppm); } }
 fn phys_active(): int { let r: int = 0; inline_cpp! { r = engine_physics_active(); } return r; }
 fn phys_begin() { inline_cpp! { engine_physics_begin(); } }
+fn eng_set_paused(on: int) { inline_cpp! { engine_set_paused(on); } }
+fn eng_paused(): int { let r: int = 0; inline_cpp! { r = engine_paused(); } return r; }
+fn eng_request_leave_play() { inline_cpp! { engine_request_leave_play(); } }
+fn eng_take_leave_play(): int { let r: int = 0; inline_cpp! { r = engine_take_leave_play(); } return r; }
 fn phys_step(dt: float) { inline_cpp! { engine_physics_step(dt); } }
 fn phys_end() { inline_cpp! { engine_physics_end(); } }
 

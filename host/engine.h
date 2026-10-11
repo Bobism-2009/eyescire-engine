@@ -152,6 +152,8 @@ EYESCIRE_API int  engine_text_baseline_y(int rect_y, int rect_h);
 EYESCIRE_API void engine_set_font_size(int px);
 EYESCIRE_API void engine_set_font(const char* face, int px);
 EYESCIRE_API void engine_set_font_bold(int on);
+EYESCIRE_API void engine_text_file(int x, int y, const char* s, int r, int g, int b, int px, const char* path);
+EYESCIRE_API int  engine_text_file_width(const char* s, int px, const char* path);
 EYESCIRE_API void engine_set_clip(int x, int y, int w, int h);
 EYESCIRE_API void engine_clear_clip();
 
@@ -177,6 +179,13 @@ EYESCIRE_API void engine_image_free(int id);
 
 EYESCIRE_API int engine_mouse_x();
 EYESCIRE_API int engine_mouse_y();
+/* Canvas-to-window map, set whenever the UI layout runs. Scales are thousandths. */
+EYESCIRE_API void engine_ui_set_map(int ox, int oy, int sx_milli, int sy_milli);
+EYESCIRE_API int engine_ui_screen_x(int x);
+EYESCIRE_API int engine_ui_screen_y(int y);
+EYESCIRE_API int engine_ui_screen_w(int w);
+EYESCIRE_API int engine_ui_screen_h(int h);
+EYESCIRE_API int engine_ui_hover(int x, int y, int w, int h);
 EYESCIRE_API int engine_mouse_down(int btn);
 EYESCIRE_API int engine_mouse_pressed(int btn);
 EYESCIRE_API int engine_mouse_released(int btn);
@@ -211,6 +220,9 @@ EYESCIRE_API int  engine_entity_h(int slot);
 EYESCIRE_API int  engine_entity_rot(int slot);
 EYESCIRE_API int  engine_entity_rot_x(int slot);
 EYESCIRE_API int  engine_entity_rot_y(int slot);
+EYESCIRE_API void  engine_entity_set_look(int slot, float yaw, float pitch);
+EYESCIRE_API float engine_entity_look_yaw(int slot);
+EYESCIRE_API float engine_entity_look_pitch(int slot);
 EYESCIRE_API int  engine_entity_is_camera(int slot);
 EYESCIRE_API int  engine_find_main_camera();
 EYESCIRE_API int  engine_entity_color_r(int slot);
@@ -713,6 +725,8 @@ EYESCIRE_API void engine_r3d_begin(int x, int y, int w, int h, double ex, double
 EYESCIRE_API void engine_r3d_entity(int slot);
 /* While on, a first-person camera does not draw the possessed body. */
 EYESCIRE_API void engine_r3d_hide_pawn(int on);
+/* This slot is a held prop for the current frame: drawn in front of the walls. */
+EYESCIRE_API void engine_r3d_view_hold(int slot);
 EYESCIRE_API void engine_r3d_hitbox(int slot);
 EYESCIRE_API void engine_r3d_cone(double bx, double by, double bz, double tx, double ty, double tz,
                                   double radius, int r, int g, int b);
@@ -741,6 +755,10 @@ EYESCIRE_API int  engine_r3d_backend();   /* 0 none yet, 1 software, 2 OpenGL */
 EYESCIRE_API int  engine_r3d_renderer(const char* name); /* "OpenGL 1.1", "OpenGL 3.3", "Vulkan" */
 EYESCIRE_API const char* engine_r3d_backend_name(); /* what the last frame drew with */
 /* hidden, held cursor with relative motion (look-around cameras) */
+EYESCIRE_API void engine_set_paused(int on);
+EYESCIRE_API int  engine_paused();
+EYESCIRE_API void engine_request_leave_play();
+EYESCIRE_API int  engine_take_leave_play();
 EYESCIRE_API void engine_mouse_lock(int on);
 EYESCIRE_API int  engine_mouse_locked();
 EYESCIRE_API void engine_mouse_lock_poll();   /* once a frame while locked */

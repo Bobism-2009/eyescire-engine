@@ -30,6 +30,7 @@ fn ui_canvas_layout_letterbox(v: Rect) {
     ui_ch = ch_f;
     ui_cx = v.x + (v.w - ui_cw) / 2;
     ui_cy = v.y + (v.h - ui_ch) / 2;
+    eng_ui_set_map(ui_cx, ui_cy, ui_scale_x, ui_scale_y);
 }
 
 fn ui_canvas_layout_game_view(v: Rect) {
@@ -41,6 +42,7 @@ fn ui_canvas_layout_game_view(v: Rect) {
     ui_scale_x = ui_scale_x / UI_CANVAS_W;
     ui_scale_y = v.h;
     ui_scale_y = ui_scale_y / UI_CANVAS_H;
+    eng_ui_set_map(ui_cx, ui_cy, ui_scale_x, ui_scale_y);
 }
 
 fn ui_canvas_area(): Rect { return rect(ui_cx, ui_cy, ui_cw, ui_ch); }
@@ -293,6 +295,46 @@ fn ui_text_w(s: string, px: int): int {
     }
     eng_set_font("Consolas", px);
     return eng_text_width(s);
+}
+
+fn ui_font_file(path: string): int {
+    if (path.len() < 4) return 0;
+    let e: string = path.substring(path.len() - 4, 4);
+    if (e == ".ttf" || e == ".otf" || e == ".TTF" || e == ".OTF") return 1;
+    return 0;
+}
+
+/* A label whose picture path is a font file draws with that font.
+   Other labels stay on the pixel font in 3D and Consolas in 2D. */
+fn ui_draw_label(sx: int, sy: int, sw: int, sh: int, txt: string, r: int, g: int, b: int, font_path: string) {
+    if (txt.len() == 0) return;
+    if (ui_font_file(font_path) == 1) {
+        let px: int = sh;
+        if (px > 320) px = 320;
+        if (px < 8) px = 8;
+        let tw: int = eng_text_file_width(txt, px, font_path);
+        if (tw > sw && tw > 0) {
+            let fit: int = px * sw / tw;
+            if (fit < 8) fit = 8;
+            px = fit;
+            tw = eng_text_file_width(txt, px, font_path);
+        }
+        let x: int = sx;
+        if (tw < sw) x = sx + (sw - tw) / 2;
+        let y: int = sy + (sh - px) / 2;
+        if (y < sy) y = sy;
+        eng_text_file(x, y, txt, r, g, b, px, font_path);
+        return;
+    }
+    if (scene_render3d() == 1) {
+        let sc: int = sh / 8;
+        if (sc < 1) sc = 1;
+        eng_text_px(sx, sy, txt, r, g, b, sc);
+    } else {
+        eng_set_font("Consolas", ui_label_font_px(sh));
+        eng_text(sx, sy, txt, r, g, b);
+        eng_set_font("Consolas", 14);
+    }
 }
 
 fn ui_draw_text(x: int, y: int, s: string, r: int, g: int, b: int, px: int) {
