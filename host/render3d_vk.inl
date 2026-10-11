@@ -8,6 +8,41 @@ static int g_vkLineA = -1;
 static std::vector<float> g_vkBox, g_vkSphere, g_vkCyl, g_vkSky;
 static int g_vkUnits = 0;
 static std::unordered_map<const Model*, std::vector<float>> g_vkModel9, g_vkModel12;
+
+struct VkKeepKey { const void* p; int n; int stride; };
+struct VkKeepHash {
+    size_t operator()(const VkKeepKey& k) const {
+        return ((size_t)k.p >> 4) ^ (size_t)k.n * 131u ^ (size_t)k.stride;
+    }
+};
+struct VkKeepEq {
+    bool operator()(const VkKeepKey& a, const VkKeepKey& b) const {
+        return a.p == b.p && a.n == b.n && a.stride == b.stride;
+    }
+};
+static std::unordered_map<VkKeepKey, uint64_t, VkKeepHash, VkKeepEq> g_vkKeep;
+static int g_vkKeepEpoch = -1;
+
+static int vk_mesh_stable(const float* p) {
+    if (!p) return 0;
+    if (p == g_vkBox.data() || p == g_vkSphere.data() || p == g_vkCyl.data() || p == g_vkSky.data()) return 1;
+    for (const auto& kv : g_vkModel9) if (p == kv.second.data()) return 1;
+    for (const auto& kv : g_vkModel12) if (p == kv.second.data()) return 1;
+    return 0;
+}
+
+static uint64_t vk_kept(const float* p, int n, int stride) {
+    int ep = nexa_vk14::epoch();
+    if (ep != g_vkKeepEpoch) { g_vkKeep.clear(); g_vkKeepEpoch = ep; }
+    if (!vk_mesh_stable(p) || n <= 0) return ~0ull;
+    VkKeepKey key{ p, n, stride };
+    auto it = g_vkKeep.find(key);
+    if (it != g_vkKeep.end()) return it->second;
+    uint64_t off = nexa_vk14::vert_keep(p, (uint64_t)n * (uint64_t)stride);
+    if (off == ~0ull) return off;
+    g_vkKeep.emplace(key, off);
+    return off;
+}
 static std::unordered_map<int, std::vector<unsigned char>> g_vkPartFlip;
 
 static void vk_units() {
@@ -233,7 +268,9 @@ static void vk_draw_world(const float* v, int n, const float* shape, int useShad
     else ident(light);
     normal_matrix(mv, nm);
     vk_pack(draw, mvp, mv, light, nm, cr, cg, cb, alpha, lit, vert, two, ndcX, ndcY, 0, amb ? amb : g_vkAmb);
-    nexa_vk14::mesh_draw(v, n, draw, kind);
+    uint64_t off = vk_kept(v, n, 36);
+    if (off != ~0ull) nexa_vk14::mesh_draw_kept(off, n, draw, kind);
+    else nexa_vk14::mesh_draw(v, n, draw, kind);
 }
 
 static void vk_flush_lines() {
@@ -276,7 +313,10 @@ static void vk_entity_draw(const Entity& e, float ndcX, float ndcY, int forceKin
                 { L.mapped->rough.rgb.empty() ? nullptr : L.mapped->rough.rgb.data(), L.mapped->rough.w, L.mapped->rough.h },
                 { L.mapped->height.rgb.empty() ? nullptr : L.mapped->height.rgb.data(), L.mapped->height.w, L.mapped->height.h },
             };
-            nexa_vk14::mat_draw(mv.data(), (int)(mv.size() / 12), draw, alpha < 0.999f ? 1 : 0, maps);
+            int nv = (int)(mv.size() / 12);
+            uint64_t off = vk_kept(mv.data(), nv, 48);
+            if (off != ~0ull) nexa_vk14::mat_draw_kept(off, nv, draw, alpha < 0.999f ? 1 : 0, maps);
+            else nexa_vk14::mat_draw(mv.data(), nv, draw, alpha < 0.999f ? 1 : 0, maps);
             return;
         }
     }
@@ -482,7 +522,11 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
             if (sky->face[i].w < 1 || sky->face[i].rgb.empty()) { ok = 0; break; }
             faces[i] = { sky->face[i].rgb.data(), sky->face[i].w, sky->face[i].h };
         }
-        if (ok) nexa_vk14::sky_draw(g_vkSky.data(), 36, pc, faces);
+        if (ok) {
+            uint64_t off = vk_kept(g_vkSky.data(), 36, 12);
+            if (off != ~0ull) nexa_vk14::sky_draw_kept(off, 36, pc, faces);
+            else nexa_vk14::sky_draw(g_vkSky.data(), 36, pc, faces);
+        }
     } else {
         int cr = br, cg = bg, cb = bb;
         if (g_fog) { cr = g_fogR; cg = g_fogG; cb = g_fogB; }
@@ -614,7 +658,9 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
                 if (!L.v || L.n <= 0) continue;
                 float mvp[16];
                 mul(mvp, g_vkLightVP, L.shape);
-                nexa_vk14::shadow_draw(L.v, L.n, mvp);
+                uint64_t off = vk_kept(L.v, L.n, 36);
+                if (off != ~0ull) nexa_vk14::shadow_draw_kept(off, L.n, mvp);
+                else nexa_vk14::shadow_draw(L.v, L.n, mvp);
             }
             shadowOn = 1;
         }

@@ -2104,13 +2104,32 @@ static void finish() {
 
 static GLuint ovTex = 0;
 static int ovW = 0, ovH = 0;
+static int g_armCapture = 0;
+static std::vector<unsigned char> g_capRGBA;
+static int g_capW = 0, g_capH = 0;
+
+static void store_capture(const unsigned char* topDown, int w, int h) {
+    if (!topDown || w < 1 || h < 1) return;
+    g_capW = w;
+    g_capH = h;
+    g_capRGBA.assign(topDown, topDown + (size_t)w * (size_t)h * 4);
+    g_armCapture = 0;
+}
 
 /* Flip the resolved frame onto the view window and draw the editor's
    viewport-space HUD on top. bits is a top-down BGRA image with alpha,
    or null when the HUD is empty. */
 static void show_window(const void* bits, int w, int h) {
     if (S.vk) {
+        if (g_armCapture) nexa_vk14::arm_read(1);
         nexa_vk14::present(bits, w, h);
+        g_glPresented = g_vsync ? 1 : 0;
+        if (g_armCapture) {
+            std::vector<unsigned char> rgba;
+            int rw = 0, rh = 0;
+            if (nexa_vk14::take_read(rgba, rw, rh)) store_capture(rgba.data(), rw, rh);
+            else g_armCapture = 0;
+        }
         return;
     }
     if (!S.wnd || !wglMakeCurrent(S.dc, S.rc)) return;
@@ -2164,6 +2183,17 @@ static void show_window(const void* bits, int w, int h) {
         glDisable(GL_BLEND);
         glDisable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    if (g_armCapture && ww > 0 && hh > 0) {
+        std::vector<unsigned char> raw((size_t)ww * (size_t)hh * 4), top((size_t)ww * (size_t)hh * 4);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadBuffer(GL_BACK);
+        glReadPixels(0, 0, ww, hh, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+        for (int y = 0; y < hh; ++y)
+            std::memcpy(top.data() + (size_t)y * ww * 4,
+                        raw.data() + (size_t)(hh - 1 - y) * ww * 4,
+                        (size_t)ww * 4);
+        store_capture(top.data(), ww, hh);
     }
     g_glPresented = (g_vsync && g_swapOk) ? 1 : 0;
     SwapBuffers(S.dc);
@@ -2885,6 +2915,19 @@ void r3d::overlay_present() {
 }
 
 /* What the last frame actually drew with. Empty before the first frame. */
+extern "C" void engine_r3d_capture_arm() { r3d::glb::g_armCapture = 1; }
+extern "C" int engine_r3d_frame_wh(int* w, int* h) {
+    if (w) *w = r3d::glb::g_capW;
+    if (h) *h = r3d::glb::g_capH;
+    return r3d::glb::g_capW > 0 && r3d::glb::g_capH > 0;
+}
+extern "C" int engine_r3d_frame_copy(unsigned char* dst, int bytes) {
+    int n = r3d::glb::g_capW * r3d::glb::g_capH * 4;
+    if (!dst || bytes < n || r3d::glb::g_capRGBA.empty()) return 0;
+    std::memcpy(dst, r3d::glb::g_capRGBA.data(), (size_t)n);
+    return 1;
+}
+
 extern "C" const char* engine_r3d_backend_name() {
     if (!r3d::C.valid) return "";
     if (r3d::g_useVk) return "Vulkan 1.4";

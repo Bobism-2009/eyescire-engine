@@ -790,6 +790,10 @@ EYESCIRE_API double engine_r3d_hy();
 EYESCIRE_API int  engine_r3d_backend();   /* 0 none yet, 1 software, 2 OpenGL, 3 Vulkan 1.4 */
 EYESCIRE_API int  engine_r3d_renderer(const char* name); /* "OpenGL 1.1", "OpenGL 3.3", "Vulkan" */
 EYESCIRE_API const char* engine_r3d_backend_name(); /* what the last frame drew with */
+/* Arm the next present to keep a top-down RGBA copy of the picture on screen. */
+EYESCIRE_API void engine_r3d_capture_arm();
+EYESCIRE_API int  engine_r3d_frame_wh(int* w, int* h);
+EYESCIRE_API int  engine_r3d_frame_copy(unsigned char* dst, int bytes);
 /* hidden, held cursor with relative motion (look-around cameras) */
 EYESCIRE_API void engine_set_paused(int on);
 EYESCIRE_API int  engine_paused();

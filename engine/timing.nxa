@@ -26,19 +26,13 @@ fn frame_begin() {
 }
 
 fn frame_end() {
-    let now: float       = eng_now_ms();
-    let elapsed: float   = now - frame_t0;
-    /* VSync already waited for the monitor inside present. A second sleep
-       lands past the next refresh. */
-    if (eng_vsync() == 0) {
-        let remaining: float = frame_target_ms - elapsed;
-        if (remaining > 1.0) {
-            let r_int: int = remaining;
-            if (r_int > 0) eng_sleep_ms(r_int);
-        }
-    }
-    let after: float = eng_now_ms();
-    frame_dt_ms_last = after - frame_t0;
+    let now: float     = eng_now_ms();
+    let elapsed: float = now - frame_t0;
+    /* VSync waits inside present, so the counter sits on the monitor rate.
+       VSync off keeps the time the frame actually took, which is how a faster
+       backend shows a higher rate. */
+    if (elapsed < 0.0) elapsed = 0.0;
+    frame_dt_ms_last = elapsed;
     eng_set_dt_seconds(frame_dt_ms_last / 1000.0);
     frame_total = frame_total + 1;
 }
