@@ -78,6 +78,8 @@ fn ui_named(slot: int, want: string): int {
 fn ent_is_ui(slot: int): int {
     if (slot < 0) return 0;
     let kind: string = ent_kind(slot);
+    /* Screen picture. x/y/w/h are canvas pixels, drawn over the 3D view. */
+    if (kind == "sprite2d") return 1;
     if (kind == "label" || kind == "ui_label") return 1;
     if (ui_named(slot, "panel") == 1) return 1;
     if (ui_named(slot, "button") == 1) return 1;

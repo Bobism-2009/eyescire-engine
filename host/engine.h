@@ -185,6 +185,8 @@ EYESCIRE_API int engine_ui_screen_x(int x);
 EYESCIRE_API int engine_ui_screen_y(int y);
 EYESCIRE_API int engine_ui_screen_w(int w);
 EYESCIRE_API int engine_ui_screen_h(int h);
+/* A picture on the 1280x720 canvas, over the 3D view. x/y/w/h are canvas pixels. */
+EYESCIRE_API void engine_draw_sprite(int id, int x, int y, int w, int h, int deg, int a);
 EYESCIRE_API int engine_ui_hover(int x, int y, int w, int h);
 EYESCIRE_API int engine_mouse_down(int btn);
 EYESCIRE_API int engine_mouse_pressed(int btn);
@@ -304,6 +306,25 @@ EYESCIRE_API void engine_entity_hier_expand_all();
 
 EYESCIRE_API int  engine_self();
 EYESCIRE_API void engine_set_self(int slot);
+
+/* Public values on an object. The script writes pub_float("speed", 5) and
+   that call returns the inspector value, or 5 when the object has none.
+   0 = number, 1 = switch, 2 = text. */
+EYESCIRE_API int         engine_pub_scan(int slot);
+EYESCIRE_API const char* engine_pub_decl_name(int index);
+EYESCIRE_API int         engine_pub_decl_type(int index);
+EYESCIRE_API int         engine_pub_isset(int slot, int index);
+EYESCIRE_API const char* engine_pub_text(int slot, int index);
+/* 0 invalid, 1 valid and already stored, 2 valid and different. */
+EYESCIRE_API int         engine_pub_text_ok(int slot, int index, const char* text);
+EYESCIRE_API int         engine_pub_set_text(int slot, int index, const char* text);
+EYESCIRE_API int         engine_pub_bool(int slot, int index);
+EYESCIRE_API void        engine_pub_set_bool(int slot, int index, int v);
+EYESCIRE_API void        engine_pub_unset(int slot, int index);
+EYESCIRE_API void        engine_pub_copy(int dst, int src);
+EYESCIRE_API float       engine_pub_float(const char* name, float fallback);
+EYESCIRE_API int         engine_pub_switch(const char* name, int fallback);
+EYESCIRE_API const char* engine_pub_string(const char* name, const char* fallback);
 
 /* ======================================================================== */
 /*  Spatial helpers                                                         */

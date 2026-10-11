@@ -137,6 +137,7 @@ extern "C" void   engine_image_blit_sub_nn_tint(int, int, int, int, int, int, in
 extern "C" void   engine_image_blit_pan_nn(int, double, int, int);
 extern "C" void   engine_image_blit_scaled_rot(int, int, int, int, int, int);
 extern "C" void   engine_image_blit_scaled_rot_a(int, int, int, int, int, int, int);
+extern "C" void   engine_draw_sprite(int, int, int, int, int, int, int);
 extern "C" void   engine_image_free(int);
 
 extern "C" int    engine_mouse_x();
@@ -329,6 +330,20 @@ extern "C" void   engine_entity_hier_expand_all();
 
 extern "C" int    engine_self();
 extern "C" void   engine_set_self(int);
+extern "C" int         engine_pub_scan(int);
+extern "C" const char* engine_pub_decl_name(int);
+extern "C" int         engine_pub_decl_type(int);
+extern "C" int         engine_pub_isset(int, int);
+extern "C" const char* engine_pub_text(int, int);
+extern "C" int         engine_pub_text_ok(int, int, const char*);
+extern "C" int         engine_pub_set_text(int, int, const char*);
+extern "C" int         engine_pub_bool(int, int);
+extern "C" void        engine_pub_set_bool(int, int, int);
+extern "C" void        engine_pub_unset(int, int);
+extern "C" void        engine_pub_copy(int, int);
+extern "C" float       engine_pub_float(const char*, float);
+extern "C" int         engine_pub_switch(const char*, int);
+extern "C" const char* engine_pub_string(const char*, const char*);
 
 extern "C" int    engine_aabb_overlap(int, int);
 extern "C" int    engine_first_overlap(int, const char*);
@@ -967,6 +982,10 @@ fn eng_ui_set_map(ox: int, oy: int, sx: float, sy: float) {
 }
 fn eng_ui_screen_x(x: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_x(x); } return r; }
 fn eng_ui_screen_y(y: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_y(y); } return r; }
+/* Picture on the 1280x720 canvas. Call it from script_draw, after the canvas map is set. */
+fn eng_draw_sprite(id: int, x: int, y: int, w: int, h: int, deg: int, a: int) {
+    inline_cpp! { engine_draw_sprite(id, x, y, w, h, deg, a); }
+}
 fn eng_ui_screen_w(w: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_w(w); } return r; }
 fn eng_ui_screen_h(h: int): int { let r: int = 0; inline_cpp! { r = engine_ui_screen_h(h); } return r; }
 fn eng_ui_hover(x: int, y: int, w: int, h: int): int { let r: int = 0; inline_cpp! { r = engine_ui_hover(x, y, w, h); } return r; }
@@ -1324,6 +1343,67 @@ fn ent_hier_expand_all()   { inline_cpp! { engine_entity_hier_expand_all(); } }
 
 fn eng_self(): int { let r: int = -1; inline_cpp! { r = engine_self(); } return r; }
 fn eng_set_self(slot: int) { inline_cpp! { engine_set_self(slot); } }
+
+/* The inspector reads these calls out of the script. Each returns the value
+   saved on this object, or the second argument when that object has none. */
+fn pub_float(name: string, fallback: float): float {
+    let r: float = fallback;
+    inline_cpp! { r = engine_pub_float(name.c_str(), fallback); }
+    return r;
+}
+fn pub_bool(name: string, fallback: int): int {
+    let r: int = fallback;
+    inline_cpp! { r = engine_pub_switch(name.c_str(), fallback); }
+    return r;
+}
+fn pub_string(name: string, fallback: string): string {
+    let r: string = fallback;
+    inline_cpp! { r = engine_pub_string(name.c_str(), fallback.c_str()); }
+    return r;
+}
+fn eng_pub_scan(slot: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_pub_scan(slot); }
+    return r;
+}
+fn eng_pub_decl_name(at: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_pub_decl_name(at); }
+    return s;
+}
+fn eng_pub_decl_type(at: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_pub_decl_type(at); }
+    return r;
+}
+fn eng_pub_isset(slot: int, at: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_pub_isset(slot, at); }
+    return r;
+}
+fn eng_pub_text(slot: int, at: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_pub_text(slot, at); }
+    return s;
+}
+fn eng_pub_text_ok(slot: int, at: int, text: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_pub_text_ok(slot, at, text.c_str()); }
+    return r;
+}
+fn eng_pub_set_text(slot: int, at: int, text: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_pub_set_text(slot, at, text.c_str()); }
+    return r;
+}
+fn eng_pub_bool(slot: int, at: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_pub_bool(slot, at); }
+    return r;
+}
+fn eng_pub_set_bool(slot: int, at: int, v: int) { inline_cpp! { engine_pub_set_bool(slot, at, v); } }
+fn eng_pub_unset(slot: int, at: int) { inline_cpp! { engine_pub_unset(slot, at); } }
+fn eng_pub_copy(dst: int, src: int) { inline_cpp! { engine_pub_copy(dst, src); } }
 
 // ----- spatial helpers ------------------------------------------------------
 

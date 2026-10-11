@@ -251,6 +251,13 @@ fn draw_ui_layer() {
             let r: int = ui_fill_r;
             let g: int = ui_fill_g;
             let b: int = ui_fill_b;
+            if (ent_kind(i) == "sprite2d") {
+                let sid: int = ent_sprite_id(i);
+                if (sid != 0) eng_image_blit_scaled_rot_a(sid, sx, sy, sw, sh, ent_rot(i), ent_a(i));
+                else eng_fill_rect_a(sx, sy, sw, sh, ent_r(i), ent_g(i), ent_b(i), ent_a(i));
+                i = ent_iter_next(i + 1);
+                continue;
+            }
             let txt: string = ent_text(i);
             if (ent_kind(i) == "label" || ent_kind(i) == "ui_label") {
                 if (txt.len() == 0) txt = ent_name(i);

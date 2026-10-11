@@ -12,7 +12,7 @@ Eyescire Engine Updates:
 
 ✔ Small 2d & 3d particle emitter system- 3D must have an option to be high definition (Will cost much more performance)
 
-A way to layer 2d sprites on top of 3d worlds- For menus when the UI module is not enough- Etc.
+✔ A way to layer 2d sprites on top of 3d worlds- For menus when the UI module is not enough- Etc.
 
 ✔ A way to drag select things inside of 3d. As well as selecting multiple things at once by holding ctrl and clicking several objects.
 
@@ -42,7 +42,7 @@ Reflections- Mirrors- Things like that.
 
 Toggle Anti-Aliasing for Full project / Physical objects.
 
-Ability for variables declared as public (You implement how, not changing Nexa its-self) Shows up in the inspector for the item.
+✔ Ability for variables declared as public (You implement how, not changing Nexa its-self) Shows up in the inspector for the item.
 
 ✔ In project settings, ability to turn on and off VSync
 

@@ -77,6 +77,8 @@ fn draw_entity_at(slot: int, sx: int, sy: int, sw: int, sh: int) {
         ui_draw_label(sx, sy, sw, sh, txt, ent_r(slot), ent_g(slot), ent_b(slot), ent_sprite(slot));
     } else if (ent_is_3d_kind(slot) == 1) {
         shape3d_draw_flat(slot, sx, sy, sw, sh);
+    } else if (kind == "sprite2d" && ent_sprite_id(slot) != 0) {
+        eng_image_blit_scaled_rot_a(ent_sprite_id(slot), sx, sy, sw, sh, rot, ent_a(slot));
     } else if (ent_sprite_id(slot) != 0) {
         if (rot != 0) eng_image_blit_scaled_rot(ent_sprite_id(slot), sx, sy, sw, sh, rot);
         else          eng_image_blit_scaled(ent_sprite_id(slot), sx, sy, sw, sh);

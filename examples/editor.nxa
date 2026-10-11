@@ -2791,6 +2791,62 @@ fn parse_int_or(s: string, def: int): int {
     return n;
 }
 
+/* Values the script marked with pub_float, pub_bool, or pub_string. */
+fn inspector_draw_public(s: int, x: int, yy: int, w: int): int {
+    let n: int = eng_pub_scan(s);
+    if (n <= 0) return yy;
+    if (n > 16) n = 16;
+    yy = chrome_section(x, yy, w, "PUBLIC");
+    let i: int = 0;
+    while (i < n) {
+        let nm: string = eng_pub_decl_name(i);
+        let ty: int = eng_pub_decl_type(i);
+        chrome_field_label(x, yy, nm);
+        if (ty == 1) {
+            let on: int = eng_pub_bool(s, i);
+            let k0: string = "secondary";
+            let k1: string = "secondary";
+            if (on == 1) k1 = "primary";
+            else k0 = "primary";
+            if (ui_button_kind(rect(x, yy + 16, 70, 28), "Off", k0) == 1 && on == 1) {
+                undo_save_modify(s);
+                eng_pub_set_bool(s, i, 0);
+            }
+            if (ui_button_kind(rect(x + 78, yy + 16, 70, 28), "On", k1) == 1 && on == 0) {
+                undo_save_modify(s);
+                eng_pub_set_bool(s, i, 1);
+            }
+            if (eng_pub_isset(s, i) == 1) {
+                if (ui_button(rect(x + w - 76, yy + 16, 76, 28), "Default") == 1) {
+                    undo_save_modify(s);
+                    eng_pub_unset(s, i);
+                }
+            }
+            yy = yy + 52;
+        } else {
+            let shown: string = eng_pub_text(s, i);
+            let fid: string = "insp_pub_" + i;
+            let field_w: int = w;
+            if (eng_pub_isset(s, i) == 1) field_w = w - 84;
+            let edited: string = ui_field(fid, rect(x, yy + 16, field_w, 24), shown);
+            if (edited != shown && eng_pub_text_ok(s, i, edited) == 2) {
+                undo_save_modify(s);
+                eng_pub_set_text(s, i, edited);
+            }
+            if (eng_pub_isset(s, i) == 1) {
+                if (ui_button(rect(x + w - 76, yy + 16, 76, 24), "Default") == 1) {
+                    undo_save_modify(s);
+                    eng_pub_unset(s, i);
+                    if (edit_target == fid) edit_target = "";
+                }
+            }
+            yy = yy + 48;
+        }
+        i = i + 1;
+    }
+    return yy;
+}
+
 fn digit_of(ch: string): int {
     if (ch == "0") return 0;
     if (ch == "1") return 1;
@@ -3928,6 +3984,7 @@ fn inspector_draw_one(s: int) {
         }
     }
     yy = yy + 50;
+    yy = inspector_draw_public(s, x, yy, w);
 
     yy = chrome_section(x, yy, w, "RIGIDBODY");
     if (ent_kind(s) == "model") {
@@ -6345,7 +6402,26 @@ fn view3d_emitter_at(mx: int, my: int): int {
 }
 
 /* what a click in the 3D view lands on: a camera or light icon first, then meshes */
+fn view3d_sprite_at(mx: int, my: int): int {
+    ui_canvas_layout_game_view(game_view_rect());
+    let hit: int = -1;
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        if (ent_kind(i) == "sprite2d" && ent_shown(i) == 1) {
+            let sx: int = ui_to_screen_x(ent_x(i));
+            let sy: int = ui_to_screen_y(ent_y(i));
+            let sw: int = ui_len_w(ent_w(i));
+            let sh: int = ui_len_h(ent_h(i));
+            if (point_in_rect(mx, my, rect(sx, sy, sw, sh))) hit = i;
+        }
+        i = ent_iter_next(i + 1);
+    }
+    return hit;
+}
+
 fn view3d_pick(mx: int, my: int): int {
+    let sp: int = view3d_sprite_at(mx, my);
+    if (sp >= 0) return sp;
     let c: int = view3d_camera_at(mx, my);
     if (c >= 0) return c;
     let l: int = view3d_light_at(mx, my);
@@ -8224,7 +8300,7 @@ fn cm_draw_3d_submenu(): int {
 
     let dw: int = 180;
     let item_h: int = 22;
-    let dh: int = 6 + item_h * 10 + 26 + 6;
+    let dh: int = 6 + item_h * 11 + 26 + 6;
 
     let rx: int = context_sub2_x;
     let ry: int = context_sub2_y;
@@ -8241,7 +8317,7 @@ fn cm_draw_3d_submenu(): int {
     /* lights: the second group, under the shapes */
     let lkinds  = ["light_directional", "light_point", "light_spot", "light_ambient"];
     let llabels = ["Directional Light", "Point Light", "Spot Light", "Ambient Light"];
-    let ly: int = ry + 4 + item_h * 6;
+    let ly: int = ry + 4 + item_h * 7;
     chrome_hsep(rx + 8, ly + 5, dw - 16);
     th_caption(rx + 12, ly + 11, "LIGHT");
     ly = ly + 26;
@@ -8260,7 +8336,7 @@ fn cm_draw_3d_submenu(): int {
         ly = ly + item_h;
         li = li + 1;
     }
-    if (point_in_rect(mx, my, rect(rx, ry + 4 + item_h * 6, dw, 26))) lhover = 1;
+    if (point_in_rect(mx, my, rect(rx, ry + 4 + item_h * 7, dw, 26))) lhover = 1;
 
     let kinds  = ["cube", "sphere", "cylinder", "capsule", "model"];
     let labels = ["Cube", "Sphere", "Cylinder", "Capsule", "Model (.obj)..."];
@@ -8287,6 +8363,16 @@ fn cm_draw_3d_submenu(): int {
         let cy: int = cm_spawn_y();
         context_menu_close();
         cm_finish_create(spawn_emitter_at(cx, cy));
+        return 1;
+    }
+    yy = yy + item_h;
+    let srow: Rect = rect(rx + 2, yy, dw - 4, item_h);
+    if (point_in_rect(mx, my, srow)) any_hover = 1;
+    if (menu_item(srow.x, srow.y, srow.w, "Screen Sprite", "") == 1) {
+        let cx: int = cm_spawn_x();
+        let cy: int = cm_spawn_y();
+        context_menu_close();
+        cm_finish_create(spawn_screen_sprite_at(cx, cy));
         return 1;
     }
     if (lhover == 1) any_hover = 1;
@@ -8448,6 +8534,7 @@ fn context_menu_draw() {
                     ent_set_hitbox(ns, ent_hitbox(s));
                     ent_set_ui_value(ns, ent_ui_value(s));
                     ent_copy_button(ns, s);
+                    eng_pub_copy(ns, s);
                     undo_save_create(ns);
                     sel_clear();
                     ent_set_selected(ns, 1);
@@ -9269,6 +9356,7 @@ fn hier_icon_name(slot: int): string {
     if (kind == "cylinder") return "cylinder";
     if (kind == "capsule") return "capsule";
     if (kind == "model") return "model";
+    if (kind == "sprite2d") return "sprite";
     if (ui_ent_is_button(slot) == 1 || ui_ent_is_check(slot) == 1 || ui_ent_is_toggle(slot) == 1) return "button";
     if (ent_is_ui(slot) == 1) return "panel";
     if (ent_sprite_id(slot) != 0) return "sprite";
@@ -9630,6 +9718,59 @@ fn spawn_shape3d_at(kind: string, x_screen: int, y_screen: int): int {
     }
     if (s >= 0 && model.len() > 0) ent_set_model(s, model);
     if (s >= 0 && scene_render3d() == 0) eng_log("[3d] tip: set Rendering to 3D (Inspector, nothing selected) to play this scene in 3D");
+    return s;
+}
+
+/* Screen picture. x/y/w/h are canvas pixels (1280x720), drawn over the 3D view. */
+fn spawn_screen_sprite_at(x_screen: int, y_screen: int): int {
+    ui_canvas_layout_game_view(game_view_rect());
+    let uxf: float = screen_to_ui_x(x_screen);
+    let uyf: float = screen_to_ui_y(y_screen);
+    let sw: int = 256;
+    let sh: int = 128;
+    let ux: int = uxf - sw / 2;
+    let uy: int = uyf - sh / 2;
+    let s: int = ent_create("sprite2d", "Screen Sprite", ux, uy, sw, sh, 255, 255, 255);
+    if (s < 0) return -1;
+    let filter: string = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.gif|All files|*.*";
+    let initial: string = "";
+    if (proj_loaded() == 1) initial = proj_path_join(proj_root(), "assets");
+    let chosen: string = eng_open_file_dialog("Choose sprite", filter, initial);
+    if (chosen.len() > 0) {
+        ent_set_sprite(s, chosen);
+        let img: int = eng_image_load_cached(chosen);
+        if (img != 0) {
+            let iw: int = eng_image_w(img);
+            let ih: int = eng_image_h(img);
+            if (iw > 0 && ih > 0) {
+                let scale: float = 1.0;
+                if (iw > UI_CANVAS_W) {
+                    let fit: float = UI_CANVAS_W;
+                    fit = fit / iw;
+                    scale = fit;
+                }
+                if (ih > UI_CANVAS_H) {
+                    let fit: float = UI_CANVAS_H;
+                    fit = fit / ih;
+                    if (fit < scale) scale = fit;
+                }
+                let fw: float = iw;
+                fw = fw * scale;
+                let fh: float = ih;
+                fh = fh * scale;
+                iw = fw;
+                ih = fh;
+                if (iw < 4) iw = 4;
+                if (ih < 4) ih = 4;
+                ent_set_w(s, iw);
+                ent_set_h(s, ih);
+                let nx: int = uxf - iw / 2;
+                let ny: int = uyf - ih / 2;
+                ent_set_x(s, nx);
+                ent_set_y(s, ny);
+            }
+        }
+    }
     return s;
 }
 
@@ -10562,6 +10703,7 @@ fn edit_hotkeys() {
                     ent_set_hitbox(ns, ent_hitbox(s));
                     ent_set_ui_value(ns, ent_ui_value(s));
                     ent_copy_button(ns, s);
+                    eng_pub_copy(ns, s);
                     undo_save_create(ns);
                     sel_clear();
                     ent_set_selected(ns, 1);
@@ -10760,6 +10902,7 @@ fn play_viewport_draw() {
         viewport_draw_entities();
     }
     if (app_state == "play") {
+        ui_canvas_layout_game_view(game_view_rect());
         th_font_mono(14);
         play_dispatch_draw();
         th_font(14);

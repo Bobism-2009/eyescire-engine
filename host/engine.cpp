@@ -211,6 +211,16 @@ struct Entity {
     int         emitSize   = 28;
     int         emitHD     = 0;
     float       emitAcc    = 0;
+    /* Public script values. Saved on this object, so two objects can share a
+       script and still differ. Scene field 66. */
+    struct PubVal {
+        std::string name;
+        int         type = 0; /* 0 number, 1 switch, 2 text */
+        float       f = 0;
+        int         b = 0;
+        std::string s;
+    };
+    std::vector<PubVal> pubs;
     /* lights (scene v8), kinds "light_directional" / "light_point" /
      * "light_spot" / "light_ambient": color is r/g/b, the position is the
      * rect's center at z. Directional and spot lights shine down the screen,
@@ -1998,6 +2008,14 @@ extern "C" int engine_ui_screen_w(int w) {
 extern "C" int engine_ui_screen_h(int h) {
     int v = (int)std::lround(h * g_uiSy);
     return v < 1 ? 1 : v;
+}
+extern "C" void engine_draw_sprite(int id, int x, int y, int w, int h, int deg, int a) {
+    if (id <= 0 || w < 1 || h < 1) return;
+    if (a < 0) a = 0;
+    if (a > 255) a = 255;
+    engine_image_blit_scaled_rot_a(id,
+        engine_ui_screen_x(x), engine_ui_screen_y(y),
+        engine_ui_screen_w(w), engine_ui_screen_h(h), deg, a);
 }
 extern "C" int engine_ui_hover(int x, int y, int w, int h) {
     int sx = engine_ui_screen_x(x);
@@ -4524,6 +4542,359 @@ extern "C" float engine_entity_velocity_y(int s) {
     return 0.0f;
 }
 
+/* Public script values. The editor finds pub_float / pub_bool / pub_string
+   in the object's script. Play reads them back through the same calls. */
+
+struct PubDecl {
+    std::string name;
+    int         type = 0;
+    float       f = 0;
+    int         b = 0;
+    std::string s;
+};
+
+static std::vector<PubDecl> g_pubDecls;
+static std::string g_pubScanPath;
+static fs::file_time_type g_pubScanTime{};
+static bool g_pubScanOk = false;
+static std::string g_pubRet;
+
+static bool pub_ident(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+static void pub_skip_ws(const std::string& src, size_t& i) {
+    while (i < src.size()) {
+        char c = src[i];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
+        ++i;
+    }
+}
+static bool pub_read_string(const std::string& src, size_t& i, std::string& out) {
+    if (i >= src.size() || src[i] != '"') return false;
+    ++i;
+    out.clear();
+    while (i < src.size()) {
+        char c = src[i++];
+        if (c == '"') return true;
+        if (c == '\\' && i < src.size()) {
+            char n = src[i++];
+            if (n == 'n') out.push_back('\n');
+            else out.push_back(n);
+        } else out.push_back(c);
+    }
+    return false;
+}
+static bool pub_at(const std::string& src, size_t i, const char* kw) {
+    size_t n = std::strlen(kw);
+    if (i + n > src.size() || src.compare(i, n, kw) != 0) return false;
+    if (i > 0 && pub_ident(src[i - 1])) return false;
+    return true;
+}
+static bool pub_known(const std::string& name) {
+    for (const PubDecl& d : g_pubDecls) if (d.name == name) return true;
+    return false;
+}
+static bool pub_take_call(const std::string& src, size_t& i, int type) {
+    const char* kw = type == 0 ? "pub_float" : type == 1 ? "pub_bool" : "pub_string";
+    if (!pub_at(src, i, kw)) return false;
+    size_t j = i + std::strlen(kw);
+    pub_skip_ws(src, j);
+    if (j >= src.size() || src[j] != '(') return false;
+    ++j;
+    pub_skip_ws(src, j);
+    std::string name;
+    if (!pub_read_string(src, j, name) || name.empty()) return false;
+    pub_skip_ws(src, j);
+    if (j >= src.size() || src[j] != ',') return false;
+    ++j;
+    pub_skip_ws(src, j);
+    PubDecl d;
+    d.name = name;
+    d.type = type;
+    if (type == 0) {
+        size_t k = j;
+        if (k < src.size() && (src[k] == '+' || src[k] == '-')) ++k;
+        size_t start = k;
+        int dots = 0;
+        while (k < src.size() && ((src[k] >= '0' && src[k] <= '9') || src[k] == '.')) {
+            if (src[k] == '.') ++dots;
+            ++k;
+        }
+        if (k == start || dots > 1) return false;
+        try { d.f = std::stof(src.substr(j, k - j)); } catch (...) { return false; }
+        j = k;
+    } else if (type == 1) {
+        if (src.compare(j, 4, "true") == 0) { d.b = 1; j += 4; }
+        else if (src.compare(j, 5, "false") == 0) { d.b = 0; j += 5; }
+        else if (j < src.size() && (src[j] == '0' || src[j] == '1')) { d.b = src[j] == '1'; ++j; }
+        else return false;
+    } else {
+        if (!pub_read_string(src, j, d.s)) return false;
+    }
+    pub_skip_ws(src, j);
+    if (j >= src.size() || src[j] != ')') return false;
+    i = j + 1;
+    if ((int)g_pubDecls.size() < 16 && !pub_known(name)) g_pubDecls.push_back(d);
+    return true;
+}
+static void pub_scan_source(const std::string& src) {
+    g_pubDecls.clear();
+    bool comment = false;
+    for (size_t i = 0; i < src.size();) {
+        char c = src[i];
+        if (c == '\n') { comment = false; ++i; continue; }
+        if (comment) { ++i; continue; }
+        if (c == '/' && i + 1 < src.size() && src[i + 1] == '/') { comment = true; i += 2; continue; }
+        if (c == '"') {
+            std::string skip;
+            if (!pub_read_string(src, i, skip)) break;
+            continue;
+        }
+        if (pub_take_call(src, i, 0) || pub_take_call(src, i, 1) || pub_take_call(src, i, 2)) continue;
+        ++i;
+    }
+}
+static std::string pub_script_file(const Entity& e) {
+    if (e.script.empty()) return "";
+    fs::path rel(e.script);
+    if (rel.is_absolute()) return rel.string();
+    if (!g.projLoaded || g.projRoot.empty()) return "";
+    std::error_code ec;
+    fs::path inScripts = fs::path(g.projRoot) / "scripts" / rel;
+    if (fs::exists(inScripts, ec)) return inScripts.string();
+    fs::path atRoot = fs::path(g.projRoot) / rel;
+    if (fs::exists(atRoot, ec)) return atRoot.string();
+    return inScripts.string();
+}
+static int pub_index_of(const Entity& e, const std::string& name) {
+    for (int i = 0; i < (int)e.pubs.size(); ++i) if (e.pubs[i].name == name) return i;
+    return -1;
+}
+static std::string pub_esc(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        if (c == '\\') o += "\\\\";
+        else if (c == ';') o += "\\s";
+        else if (c == ':') o += "\\c";
+        else if (c == '|') o += "\\p";
+        else if (c == '\n') o += "\\n";
+        else if (c == '\r') o += "\\r";
+        else o.push_back(c);
+    }
+    return o;
+}
+static std::string pub_unesc(const std::string& s) {
+    std::string o;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            char n = s[++i];
+            if (n == 's') o.push_back(';');
+            else if (n == 'c') o.push_back(':');
+            else if (n == 'p') o.push_back('|');
+            else if (n == 'n') o.push_back('\n');
+            else if (n == 'r') o.push_back('\r');
+            else o.push_back(n);
+        } else o.push_back(s[i]);
+    }
+    return o;
+}
+static std::string pub_fmt_float(float v) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.6g", (double)v);
+    return buf;
+}
+static bool pub_parse_float(const char* t, float& out) {
+    if (!t || !*t) return false;
+    char* end = nullptr;
+    out = std::strtof(t, &end);
+    if (end == t || !std::isfinite(out)) return false;
+    while (*end == ' ' || *end == '\t') ++end;
+    return *end == 0;
+}
+static std::string pub_encode(const std::vector<Entity::PubVal>& pubs) {
+    std::string o;
+    for (const Entity::PubVal& p : pubs) {
+        if (!o.empty()) o.push_back(';');
+        o += pub_esc(p.name);
+        o.push_back(':');
+        o.push_back(p.type == 1 ? 'b' : p.type == 2 ? 's' : 'f');
+        o.push_back(':');
+        if (p.type == 1) o += p.b ? "1" : "0";
+        else if (p.type == 2) o += pub_esc(p.s);
+        else o += pub_fmt_float(p.f);
+    }
+    return o;
+}
+static void pub_decode(std::vector<Entity::PubVal>& pubs, const std::string& blob) {
+    pubs.clear();
+    std::string rec;
+    for (size_t i = 0; i <= blob.size(); ++i) {
+        bool cut = i == blob.size() || blob[i] == ';';
+        if (!cut) { rec.push_back(blob[i]); continue; }
+        if (!rec.empty()) {
+            int colons = 0;
+            size_t a = std::string::npos, b = std::string::npos;
+            for (size_t k = 0; k < rec.size(); ++k) {
+                if (rec[k] == '\\') { ++k; continue; }
+                if (rec[k] == ':') {
+                    if (colons == 0) a = k;
+                    else if (colons == 1) { b = k; break; }
+                    ++colons;
+                }
+            }
+            if (a != std::string::npos && b != std::string::npos && b + 1 <= rec.size()) {
+                Entity::PubVal p;
+                p.name = pub_unesc(rec.substr(0, a));
+                char ty = rec[a + 1];
+                std::string val = rec.substr(b + 1);
+                if (!p.name.empty() && (ty == 'f' || ty == 'b' || ty == 's')) {
+                    if (ty == 'b') { p.type = 1; p.b = val == "1"; }
+                    else if (ty == 's') { p.type = 2; p.s = pub_unesc(val); }
+                    else {
+                        p.type = 0;
+                        try { p.f = std::stof(val); } catch (...) { p.f = 0; }
+                    }
+                    pubs.push_back(p);
+                }
+            }
+        }
+        rec.clear();
+    }
+}
+
+extern "C" int engine_pub_scan(int slot) {
+    if (!active_slot(slot)) { g_pubDecls.clear(); g_pubScanOk = false; return 0; }
+    std::string path = pub_script_file(g.entities[slot]);
+    if (path.empty()) { g_pubDecls.clear(); g_pubScanOk = false; return 0; }
+    std::error_code ec;
+    auto when = fs::last_write_time(path, ec);
+    if (ec) { g_pubDecls.clear(); g_pubScanOk = false; return 0; }
+    if (g_pubScanPath == path && g_pubScanOk && when == g_pubScanTime) return (int)g_pubDecls.size();
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return 0;
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    pub_scan_source(src);
+    g_pubScanPath = path;
+    g_pubScanTime = when;
+    g_pubScanOk = true;
+    return (int)g_pubDecls.size();
+}
+extern "C" const char* engine_pub_decl_name(int index) {
+    g_pubRet = (index >= 0 && index < (int)g_pubDecls.size()) ? g_pubDecls[index].name : "";
+    return g_pubRet.c_str();
+}
+extern "C" int engine_pub_decl_type(int index) {
+    if (index < 0 || index >= (int)g_pubDecls.size()) return 0;
+    return g_pubDecls[index].type;
+}
+extern "C" int engine_pub_isset(int slot, int index) {
+    if (!active_slot(slot) || index < 0 || index >= (int)g_pubDecls.size()) return 0;
+    return pub_index_of(g.entities[slot], g_pubDecls[index].name) >= 0 ? 1 : 0;
+}
+extern "C" const char* engine_pub_text(int slot, int index) {
+    g_pubRet.clear();
+    if (index < 0 || index >= (int)g_pubDecls.size()) return g_pubRet.c_str();
+    const PubDecl& d = g_pubDecls[index];
+    if (active_slot(slot)) {
+        int at = pub_index_of(g.entities[slot], d.name);
+        if (at >= 0) {
+            const Entity::PubVal& p = g.entities[slot].pubs[at];
+            if (p.type == 2) g_pubRet = p.s;
+            else if (p.type == 1) g_pubRet = p.b ? "1" : "0";
+            else g_pubRet = pub_fmt_float(p.f);
+            return g_pubRet.c_str();
+        }
+    }
+    if (d.type == 2) g_pubRet = d.s;
+    else if (d.type == 1) g_pubRet = d.b ? "1" : "0";
+    else g_pubRet = pub_fmt_float(d.f);
+    return g_pubRet.c_str();
+}
+static int pub_text_status(int slot, int index, const char* text, float& fv, std::string& sv) {
+    if (!active_slot(slot) || !text || index < 0 || index >= (int)g_pubDecls.size()) return 0;
+    const PubDecl& d = g_pubDecls[index];
+    const Entity& e = g.entities[slot];
+    int at = pub_index_of(e, d.name);
+    if (d.type == 0) {
+        if (!pub_parse_float(text, fv)) return 0;
+        if (at >= 0 && e.pubs[at].type == 0 && e.pubs[at].f == fv) return 1;
+        return 2;
+    }
+    if (d.type != 2) return 0;
+    sv = text;
+    if (at >= 0 && e.pubs[at].type == 2 && e.pubs[at].s == sv) return 1;
+    return 2;
+}
+extern "C" int engine_pub_text_ok(int slot, int index, const char* text) {
+    float fv = 0;
+    std::string sv;
+    return pub_text_status(slot, index, text, fv, sv);
+}
+extern "C" int engine_pub_set_text(int slot, int index, const char* text) {
+    float fv = 0;
+    std::string sv;
+    int st = pub_text_status(slot, index, text, fv, sv);
+    if (st != 2) return st;
+    const PubDecl& d = g_pubDecls[index];
+    Entity& e = g.entities[slot];
+    int at = pub_index_of(e, d.name);
+    if (at < 0) { e.pubs.push_back({}); at = (int)e.pubs.size() - 1; e.pubs[at].name = d.name; }
+    e.pubs[at].type = d.type;
+    if (d.type == 0) e.pubs[at].f = fv;
+    else e.pubs[at].s = sv;
+    return 2;
+}
+extern "C" int engine_pub_bool(int slot, int index) {
+    if (index < 0 || index >= (int)g_pubDecls.size()) return 0;
+    const PubDecl& d = g_pubDecls[index];
+    if (d.type != 1) return 0;
+    if (active_slot(slot)) {
+        int at = pub_index_of(g.entities[slot], d.name);
+        if (at >= 0 && g.entities[slot].pubs[at].type == 1) return g.entities[slot].pubs[at].b ? 1 : 0;
+    }
+    return d.b ? 1 : 0;
+}
+extern "C" void engine_pub_set_bool(int slot, int index, int v) {
+    if (!active_slot(slot) || index < 0 || index >= (int)g_pubDecls.size()) return;
+    const PubDecl& d = g_pubDecls[index];
+    if (d.type != 1) return;
+    Entity& e = g.entities[slot];
+    int at = pub_index_of(e, d.name);
+    if (at < 0) { e.pubs.push_back({}); at = (int)e.pubs.size() - 1; e.pubs[at].name = d.name; }
+    e.pubs[at].type = 1;
+    e.pubs[at].b = v ? 1 : 0;
+}
+extern "C" void engine_pub_unset(int slot, int index) {
+    if (!active_slot(slot) || index < 0 || index >= (int)g_pubDecls.size()) return;
+    Entity& e = g.entities[slot];
+    int at = pub_index_of(e, g_pubDecls[index].name);
+    if (at >= 0) e.pubs.erase(e.pubs.begin() + at);
+}
+extern "C" void engine_pub_copy(int dst, int src) {
+    if (!active_slot(dst) || !active_slot(src) || dst == src) return;
+    g.entities[dst].pubs = g.entities[src].pubs;
+}
+extern "C" float engine_pub_float(const char* name, float fallback) {
+    if (!name || !active_slot(g.selfSlot)) return fallback;
+    int at = pub_index_of(g.entities[g.selfSlot], name);
+    if (at < 0 || g.entities[g.selfSlot].pubs[at].type != 0) return fallback;
+    return g.entities[g.selfSlot].pubs[at].f;
+}
+extern "C" int engine_pub_switch(const char* name, int fallback) {
+    if (!name || !active_slot(g.selfSlot)) return fallback ? 1 : 0;
+    int at = pub_index_of(g.entities[g.selfSlot], name);
+    if (at < 0 || g.entities[g.selfSlot].pubs[at].type != 1) return fallback ? 1 : 0;
+    return g.entities[g.selfSlot].pubs[at].b ? 1 : 0;
+}
+extern "C" const char* engine_pub_string(const char* name, const char* fallback) {
+    g_pubRet = fallback ? fallback : "";
+    if (!name || !active_slot(g.selfSlot)) return g_pubRet.c_str();
+    int at = pub_index_of(g.entities[g.selfSlot], name);
+    if (at < 0 || g.entities[g.selfSlot].pubs[at].type != 2) return g_pubRet.c_str();
+    g_pubRet = g.entities[g.selfSlot].pubs[at].s;
+    return g_pubRet.c_str();
+}
+
 extern "C" int engine_scene_save(const char* path) {
     if (!path) return 0;
     std::ofstream f(path, std::ios::binary);
@@ -4571,7 +4942,8 @@ extern "C" int engine_scene_save(const char* path) {
           << e.uiValue << "|" << e.rotX << "|" << e.rotY << "|"
           << e.sound << "|" << (e.soundLoop ? 1 : 0) << "|" << e.soundRange << "|"
           << e.emitRate << "|" << e.emitLife << "|" << e.emitSpeed << "|"
-          << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "\n";
+          << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "|"
+          << pub_encode(e.pubs) << "\n";
     }
     return 1;
 }
@@ -4738,6 +5110,7 @@ extern "C" int engine_scene_load(const char* path) {
                 if (parts.size() >= 64) { try { e.emitSpread = std::stoi(parts[63]); } catch (...) {} }
                 if (parts.size() >= 65) { try { e.emitSize = std::stoi(parts[64]); } catch (...) {} }
                 if (parts.size() >= 66) { try { e.emitHD = std::stoi(parts[65]) != 0; } catch (...) {} }
+                if (parts.size() >= 67) pub_decode(e.pubs, parts[66]);
                 if (e.emitRate < 0) e.emitRate = 0;
                 if (e.emitRate > 200) e.emitRate = 200;
                 if (e.emitLife < 50) e.emitLife = 50;
@@ -6595,7 +6968,8 @@ extern "C" int engine_project_save_prefab(const char* name, int slot) {
       << e.btnScript << "|" << e.btnFn << "|" << e.hitbox << "|" << e.uiValue << "|"
       << e.sound << "|" << (e.soundLoop ? 1 : 0) << "|" << e.soundRange << "|"
       << e.emitRate << "|" << e.emitLife << "|" << e.emitSpeed << "|"
-      << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "\n";
+      << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "|"
+      << pub_encode(e.pubs) << "\n";
 
     auto it = std::find(g.projPrefabs.begin(), g.projPrefabs.end(), fname);
     if (it == g.projPrefabs.end()) {
@@ -6656,6 +7030,7 @@ extern "C" int engine_project_spawn_prefab(int i, int x, int y) {
                 if (parts.size() >= 24) { try { engine_entity_set_emit_spread(slot, std::stoi(parts[23])); } catch (...) {} }
                 if (parts.size() >= 25) { try { engine_entity_set_emit_size(slot, std::stoi(parts[24])); } catch (...) {} }
                 if (parts.size() >= 26) { try { engine_entity_set_emit_hd(slot, std::stoi(parts[25])); } catch (...) {} }
+                if (parts.size() >= 27) pub_decode(g.entities[slot].pubs, parts[26]);
             }
             return slot;
         }
