@@ -80,6 +80,12 @@ struct Pipe {
     float lsp[48]{};
     int lights = 0;
     float lit = 1, two = 0, vert = 0, alpha = 1, ndcX = 0, ndcY = 0, fill = 0;
+    float lightVP[16]{};
+    float lightMvp[16]{};
+    int shadowOn = 0;
+    GLuint shProg = 0, shFbo = 0, shTex = 0;
+    GLint uLightMvp = -1, uSun = -1, uDoShadow = -1, uShadowMap = -1, shUMvp = -1;
+    GLint muLightMvp = -1, muSun = -1, muDoShadow = -1, muShadowMap = -1;
     bool wideLines = true;
     GLint uMvp = -1, uMv = -1, uN = -1, uColor = -1, uAmb = -1;
     GLint uLit = -1, uTwo = -1, uVert = -1, uAlpha = -1, uNdc = -1, uLN = -1, uFill = -1;
@@ -328,12 +334,18 @@ uniform vec4 uLPos[16];
 uniform vec3 uLDif[16];
 uniform vec3 uLSpot[16];
 uniform vec3 uLSp[16];
+uniform int uSun;
+uniform mat4 uLightMvp;
 out vec3 vFront;
 out vec3 vBack;
-vec3 shade(vec3 n, vec3 pe, vec3 mat) {
+out vec3 vSunF;
+out vec3 vSunB;
+out vec4 vLight;
+vec3 shade(vec3 n, vec3 pe, vec3 mat, int skip) {
     vec3 direct = vec3(0.0);
     for (int i = 0; i < 16; i++) {
         if (i >= uLN) break;
+        if (i == skip) continue;
         vec3 toL;
         float att = 1.0;
         if (uLPos[i].w == 0.0) {
@@ -366,14 +378,24 @@ void main() {
     vec4 eye = uMv * vec4(aPos, 1.0);
     gl_Position = uMvp * vec4(aPos, 1.0);
     gl_Position.xy += uNdc * gl_Position.w;
+    vLight = uLightMvp * vec4(aPos, 1.0);
     if (uLit < 0.5) {
         vec3 col = (uVert > 0.5) ? aCol : uColor;
         vFront = col;
         vBack = col;
+        vSunF = vec3(0.0);
+        vSunB = vec3(0.0);
     } else {
         vec3 n = normalize(uNmat * aNrm);
-        vFront = shade(n, eye.xyz, uColor);
-        vBack = (uTwo > 0.5) ? shade(-n, eye.xyz, uColor) : vFront;
+        vFront = shade(n, eye.xyz, uColor, -1);
+        vSunF = vFront - shade(n, eye.xyz, uColor, uSun);
+        if (uTwo > 0.5) {
+            vBack = shade(-n, eye.xyz, uColor, -1);
+            vSunB = vBack - shade(-n, eye.xyz, uColor, uSun);
+        } else {
+            vBack = vFront;
+            vSunB = vSunF;
+        }
     }
 }
 )GLSL";
@@ -418,10 +440,32 @@ static const char* kFs = R"GLSL(
 #version 330
 in vec3 vFront;
 in vec3 vBack;
+in vec3 vSunF;
+in vec3 vSunB;
+in vec4 vLight;
 uniform float uAlpha;
+uniform float uDoShadow;
+uniform sampler2D uShadowMap;
 out vec4 frag;
+float shadow_pcf(vec4 clip) {
+    if (clip.w <= 0.0) return 1.0;
+    vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
+    if (p.z > 1.0) return 1.0;
+    float s = 0.0;
+    vec2 o = vec2(1.5 / 2048.0);
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            float d = texture(uShadowMap, p.xy + vec2(float(x), float(y)) * o).r;
+            s += (p.z - 0.002 > d) ? 0.0 : 1.0;
+        }
+    }
+    return s / 9.0;
+}
 void main() {
-    frag = vec4(gl_FrontFacing ? vFront : vBack, uAlpha);
+    vec3 col = gl_FrontFacing ? vFront : vBack;
+    vec3 sun = gl_FrontFacing ? vSunF : vSunB;
+    if (uDoShadow > 0.5) col -= sun * (1.0 - shadow_pcf(vLight));
+    frag = vec4(clamp(col, 0.0, 1.0), uAlpha);
 }
 )GLSL";
 
@@ -435,7 +479,9 @@ uniform mat4 uMvp;
 uniform mat4 uMv;
 uniform mat3 uNmat;
 uniform vec2 uNdc;
+uniform mat4 uLightMvp;
 out vec3 vEye;
+out vec4 vLight;
 out vec3 vN;
 out vec3 vT;
 out vec3 vB;
@@ -449,6 +495,7 @@ void main() {
     vT = normalize(uNmat * aTan.xyz);
     vB = cross(vN, vT) * aTan.w;
     vUv = aUv;
+    vLight = uLightMvp * vec4(aPos, 1.0);
 }
 )GLSL";
 
@@ -459,6 +506,7 @@ in vec3 vN;
 in vec3 vT;
 in vec3 vB;
 in vec2 vUv;
+in vec4 vLight;
 uniform vec3 uColor;
 uniform vec3 uAmb;
 uniform float uFill;
@@ -475,7 +523,24 @@ uniform sampler2D uNrm;
 uniform sampler2D uMetal;
 uniform sampler2D uRough;
 uniform sampler2D uHeight;
+uniform int uSun;
+uniform float uDoShadow;
+uniform sampler2D uShadowMap;
 out vec4 frag;
+float shadow_pcf(vec4 clip) {
+    if (clip.w <= 0.0) return 1.0;
+    vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
+    if (p.z > 1.0) return 1.0;
+    float s = 0.0;
+    vec2 o = vec2(1.5 / 2048.0);
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            float d = texture(uShadowMap, p.xy + vec2(float(x), float(y)) * o).r;
+            s += (p.z - 0.002 > d) ? 0.0 : 1.0;
+        }
+    }
+    return s / 9.0;
+}
 vec3 shade(vec3 n, vec3 pe, vec3 albedo, float metal, float rough) {
     vec3 direct = vec3(0.0);
     vec3 spec = vec3(0.0);
@@ -501,10 +566,12 @@ vec3 shade(vec3 n, vec3 pe, vec3 albedo, float metal, float rough) {
             else spot = pow(max(s, 0.0), uLSp[i].y);
         }
         float ndl = max(dot(n, toL), 0.0);
-        float lamp = ndl * att * spot;
+        float sh = 1.0;
+        if (uDoShadow > 0.5 && i == uSun) sh = shadow_pcf(vLight);
+        float lamp = ndl * att * spot * sh;
         direct += uLDif[i] * lamp;
         vec3 H = normalize(toL + V);
-        spec += uLDif[i] * pow(max(dot(n, H), 0.0), shin) * att * spot;
+        spec += uLDif[i] * pow(max(dot(n, H), 0.0), shin) * att * spot * sh;
     }
     vec3 lit = uAmb + direct;
     if (uFill > 0.5) {
@@ -598,7 +665,40 @@ static bool build_program() {
     K.uDif = K.P.GetLoc(K.prog, "uLDif[0]");
     K.uSpot = K.P.GetLoc(K.prog, "uLSpot[0]");
     K.uSp = K.P.GetLoc(K.prog, "uLSp[0]");
+    K.uLightMvp = K.P.GetLoc(K.prog, "uLightMvp");
+    K.uSun = K.P.GetLoc(K.prog, "uSun");
+    K.uDoShadow = K.P.GetLoc(K.prog, "uDoShadow");
+    K.uShadowMap = K.P.GetLoc(K.prog, "uShadowMap");
+    if (K.uShadowMap >= 0) K.P.Uni1i(K.uShadowMap, 7);
+    if (K.uDoShadow >= 0) K.P.Uni1f(K.uDoShadow, 0);
+    if (K.uSun >= 0) K.P.Uni1i(K.uSun, -1);
     if (!(K.uMvp >= 0 && K.uMv >= 0 && K.uN >= 0)) return false;
+    static const char* kShVs = R"GLSL(
+#version 330
+layout(location = 0) in vec3 aPos;
+uniform mat4 uMvp;
+void main() { gl_Position = uMvp * vec4(aPos, 1.0); }
+)GLSL";
+    static const char* kShFs = R"GLSL(
+#version 330
+void main() {}
+)GLSL";
+    GLuint shVs = compile_one(0x8B31, kShVs);
+    GLuint shFs = compile_one(0x8B30, kShFs);
+    if (shVs && shFs) {
+        K.shProg = K.P.CreateProgram();
+        if (K.shProg) {
+            K.P.Attach(K.shProg, shVs);
+            K.P.Attach(K.shProg, shFs);
+            K.P.Link(K.shProg);
+            GLint shOk = 0;
+            K.P.GetProgramiv(K.shProg, 0x8B82, &shOk);
+            if (!shOk) K.shProg = 0;
+            else K.shUMvp = K.P.GetLoc(K.shProg, "uMvp");
+        }
+    }
+    if (shVs) K.P.DeleteShader(shVs);
+    if (shFs) K.P.DeleteShader(shFs);
     GLuint mvs = compile_one(0x8B31, kMatVs);
     GLuint mfs = compile_one(0x8B30, kMatFs);
     if (mvs && mfs) {
@@ -643,6 +743,13 @@ static bool build_program() {
                 if (K.muMetal >= 0) K.P.Uni1i(K.muMetal, 2);
                 if (K.muRough >= 0) K.P.Uni1i(K.muRough, 3);
                 if (K.muHeight >= 0) K.P.Uni1i(K.muHeight, 4);
+                K.muLightMvp = K.P.GetLoc(K.matProg, "uLightMvp");
+                K.muSun = K.P.GetLoc(K.matProg, "uSun");
+                K.muDoShadow = K.P.GetLoc(K.matProg, "uDoShadow");
+                K.muShadowMap = K.P.GetLoc(K.matProg, "uShadowMap");
+                if (K.muShadowMap >= 0) K.P.Uni1i(K.muShadowMap, 7);
+                if (K.muDoShadow >= 0) K.P.Uni1f(K.muDoShadow, 0);
+                if (K.muSun >= 0) K.P.Uni1i(K.muSun, -1);
             }
         }
     }
@@ -843,6 +950,7 @@ static void draw_mesh(GLuint vbo, GLsizei n, const float* mvp, const float* mv,
     K.P.Use(K.prog);
     K.P.UniMat4(K.uMvp, 1, GL_FALSE, mvp);
     K.P.UniMat4(K.uMv, 1, GL_FALSE, mv);
+    if (K.uLightMvp >= 0) K.P.UniMat4(K.uLightMvp, 1, GL_FALSE, K.lightMvp);
     K.P.UniMat3(K.uN, 1, GL_FALSE, nm);
     K.P.Uni3fv(K.uColor, 1, K.color);
     send_shade();
@@ -965,6 +1073,7 @@ static void draw_model_maps(const Model& m, GLsizei n, const float* mvp, const f
     K.P.Use(K.matProg);
     K.P.UniMat4(K.muMvp, 1, GL_FALSE, mvp);
     K.P.UniMat4(K.muMv, 1, GL_FALSE, mv);
+    if (K.muLightMvp >= 0) K.P.UniMat4(K.muLightMvp, 1, GL_FALSE, K.lightMvp);
     K.P.UniMat3(K.muN, 1, GL_FALSE, nm);
     if (K.muColor >= 0) K.P.Uni3fv(K.muColor, 1, K.color);
     if (K.muAmb >= 0) K.P.Uni3fv(K.muAmb, 1, K.amb);
@@ -992,21 +1101,23 @@ static void draw_model_maps(const Model& m, GLsizei n, const float* mvp, const f
     K.P.Use(K.prog);
 }
 
-static void shape33(const Entity& e) {
+/* World matrix and the unit mesh. mapped is set when the color pass should
+   use the textured material shader. */
+static bool mesh_local(const Entity& e, float* shape, GLuint* vbo, GLsizei* n, float* two, const Model** mapped) {
     float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0) return false;
     float sx, sy, sz;
-    GLuint vbo = K.vboBox;
-    GLsizei n = K.nBox;
-    float two = 0;
-    const Model* mapped = nullptr;
+    *vbo = K.vboBox;
+    *n = K.nBox;
+    *two = 0;
+    if (mapped) *mapped = nullptr;
     if (e.kind == "sphere") {
         float dm = std::min(w, h) * kUnit;
         sx = sy = sz = dm;
-        vbo = K.vboSphere; n = K.nSphere;
+        *vbo = K.vboSphere; *n = K.nSphere;
     } else if (e.kind == "cylinder") {
         sx = w * kUnit; sy = h * kUnit; sz = w * kUnit;
-        vbo = K.vboCyl; n = K.nCyl;
+        *vbo = K.vboCyl; *n = K.nCyl;
     } else if (e.kind == "capsule") {
         sx = w * kUnit; sy = h * kUnit; sz = w * kUnit;
         CapsuleLocal cap = capsule_local(w, h);
@@ -1018,22 +1129,22 @@ static void shape33(const Entity& e) {
         if (!K.vboCap) K.P.GenBuffers(1, &K.vboCap);
         K.P.BindBuffer(kArray, K.vboCap);
         K.P.BufferData(kArray, (std::intptr_t)(verts.size() * sizeof(float)), verts.data(), kDynamic);
-        vbo = K.vboCap;
-        n = (GLsizei)(verts.size() / 9);
+        *vbo = K.vboCap;
+        *n = (GLsizei)(verts.size() / 9);
     } else {
         const Model* m = nullptr;
         if (e.kind == "model" && !e.model.empty()) m = &model_load(model_path(e.model));
         if (m && m->ok) {
             float s = std::max(w, h) * kUnit;
             sx = sy = sz = s;
-            vbo = model_vbo(*m, &n);
-            two = 1;
-            if (model_has_maps(*m) && K.matProg && K.lit > 0.5f) mapped = m;
+            *vbo = model_vbo(*m, n);
+            *two = 1;
+            if (mapped && model_has_maps(*m) && K.matProg && K.lit > 0.5f) *mapped = m;
         } else {
             sx = w * kUnit; sy = h * kUnit; sz = d * kUnit;
         }
     }
-    float t[16], r[16], sc[16], tr[16], shape[16], mv[16], mvp[16];
+    float t[16], r[16], sc[16], tr[16];
     ident(t); ident(sc);
     t[12] = (e.x + w * 0.5f) * kUnit;
     t[13] = -(e.y + h * 0.5f) * kUnit;
@@ -1042,8 +1153,21 @@ static void shape33(const Entity& e) {
     sc[0] = sx; sc[5] = sy; sc[10] = sz;
     mul(tr, t, r);
     mul(shape, tr, sc);
+    return true;
+}
+
+static void shape33(const Entity& e) {
+    float shape[16];
+    GLuint vbo = 0;
+    GLsizei n = 0;
+    float two = 0;
+    const Model* mapped = nullptr;
+    if (!mesh_local(e, shape, &vbo, &n, &two, &mapped)) return;
+    float mv[16], mvp[16];
     mul(mv, K.cam, shape);
     mul(mvp, K.proj, mv);
+    if (K.shadowOn) mul(K.lightMvp, K.lightVP, shape);
+    else ident(K.lightMvp);
     float saved = K.two;
     K.two = two;
     if (mapped) draw_model_maps(*mapped, n, mvp, mv);
@@ -1105,6 +1229,153 @@ static bool draw_sky33(const float* basis) {
     glBindTexture(GL_TEXTURE_2D, 0);
     glDepthMask(GL_TRUE);
     return true;
+}
+
+using FbTexFn = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
+static FbTexFn g_fbTex = nullptr;
+static int g_shFailed = 0;
+
+static bool ensure_shadow_target() {
+    if (g_shFailed) return false;
+    if (K.shFbo && K.shTex) return true;
+    if (!g_fbTex) g_fbTex = (FbTexFn)proc("glFramebufferTexture2D");
+    if (!g_fbTex || !S.genFb || !S.bindFb || !S.status) return false;
+    glGenTextures(1, &K.shTex);
+    glBindTexture(GL_TEXTURE_2D, K.shTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, 0x81A6, 2048, 2048, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812D);
+    float border[4] = { 1, 1, 1, 1 };
+    glTexParameterfv(GL_TEXTURE_2D, 0x1004, border);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    S.genFb(1, &K.shFbo);
+    S.bindFb(kFramebuffer, K.shFbo);
+    g_fbTex(kFramebuffer, kDepthAttachment, GL_TEXTURE_2D, K.shTex, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    bool ok = S.status(kFramebuffer) == kComplete;
+    S.bindFb(kFramebuffer, S.fbo);
+    if (!ok) { g_shFailed = 1; return false; }
+    return true;
+}
+
+static void shadow_publish(int on, int sunSlot) {
+    K.shadowOn = on;
+    K.P.Use(K.prog);
+    if (K.uDoShadow >= 0) K.P.Uni1f(K.uDoShadow, on ? 1.f : 0.f);
+    if (K.uSun >= 0) K.P.Uni1i(K.uSun, on ? sunSlot : -1);
+    if (K.uShadowMap >= 0) K.P.Uni1i(K.uShadowMap, 7);
+    if (K.matProg) {
+        K.P.Use(K.matProg);
+        if (K.muDoShadow >= 0) K.P.Uni1f(K.muDoShadow, on ? 1.f : 0.f);
+        if (K.muSun >= 0) K.P.Uni1i(K.muSun, on ? sunSlot : -1);
+        if (K.muShadowMap >= 0) K.P.Uni1i(K.muShadowMap, 7);
+    }
+    K.P.Use(K.prog);
+}
+
+/* One depth picture from the directional light, covering every solid mesh. */
+static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
+    ident(K.lightVP);
+    ident(K.lightMvp);
+    if (!g_shadows || sunSlot < 0 || !K.shProg || !ensure_shadow_target()) {
+        shadow_publish(0, -1);
+        return;
+    }
+    int casters = 0;
+    float minx = 1e9f, miny = 1e9f, minz = 1e9f;
+    float maxx = -1e9f, maxy = -1e9f, maxz = -1e9f;
+    for (int s = 0; s < (int)g.entities.size(); ++s) {
+        const Entity& e = g.entities[s];
+        if (e.a <= 8 || !aa_kind(e) || !entity_shown(s)) continue;
+        float shape[16];
+        GLuint vbo = 0;
+        GLsizei n = 0;
+        float two = 0;
+        if (!mesh_local(e, shape, &vbo, &n, &two, nullptr) || !vbo || n <= 0) continue;
+        float c0 = std::sqrt(shape[0] * shape[0] + shape[1] * shape[1] + shape[2] * shape[2]);
+        float c1 = std::sqrt(shape[4] * shape[4] + shape[5] * shape[5] + shape[6] * shape[6]);
+        float c2 = std::sqrt(shape[8] * shape[8] + shape[9] * shape[9] + shape[10] * shape[10]);
+        float rad = 0.5f * std::sqrt(c0 * c0 + c1 * c1 + c2 * c2);
+        float x = shape[12], y = shape[13], z = shape[14];
+        if (x - rad < minx) minx = x - rad;
+        if (y - rad < miny) miny = y - rad;
+        if (z - rad < minz) minz = z - rad;
+        if (x + rad > maxx) maxx = x + rad;
+        if (y + rad > maxy) maxy = y + rad;
+        if (z + rad > maxz) maxz = z + rad;
+        casters++;
+    }
+    if (casters == 0) {
+        shadow_publish(0, -1);
+        return;
+    }
+    V3 ext = v3(maxx - minx, maxy - miny, maxz - minz) * 0.5f;
+    float radius = std::sqrt(dot(ext, ext));
+    if (radius < 0.5f) radius = 0.5f;
+    V3 center = v3((minx + maxx) * 0.5f, (miny + maxy) * 0.5f, (minz + maxz) * 0.5f);
+    V3 fwd = norm(shine);
+    V3 upRef = std::fabs(fwd.y) > 0.95f ? v3(0, 0, 1) : v3(0, 1, 0);
+    V3 right = norm(cross(fwd, upRef));
+    V3 up = norm(cross(right, fwd));
+    float dist = radius + 4.0f;
+    V3 eye = center - fwd * dist;
+    float basis[16] = {
+        right.x, up.x, -fwd.x, 0,
+        right.y, up.y, -fwd.y, 0,
+        right.z, up.z, -fwd.z, 0,
+        0, 0, 0, 1,
+    };
+    float tr[16], view[16], ortho[16];
+    ident(tr);
+    tr[12] = -eye.x; tr[13] = -eye.y; tr[14] = -eye.z;
+    mul(view, basis, tr);
+    float half = radius * 1.2f;
+    float z0 = 0.05f, z1 = dist + radius + 4.0f;
+    std::memset(ortho, 0, sizeof(ortho));
+    ortho[0] = 1.0f / half;
+    ortho[5] = 1.0f / half;
+    ortho[10] = -2.0f / (z1 - z0);
+    ortho[14] = -(z1 + z0) / (z1 - z0);
+    ortho[15] = 1;
+    mul(K.lightVP, ortho, view);
+
+    S.bindFb(kFramebuffer, K.shFbo);
+    glViewport(0, 0, 2048, 2048);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.5f, 2.0f);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    K.P.Use(K.shProg);
+    for (int s = 0; s < (int)g.entities.size(); ++s) {
+        const Entity& e = g.entities[s];
+        if (e.a <= 8 || !aa_kind(e) || !entity_shown(s)) continue;
+        float shape[16], mvp[16];
+        GLuint vbo = 0;
+        GLsizei n = 0;
+        float two = 0;
+        if (!mesh_local(e, shape, &vbo, &n, &two, nullptr) || !vbo || n <= 0) continue;
+        mul(mvp, K.lightVP, shape);
+        K.P.UniMat4(K.shUMvp, 1, GL_FALSE, mvp);
+        bind_mesh(vbo);
+        glDrawArrays(GL_TRIANGLES, 0, n);
+    }
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDisable(GL_CULL_FACE);
+    if (K.P.ActiveTex) {
+        K.P.ActiveTex(0x84C0 + 7);
+        glBindTexture(GL_TEXTURE_2D, K.shTex);
+        K.P.ActiveTex(0x84C0);
+    }
+    shadow_publish(1, sunSlot);
+    S.bindFb(kFramebuffer, S.fbo);
+    glViewport(0, 0, viewW, viewH);
 }
 
 static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
@@ -1192,7 +1463,12 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
        would wash the whole room and flip it bright or black as you turn. */
     bool has_lamp = false;
     for (const Light& l : g_lights) if (l.type == 1 || l.type == 2) has_lamp = true;
-    if (!any_sun && !has_lamp) put_dir(n++, kDefaultLight.x, kDefaultLight.y, kDefaultLight.z, 0.95f, 0.95f, 0.95f);
+    int sunSlot = -1;
+    V3 shine = kDefaultLight * -1.f;
+    if (!any_sun && !has_lamp) {
+        put_dir(n++, kDefaultLight.x, kDefaultLight.y, kDefaultLight.z, 0.95f, 0.95f, 0.95f);
+        sunSlot = n - 1;
+    }
     for (const Light& l : g_lights) {
         if (l.type == 3) {
             if (!any_ambient) { K.amb[0] = K.amb[1] = K.amb[2] = 0; any_ambient = true; }
@@ -1201,7 +1477,9 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
         }
         if (n >= 16) continue;
         if (l.type == 0) {
+            int slot = n;
             put_dir(n++, -l.dir.x, -l.dir.y, -l.dir.z, l.r, l.g, l.b);
+            if (sunSlot < 0) { sunSlot = slot; shine = l.dir; }
         } else {
             float eye[4], sd[4];
             xform(K.cam, l.pos.x, l.pos.y, l.pos.z, 1, eye);
@@ -1222,6 +1500,7 @@ static bool begin33(int w, int h, double fov_deg, int br, int bg, int bb) {
     K.lit = 1; K.vert = 0; K.two = 0; K.alpha = 1;
     K.fill = any_ambient ? 1.0f : 0.0f;
     upload_lights();
+    shadow_frame(shine, sunSlot, w, h);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     return true;

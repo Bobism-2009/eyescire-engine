@@ -11773,6 +11773,12 @@ fn settings_page_graphics(x: int, y: int, w: int) {
     draw_text(x, y, "On smooths the edges of the 3D picture. Off leaves them jagged.", col_text_dim());
     y = y + 20;
     draw_text(x, y, "An object can follow this, or force its own edges on or off.", col_text_dim());
+    y = y + 36;
+    settings_onoff(x, y, "Shadows", "shadows", 1);
+    y = y + 36;
+    draw_text(x, y, "On casts one soft shadow from the directional light.", col_text_dim());
+    y = y + 20;
+    draw_text(x, y, "It falls on the ground and on other objects. Spot and point lights stay plain.", col_text_dim());
     settings_bottom = y + 28;
 }
 

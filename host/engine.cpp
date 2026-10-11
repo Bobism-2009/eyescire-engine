@@ -1126,6 +1126,7 @@ namespace r3d { void overlay_present(); }
 static int g_vsync = 1;
 static int g_hd = 0;          /* 1: the 3D picture is drawn at twice the resolution */
 static int g_aa = 1;          /* 1: smooth the edges of the 3D picture */
+static int g_shadows = 1;     /* 1: the directional light casts one soft shadow */
 static int g_glPresented = 0;
 
 extern "C" int engine_vsync() { return g_vsync ? 1 : 0; }
@@ -6141,10 +6142,10 @@ extern "C" const char* engine_project_path_join(const char* a, const char* b) {
 
 static const char* kPrefKey[] = {
     "grid", "show_grid", "snap", "autosave", "renderer",
-    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd", "aa"
+    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd", "aa", "shadows"
 };
-static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0, 1 };
-static const int kPrefCount = 14;
+static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0, 1, 1 };
+static const int kPrefCount = 15;
 
 static int pref_clamp_key(const std::string& key, int v) {
     if (key == "grid") {
@@ -6157,7 +6158,7 @@ static int pref_clamp_key(const std::string& key, int v) {
         }
         return best;
     }
-    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd" || key == "aa")
+    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows")
         return v != 0 ? 1 : 0;
     if (key == "renderer") return v == 11 ? 11 : 33;
     if (key == "music" || key == "sfx") {
@@ -6189,6 +6190,7 @@ static void pref_apply_key(const std::string& key, int v) {
     else if (key == "vsync") g_vsync = v ? 1 : 0;
     else if (key == "hd") g_hd = v ? 1 : 0;
     else if (key == "aa") g_aa = v ? 1 : 0;
+    else if (key == "shadows") g_shadows = v ? 1 : 0;
 }
 
 static void pref_write() {
@@ -6318,6 +6320,7 @@ extern "C" void engine_project_close() {
     g.projActiveScene = 0;
     g_vsync = 1;
     g_aa = 1;
+    g_shadows = 1;
     splash_reset();
 }
 

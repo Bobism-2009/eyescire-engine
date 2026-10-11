@@ -72,7 +72,7 @@ More realistic looking games.
 
 ✔ Port to Opengl 3.3 instead of 1.1 (Will also update inside of nexa.)- Keep 1.1 but allow the function that swaps between opengl and vulkan to accept "OpenGL 3.3", and make it line by line a perfect port.
 
-Cast shadows from lights onto the ground and onto other objects.
+✔ Cast shadows from lights onto the ground and onto other objects.
 
 Fog in a 3D scene, so far objects fade into a color.
 
