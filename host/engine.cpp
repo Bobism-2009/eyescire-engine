@@ -2318,20 +2318,42 @@ extern "C" void engine_xform_grab_scale(double factor, int axis) {
         }
     }
 }
-extern "C" void engine_xform_grab_spin(int axis, int deltaDeg) {
+static float g_orientX = 1.f, g_orientY = 0.f, g_orientZ = 0.f;
+
+extern "C" void engine_orient_vec(int slot, float x, float y, float z) {
+    g_orientX = x;
+    g_orientY = y;
+    g_orientZ = z;
+    if (!active_slot(slot)) return;
+    float m[16];
+    const Entity& e = g.entities[slot];
+    orient_matrix(m, e.rotX, e.rotY, e.rotDeg);
+    g_orientX = m[0] * x + m[4] * y + m[8] * z;
+    g_orientY = m[1] * x + m[5] * y + m[9] * z;
+    g_orientZ = m[2] * x + m[6] * y + m[10] * z;
+}
+extern "C" float engine_orient_x() { return g_orientX; }
+extern "C" float engine_orient_y() { return g_orientY; }
+extern "C" float engine_orient_z() { return g_orientZ; }
+
+extern "C" void engine_xform_grab_spin_local(int axis, int deltaDeg, int local) {
     if (axis < 1 || axis > 3) return;
     for (const XGrab& row : g_xgrab) {
         if (!active_slot(row.slot)) continue;
         float base[16], turn[16], out[16];
         orient_matrix(base, row.rotX, row.rotY, row.rot);
         axis_matrix(turn, axis, deltaDeg);
-        mat4_mul(out, turn, base);
+        if (local) mat4_mul(out, base, turn);
+        else       mat4_mul(out, turn, base);
         int rx = 0, ry = 0, rz = 0;
         orient_extract(out, &rx, &ry, &rz);
         engine_entity_set_rot_x(row.slot, rx);
         engine_entity_set_rot_y(row.slot, ry);
         engine_entity_set_rot(row.slot, rz);
     }
+}
+extern "C" void engine_xform_grab_spin(int axis, int deltaDeg) {
+    engine_xform_grab_spin_local(axis, deltaDeg, 0);
 }
 extern "C" int engine_entity_z(int s)     { return active_slot(s) ? g.entities[s].z : 0; }
 extern "C" int engine_entity_depth(int s) { return active_slot(s) ? g.entities[s].depth : 0; }

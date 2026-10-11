@@ -200,6 +200,11 @@ extern "C" void   engine_xform_grab_begin();
 extern "C" void   engine_xform_grab_add(int);
 extern "C" void   engine_xform_grab_scale(double, int);
 extern "C" void   engine_xform_grab_spin(int, int);
+extern "C" void   engine_xform_grab_spin_local(int, int, int);
+extern "C" void   engine_orient_vec(int, float, float, float);
+extern "C" float  engine_orient_x();
+extern "C" float  engine_orient_y();
+extern "C" float  engine_orient_z();
 extern "C" int    engine_entity_z(int);
 extern "C" void   engine_entity_set_z(int, int);
 extern "C" int    engine_entity_depth(int);
@@ -252,6 +257,7 @@ extern "C" double engine_r3d_px();
 extern "C" double engine_r3d_py();
 extern "C" int    engine_r3d_plane_hit(int, int, double);
 extern "C" int    engine_r3d_axis_angle(int, int, int, double, double, double);
+extern "C" int    engine_r3d_basis_angle(int, int, double, double, double, double, double, double, double, double, double, double, double, double);
 extern "C" int    engine_r3d_ray_point(int, int, double);
 extern "C" double engine_r3d_hz();
 extern "C" double engine_r3d_hx();
@@ -1065,6 +1071,13 @@ fn xform_grab_begin() { inline_cpp! { engine_xform_grab_begin(); } }
 fn xform_grab_add(slot: int) { inline_cpp! { engine_xform_grab_add(slot); } }
 fn xform_grab_scale(factor: float, axis: int) { inline_cpp! { engine_xform_grab_scale(factor, axis); } }
 fn xform_grab_spin(axis: int, delta_deg: int) { inline_cpp! { engine_xform_grab_spin(axis, delta_deg); } }
+fn xform_grab_spin_local(axis: int, delta_deg: int, local: int) {
+    inline_cpp! { engine_xform_grab_spin_local(axis, delta_deg, local); }
+}
+fn eng_orient_vec(slot: int, x: float, y: float, z: float) { inline_cpp! { engine_orient_vec(slot, x, y, z); } }
+fn eng_orient_x(): float { let r: float = 0.0; inline_cpp! { r = engine_orient_x(); } return r; }
+fn eng_orient_y(): float { let r: float = 0.0; inline_cpp! { r = engine_orient_y(); } return r; }
+fn eng_orient_z(): float { let r: float = 0.0; inline_cpp! { r = engine_orient_z(); } return r; }
 
 /* 3D: z = px into the screen, depth = px deep (0 = kind default), model = .obj */
 fn ent_z(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_z(slot); } return r; }
@@ -1150,6 +1163,11 @@ fn r3d_plane_hit(x: int, y: int, scene_z: float): int { let r: int = 0; inline_c
 fn r3d_axis_angle(x: int, y: int, axis: int, wx: float, wy: float, wz: float): int {
     let r: int = 100000;
     inline_cpp! { r = engine_r3d_axis_angle(x, y, axis, wx, wy, wz); }
+    return r;
+}
+fn r3d_basis_angle(x: int, y: int, cx: float, cy: float, cz: float, nx: float, ny: float, nz: float, ux: float, uy: float, uz: float, vx: float, vy: float, vz: float): int {
+    let r: int = 100000;
+    inline_cpp! { r = engine_r3d_basis_angle(x, y, cx, cy, cz, nx, ny, nz, ux, uy, uz, vx, vy, vz); }
     return r;
 }
 /* point `dist` world units along the ray through a pixel; read with r3d_hx / hy / hz */

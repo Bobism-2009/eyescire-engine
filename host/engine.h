@@ -251,6 +251,13 @@ EYESCIRE_API void engine_xform_grab_begin(void);
 EYESCIRE_API void engine_xform_grab_add(int slot);
 EYESCIRE_API void engine_xform_grab_scale(double factor, int axis);
 EYESCIRE_API void engine_xform_grab_spin(int axis, int delta_deg);
+/* local 1 turns around the object's own axis. local 0 turns around the scene axis. */
+EYESCIRE_API void engine_xform_grab_spin_local(int axis, int delta_deg, int local);
+/* The object's orientation applied to a vector. Read the result with engine_orient_x/y/z. */
+EYESCIRE_API void engine_orient_vec(int slot, float x, float y, float z);
+EYESCIRE_API float engine_orient_x();
+EYESCIRE_API float engine_orient_y();
+EYESCIRE_API float engine_orient_z();
 EYESCIRE_API void engine_entity_set_camera(int slot, int on);
 EYESCIRE_API void engine_entity_set_color(int slot, int r, int g, int b);
 EYESCIRE_API void engine_entity_set_alpha(int slot, int a);
@@ -768,6 +775,11 @@ EYESCIRE_API int  engine_r3d_plane_hit(int x, int y, double scene_z);
 /* Degrees of the mouse around a world axis through (wx, wy, wz).
    axis 1 = X, 2 = Y, 3 = Z. 100000 when the ray misses the plane. */
 EYESCIRE_API int  engine_r3d_axis_angle(int x, int y, int axis, double wx, double wy, double wz);
+/* Angle of the cursor in a plane. n is the plane normal. u is angle 0, v is angle 90. */
+EYESCIRE_API int  engine_r3d_basis_angle(int x, int y, double cx, double cy, double cz,
+                                         double nx, double ny, double nz,
+                                         double ux, double uy, double uz,
+                                         double vx, double vy, double vz);
 EYESCIRE_API int  engine_r3d_ray_point(int x, int y, double dist); /* result: hx / hy / hz, scene px */
 EYESCIRE_API double engine_r3d_hz();
 EYESCIRE_API double engine_r3d_hx();

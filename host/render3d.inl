@@ -2614,6 +2614,29 @@ extern "C" int engine_r3d_axis_angle(int x, int y, int axis, double wx, double w
     return (int)std::lround(ang * 57.29577951308232);
 }
 
+extern "C" int engine_r3d_basis_angle(int x, int y, double cx, double cy, double cz,
+                                      double nx, double ny, double nz,
+                                      double ux, double uy, double uz,
+                                      double vx, double vy, double vz) {
+    using namespace r3d;
+    if (!C.valid) return 100000;
+    V3 n = v3((float)nx, (float)ny, (float)nz);
+    float nl = std::sqrt(dot(n, n));
+    if (nl < 1e-5f) return 100000;
+    n = n * (1.f / nl);
+    V3 dir = pixel_ray(x, y);
+    float denom = dot(dir, n);
+    if (std::fabs(denom) < 1e-5f) return 100000;
+    V3 c = v3((float)cx, (float)cy, (float)cz);
+    float t = dot(c - C.eye, n) / denom;
+    if (t <= 0) return 100000;
+    V3 hit = (C.eye + dir * t) - c;
+    V3 u = v3((float)ux, (float)uy, (float)uz);
+    V3 v = v3((float)vx, (float)vy, (float)vz);
+    float ang = std::atan2(dot(hit, v), dot(hit, u));
+    return (int)std::lround(ang * 57.29577951308232);
+}
+
 extern "C" int engine_r3d_plane_hit(int x, int y, double scene_z) {
     using namespace r3d;
     if (!C.valid) return 0;

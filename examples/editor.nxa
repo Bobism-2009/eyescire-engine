@@ -178,6 +178,7 @@ let resize_anchor_wy: int = 0;
 let resize_recorded: int = 0;
 
 let edit_tool: string = "move";   /* hand | move | rotate | scale */
+let xform_local: int = 0;        /* 0 world axes, 1 the object's own axes */
 
 let rotate_active: int = 0;
 let rotate_slot: int = -1;
@@ -194,6 +195,20 @@ let scale_start_h: int = 0;
 let scale_start_x: int = 0;
 let scale_start_y: int = 0;
 let scale_recorded: int = 0;
+let scale_axis: int = 0;         /* 0 both, 1 width, 2 height */
+let scale_dir_x: float = 1.0;
+let scale_dir_y: float = 0.0;
+let scale_grab_sx: int = 0;
+let scale_grab_sy: int = 0;
+let basis_x: float = 1.0;
+let basis_y: float = 0.0;
+let basis_z: float = 0.0;
+let scr_dx: float = 1.0;
+let scr_dy: float = 0.0;
+let axis_tx: int = 0;
+let axis_ty: int = 0;
+let move_out_x: int = 0;
+let move_out_y: int = 0;
 
 let TOOL_BTN_W: int = 46;
 let TOOL_BTN_GAP: int = 3;
@@ -4639,38 +4654,94 @@ fn dist_sq(ax: int, ay: int, bx: int, by: int): int {
     return dx * dx + dy * dy;
 }
 
-fn draw_move_gizmo(slot: int) {
-    let px: int = ent_pivot_screen_x(slot);
-    let py: int = ent_pivot_screen_y(slot);
-    let len: int = 36;
-    let xcol: Color = rgb(240, 90, 90);
-    let ycol: Color = rgb(90, 210, 110);
+fn gizmo_rot(slot: int): float {
+    if (xform_local == 0) return 0.0;
+    return ent_rot(slot);
+}
+
+/* Screen direction of an axis. 1 is the object's right, 2 is its up. */
+fn axis_place(px: int, py: int, len: float, deg: float, which: int) {
+    let c: float = m3_cos(deg);
+    let s: float = m3_sin(deg);
+    scr_dx = c;
+    scr_dy = s;
+    if (which == 2) {
+        scr_dx = s;
+        scr_dy = 0.0 - c;
+    }
+    axis_tx = px + scr_dx * len;
+    axis_ty = py + scr_dy * len;
+}
+
+fn axis_draw(px: int, py: int, col: Color) {
+    eng_line(px, py, axis_tx, axis_ty, col.r, col.g, col.b);
+    let bx: int = axis_tx - scr_dx * 9.0;
+    let by: int = axis_ty - scr_dy * 9.0;
+    let px1: int = bx - scr_dy * 6.0;
+    let py1: int = by + scr_dx * 6.0;
+    let px2: int = bx + scr_dy * 6.0;
+    let py2: int = by - scr_dx * 6.0;
+    eng_line(axis_tx, axis_ty, px1, py1, col.r, col.g, col.b);
+    eng_line(axis_tx, axis_ty, px2, py2, col.r, col.g, col.b);
+    draw_fill_rect(rect(axis_tx - 5, axis_ty - 5, 10, 10), col);
+}
+
+fn axis_hit(mx: int, my: int, px: int, py: int): int {
+    if (dist_sq(mx, my, axis_tx, axis_ty) <= 196) return 1;
+    if (gz_dist_sq(mx, my, px, py, axis_tx, axis_ty) <= 100.0) return 1;
+    return 0;
+}
+
+fn draw_move_gizmo_at(px: int, py: int, deg: float) {
+    let len: float = 36.0;
+    axis_place(px, py, len, deg, 1);
+    axis_draw(px, py, rgb(240, 90, 90));
+    axis_place(px, py, len, deg, 2);
+    axis_draw(px, py, rgb(90, 210, 110));
     let ac: Color = col_accent();
-    /* X axis (right) */
-    eng_line(px, py, px + len, py, xcol.r, xcol.g, xcol.b);
-    eng_line(px + len, py, px + len - 9, py - 6, xcol.r, xcol.g, xcol.b);
-    eng_line(px + len, py, px + len - 9, py + 6, xcol.r, xcol.g, xcol.b);
-    draw_fill_rect(rect(px + len - 5, py - 5, 10, 10), xcol);
-    /* Y axis (up) */
-    eng_line(px, py, px, py - len, ycol.r, ycol.g, ycol.b);
-    eng_line(px, py - len, px - 6, py - len + 9, ycol.r, ycol.g, ycol.b);
-    eng_line(px, py - len, px + 6, py - len + 9, ycol.r, ycol.g, ycol.b);
-    draw_fill_rect(rect(px - 5, py - len - 5, 10, 10), ycol);
-    /* center handle for free move */
     draw_fill_rect(rect(px - 5, py - 5, 10, 10), ac);
     draw_outline_rect(rect(px - 5, py - 5, 10, 10), 1, rgb(20, 24, 32));
 }
 
-/* 0=none, 1=x axis, 2=y axis, 3=center (free move) */
-fn move_gizmo_pick(mx: int, my: int, slot: int): int {
-    let px: int = ent_pivot_screen_x(slot);
-    let py: int = ent_pivot_screen_y(slot);
-    let len: int = 36;
-    let tol: int = 10;
+fn draw_move_gizmo(slot: int) {
+    draw_move_gizmo_at(ent_pivot_screen_x(slot), ent_pivot_screen_y(slot), gizmo_rot(slot));
+}
+
+fn draw_scale_axes_at(px: int, py: int, lenx: float, leny: float, deg: float) {
+    axis_place(px, py, lenx, deg, 1);
+    eng_line(px, py, axis_tx, axis_ty, 240, 90, 90);
+    draw_fill_rect(rect(axis_tx - 5, axis_ty - 5, 10, 10), rgb(240, 90, 90));
+    axis_place(px, py, leny, deg, 2);
+    eng_line(px, py, axis_tx, axis_ty, 90, 210, 110);
+    draw_fill_rect(rect(axis_tx - 5, axis_ty - 5, 10, 10), rgb(90, 210, 110));
+    draw_fill_rect(rect(px - 5, py - 5, 10, 10), rgb(235, 236, 240));
+}
+
+/* 0 none, 1 x, 2 y, 3 center */
+fn axis_pick_at(mx: int, my: int, px: int, py: int, len: float, deg: float): int {
     if (dist_sq(px, py, mx, my) <= 81) return 3;
-    if (mx >= px + 6 && mx <= px + len + tol && my >= py - tol && my <= py + tol) return 1;
-    if (my >= py - len - tol && my <= py - 6 && mx >= px - tol && mx <= px + tol) return 2;
+    axis_place(px, py, len, deg, 1);
+    if (axis_hit(mx, my, px, py) == 1) return 1;
+    axis_place(px, py, len, deg, 2);
+    if (axis_hit(mx, my, px, py) == 1) return 2;
     return 0;
+}
+
+fn move_gizmo_pick(mx: int, my: int, slot: int): int {
+    return axis_pick_at(mx, my, ent_pivot_screen_x(slot), ent_pivot_screen_y(slot), 36.0, gizmo_rot(slot));
+}
+
+/* Keep the drag on one arrow. Writes move_out_x / move_out_y. */
+fn move_along(dx: int, dy: int, axis: int, slot: int) {
+    move_out_x = dx;
+    move_out_y = dy;
+    if (axis != 1 && axis != 2) return;
+    if (slot < 0) slot = sel_first();
+    if (slot < 0) return;
+    axis_place(0, 0, 1.0, gizmo_rot(slot), axis);
+    let along: float = dx * scr_dx + dy * scr_dy;
+    move_out_x = along * scr_dx;
+    move_out_y = along * scr_dy;
 }
 
 fn move_gizmo_pick_selection(mx: int, my: int): int {
@@ -4795,7 +4866,82 @@ fn dist_world(x0: float, ya: float, x1: float, yb: float): float {
     return r;
 }
 
+fn scale_axis_hit(mx: int, my: int, px: int, py: int, lenx: float, leny: float, deg: float): int {
+    if (dist_sq(px, py, mx, my) <= 81) return 3;
+    axis_place(px, py, lenx, deg, 1);
+    if (axis_hit(mx, my, px, py) == 1) return 1;
+    axis_place(px, py, leny, deg, 2);
+    if (axis_hit(mx, my, px, py) == 1) return 2;
+    return 0;
+}
+
+fn scale_local_press(mx: int, my: int): int {
+    let s: int = sel_first();
+    while (s >= 0) {
+        let px: int = ent_pivot_screen_x(s);
+        let py: int = ent_pivot_screen_y(s);
+        let lx: float = world_len(ent_w(s)) / 2.0 + 18.0;
+        let ly: float = world_len(ent_h(s)) / 2.0 + 18.0;
+        let ax: int = scale_axis_hit(mx, my, px, py, lx, ly, gizmo_rot(s));
+        if (ax == 1 || ax == 2) {
+            scale_begin_axis(s, mx, my, ax);
+            return 1;
+        }
+        if (ax == 3) {
+            scale_begin_uniform(s, mx, my);
+            return 1;
+        }
+        s = sel_iter_next(s + 1);
+    }
+    return 0;
+}
+
+fn scale_local_press_ui(mx: int, my: int): int {
+    let s: int = sel_first();
+    while (s >= 0) {
+        if (ent_is_ui(s) == 1) {
+            let px: int = ui_ent_pivot_screen_x(s);
+            let py: int = ui_ent_pivot_screen_y(s);
+            let inset_w: float = ui_len_w(ent_w(s));
+            let inset_h: float = ui_len_h(ent_h(s));
+            let lx: float = inset_w / 2.0 + 18.0;
+            let ly: float = inset_h / 2.0 + 18.0;
+            let ax: int = scale_axis_hit(mx, my, px, py, lx, ly, gizmo_rot(s));
+            if (ax == 1 || ax == 2) {
+                scale_begin_axis(s, mx, my, ax);
+                return 1;
+            }
+            if (ax == 3) {
+                scale_begin_uniform_ui(s, mx, my);
+                return 1;
+            }
+        }
+        s = sel_iter_next(s + 1);
+    }
+    return 0;
+}
+
+fn scale_begin_axis(slot: int, mx: int, my: int, axis: int) {
+    if (viewport_mode == "ui" && ent_is_ui(slot) == 1) scale_begin_uniform_ui(slot, mx, my);
+    else scale_begin_uniform(slot, mx, my);
+    scale_axis = axis;
+    scale_grab_sx = mx;
+    scale_grab_sy = my;
+    axis_place(0, 0, 1.0, gizmo_rot(slot), axis);
+    scale_dir_x = scr_dx;
+    scale_dir_y = scr_dy;
+}
+
+fn scale_factor_axis(mx: int, my: int): float {
+    let along: float = (mx - scale_grab_sx) * scale_dir_x + (my - scale_grab_sy) * scale_dir_y;
+    let factor: float = 1.0 + along / 80.0;
+    if (factor < 0.05) factor = 0.05;
+    if (factor > 6.0) factor = 6.0;
+    return factor;
+}
+
 fn scale_begin_uniform(slot: int, mx: int, my: int) {
+    scale_axis = 0;
     scale_uniform_active = 1;
     scale_uniform_slot = slot;
     scale_recorded = 0;
@@ -4818,8 +4964,11 @@ fn scale_apply_uniform(mx: int, my: int) {
     let dist: float = dist_world(scale_pivot_wx, scale_pivot_wy, mxw, myw);
     if (dist < 4.0) dist = 4.0;
     let factor: float = dist / scale_start_dist;
+    if (scale_axis == 1 || scale_axis == 2) factor = scale_factor_axis(mx, my);
     let nw_f: float = scale_start_w * factor;
     let nh_f: float = scale_start_h * factor;
+    if (scale_axis == 1) nh_f = scale_start_h;
+    if (scale_axis == 2) nw_f = scale_start_w;
     let nw: int = nw_f;
     let nh: int = nh_f;
     if (nw < 4) nw = 4;
@@ -4856,9 +5005,9 @@ fn tool_shortcut_key(): string {
 
 fn tool_help_text(): string {
     if (edit_tool == "hand") return "Drag to pan the view. Hold Space and drag, or use the middle mouse button, from any tool.";
-    if (edit_tool == "move") return "Click to select. Drag the object, or use the red/green arrows for X/Y only.";
-    if (edit_tool == "rotate") return "Drag a ring to turn around that axis. Red is X, green is Y, blue is Z.";
-    if (edit_tool == "scale") return "Drag a handle to scale that axis. The white center scales all three. Meshes only.";
+    if (edit_tool == "move") return "Drag the arrows, or the object. L swaps local and world axes.";
+    if (edit_tool == "rotate") return "Drag a ring to turn around that axis. L swaps local and world.";
+    if (edit_tool == "scale") return "Drag a handle to scale that axis. L swaps local and world. Meshes only in 3D.";
     return "";
 }
 
@@ -4875,7 +5024,7 @@ fn toolbar_btn_h(): int { return TOOLBAR_H - 8; }
 
 fn toolbar_icon_w(): int { return 32; }
 fn toolbar_save_rect(): Rect {
-    let bx: int = TOOL_BTN_X0 + 4 * (TOOL_BTN_W + TOOL_BTN_GAP) + 12;
+    let bx: int = TOOL_BTN_X0 + 5 * (TOOL_BTN_W + TOOL_BTN_GAP) + 12;
     return rect(bx, toolbar_btn_y(), toolbar_icon_w(), toolbar_btn_h());
 }
 fn toolbar_build_rect(): Rect {
@@ -5314,11 +5463,19 @@ fn viewport_draw_selection() {
             draw_rotate_gizmo(i);
         } else if (edit_tool == "scale") {
             draw_outline_rect(inset, 2, col_accent());
-            let h: int = 8;
-            draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col_accent());
-            draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col_accent());
-            draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
-            draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
+            if (xform_local == 1) {
+                let px: int = ent_pivot_screen_x(i);
+                let py: int = ent_pivot_screen_y(i);
+                let lx: float = world_len(ent_w(i)) / 2.0 + 18.0;
+                let ly: float = world_len(ent_h(i)) / 2.0 + 18.0;
+                draw_scale_axes_at(px, py, lx, ly, gizmo_rot(i));
+            } else {
+                let h: int = 8;
+                draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col_accent());
+                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col_accent());
+                draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
+                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
+            }
         } else if (edit_tool == "move") {
             draw_outline_rect(inset, 2, col_accent());
             draw_move_gizmo(i);
@@ -5404,14 +5561,7 @@ fn ui_ent_pivot_screen_y(slot: int): int {
 }
 
 fn ui_move_gizmo_pick(mx: int, my: int, slot: int): int {
-    let px: int = ui_ent_pivot_screen_x(slot);
-    let py: int = ui_ent_pivot_screen_y(slot);
-    let len: int = 36;
-    let tol: int = 10;
-    if (dist_sq(px, py, mx, my) <= 81) return 3;
-    if (mx >= px + 6 && mx <= px + len + tol && my >= py - tol && my <= py + tol) return 1;
-    if (my >= py - len - tol && my <= py - 6 && mx >= px - tol && mx <= px + tol) return 2;
-    return 0;
+    return axis_pick_at(mx, my, ui_ent_pivot_screen_x(slot), ui_ent_pivot_screen_y(slot), 36.0, gizmo_rot(slot));
 }
 
 fn ui_move_gizmo_pick_selection(mx: int, my: int): int {
@@ -5582,29 +5732,22 @@ fn ui_viewport_draw_selection() {
             draw_outline_rect(rect(px - rad, py - rad, rad * 2, rad * 2), 1, ac);
         } else if (edit_tool == "scale") {
             draw_outline_rect(inset, 2, col_accent());
-            let h: int = 8;
-            draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col_accent());
-            draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col_accent());
-            draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
-            draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
+            if (xform_local == 1) {
+                let px: int = ui_ent_pivot_screen_x(i);
+                let py: int = ui_ent_pivot_screen_y(i);
+                let lx: float = ui_len_w(ent_w(i)) / 2.0 + 18.0;
+                let ly: float = ui_len_h(ent_h(i)) / 2.0 + 18.0;
+                draw_scale_axes_at(px, py, lx, ly, gizmo_rot(i));
+            } else {
+                let h: int = 8;
+                draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col_accent());
+                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col_accent());
+                draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
+                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
+            }
         } else if (edit_tool == "move") {
             draw_outline_rect(inset, 2, col_accent());
-            let px: int = ui_ent_pivot_screen_x(i);
-            let py: int = ui_ent_pivot_screen_y(i);
-            let len: int = 36;
-            let xcol: Color = rgb(240, 90, 90);
-            let ycol: Color = rgb(90, 210, 110);
-            let ac: Color = col_accent();
-            eng_line(px, py, px + len, py, xcol.r, xcol.g, xcol.b);
-            eng_line(px + len, py, px + len - 9, py - 6, xcol.r, xcol.g, xcol.b);
-            eng_line(px + len, py, px + len - 9, py + 6, xcol.r, xcol.g, xcol.b);
-            draw_fill_rect(rect(px + len - 5, py - 5, 10, 10), xcol);
-            eng_line(px, py, px, py - len, ycol.r, ycol.g, ycol.b);
-            eng_line(px, py - len, px - 6, py - len + 9, ycol.r, ycol.g, ycol.b);
-            eng_line(px, py - len, px + 6, py - len + 9, ycol.r, ycol.g, ycol.b);
-            draw_fill_rect(rect(px - 5, py - len - 5, 10, 10), ycol);
-            draw_fill_rect(rect(px - 5, py - 5, 10, 10), ac);
-            draw_outline_rect(rect(px - 5, py - 5, 10, 10), 1, rgb(20, 24, 32));
+            draw_move_gizmo_at(ui_ent_pivot_screen_x(i), ui_ent_pivot_screen_y(i), gizmo_rot(i));
         } else {
             let sx: int = ui_to_screen_x(ent_x(i));
             let sy: int = ui_to_screen_y(ent_y(i));
@@ -5731,10 +5874,14 @@ fn ui_viewport_input() {
     if (edit_tool == "scale" && inside && mouse_pressed(MOUSE_LEFT) &&
         drag_active == 0 && box_select_active == 0 && rotate_active == 0 &&
         scale_uniform_active == 0 && resize_active == 0) {
-        let rh: int = ui_resize_handle_at(mx, my);
-        if (rh >= 0 && resize_slot >= 0) {
-            resize_begin(resize_slot, rh);
-            return;
+        if (xform_local == 1) {
+            if (scale_local_press_ui(mx, my) == 1) return;
+        } else {
+            let rh: int = ui_resize_handle_at(mx, my);
+            if (rh >= 0 && resize_slot >= 0) {
+                resize_begin(resize_slot, rh);
+                return;
+            }
         }
     }
 
@@ -5807,8 +5954,9 @@ fn ui_viewport_input() {
             let dyf: float = dy_screen;
             let dx: int = dxf / ui_scale_x;
             let dy: int = dyf / ui_scale_y;
-            if (move_axis == 1) dy = 0;
-            if (move_axis == 2) dx = 0;
+            move_along(dx, dy, move_axis, sel_first());
+            dx = move_out_x;
+            dy = move_out_y;
             if (dx != 0 || dy != 0) {
                 let s2: int = sel_first();
                 while (s2 >= 0) {
@@ -5856,6 +6004,7 @@ fn ui_viewport_input() {
 }
 
 fn scale_begin_uniform_ui(slot: int, mx: int, my: int) {
+    scale_axis = 0;
     scale_uniform_active = 1;
     scale_uniform_slot = slot;
     scale_recorded = 0;
@@ -5878,8 +6027,11 @@ fn scale_apply_uniform_ui(mx: int, my: int) {
     let dist: float = dist_world(scale_pivot_wx, scale_pivot_wy, mxu, myu);
     if (dist < 4.0) dist = 4.0;
     let factor: float = dist / scale_start_dist;
+    if (scale_axis == 1 || scale_axis == 2) factor = scale_factor_axis(mx, my);
     let nw_f: float = scale_start_w * factor;
     let nh_f: float = scale_start_h * factor;
+    if (scale_axis == 1) nh_f = scale_start_h;
+    if (scale_axis == 2) nw_f = scale_start_w;
     let nw: int = nw_f;
     let nh: int = nh_f;
     if (nw < 4) nw = 4;
@@ -6661,13 +6813,18 @@ fn view3d_apply_move(mx: int, my: int) {
 }
 
 /* Distance along the grabbed axis to the point closest to the mouse ray. */
+fn view3d_scene_axis() {
+    view3d_render_axis(sel_first(), mv3_axis);
+    basis_x = basis_x;
+    basis_y = 0.0 - basis_y;
+    basis_z = 0.0 - basis_z;
+}
+
 fn view3d_axis_t(): float {
-    let ux: float = 0.0;
-    let uy: float = 0.0;
-    let uz: float = 0.0;
-    if (mv3_axis == 1) ux = 1.0;
-    if (mv3_axis == 2) uy = 0.0 - 1.0;
-    if (mv3_axis == 3) uz = 0.0 - 1.0;
+    view3d_scene_axis();
+    let ux: float = basis_x;
+    let uy: float = basis_y;
+    let uz: float = basis_z;
     let wx: float = ray_ox - mv3_cx;
     let wy: float = ray_oy - mv3_cy;
     let wz: float = ray_oz - mv3_cz;
@@ -6697,12 +6854,10 @@ fn view3d_apply_axis(mx: int, my: int) {
         mv3_grabbed = 1;
         return;
     }
-    let ux: float = 0.0;
-    let uy: float = 0.0;
-    let uz: float = 0.0;
-    if (mv3_axis == 1) ux = 1.0;
-    if (mv3_axis == 2) uy = 0.0 - 1.0;
-    if (mv3_axis == 3) uz = 0.0 - 1.0;
+    view3d_scene_axis();
+    let ux: float = basis_x;
+    let uy: float = basis_y;
+    let uz: float = basis_z;
     let along: float = t - mv3_gt;
     view3d_move_to(m3_round(along * ux), m3_round(along * uy), m3_round(along * uz));
 }
@@ -6764,6 +6919,7 @@ fn view3d_draw_rotate_fill() {
     if (orb_mode != 7 || mv3_started == 0) return;
     let s: int = sel_first();
     if (s < 0) return;
+    if (view3d_use_local(s) == 1) return;
     if (view3d_axes_place(s) == 0) return;
     let px: float = v3_center_x(s);
     let py: float = v3_center_y(s);
@@ -6799,18 +6955,13 @@ fn view3d_draw_gizmo_heads() {
     let cb = [79, 120, 255];
     let i: int = 0;
     while (i < 3) {
-        let ex: float = px;
-        let ey: float = py;
-        let ez: float = pz;
-        if (i == 0) ex = px + len;
-        if (i == 1) ey = py + len;
-        if (i == 2) ez = pz + len;
-        let bx: float = ex;
-        let by: float = ey;
-        let bz: float = ez;
-        if (i == 0) bx = ex - head;
-        if (i == 1) by = ey - head;
-        if (i == 2) bz = ez - head;
+        view3d_render_axis(s, i + 1);
+        let ex: float = px + basis_x * len;
+        let ey: float = py + basis_y * len;
+        let ez: float = pz + basis_z * len;
+        let bx: float = ex - basis_x * head;
+        let by: float = ey - basis_y * head;
+        let bz: float = ez - basis_z * head;
         let r: int = cr[i];
         let g: int = cg[i];
         let b: int = cb[i];
@@ -6841,12 +6992,10 @@ fn view3d_draw_gizmo() {
     let cb = [79, 120, 255];
     let i: int = 0;
     while (i < 3) {
-        let ex: float = px;
-        let ey: float = py;
-        let ez: float = pz;
-        if (i == 0) ex = px + gz_len;
-        if (i == 1) ey = py + gz_len;
-        if (i == 2) ez = pz + gz_len;
+        view3d_render_axis(s, i + 1);
+        let ex: float = px + basis_x * gz_len;
+        let ey: float = py + basis_y * gz_len;
+        let ez: float = pz + basis_z * gz_len;
         gz_ok[i] = r3d_project(ex, ey, ez);
         if (gz_ok[i] == 1) {
             let tx: int = r3d_px();
@@ -6862,9 +7011,9 @@ fn view3d_draw_gizmo() {
             let bx: float = ex;
             let by: float = ey;
             let bz: float = ez;
-            if (i == 0) bx = ex - head;
-            if (i == 1) by = ey - head;
-            if (i == 2) bz = ez - head;
+            bx = ex - basis_x * head;
+            by = ey - basis_y * head;
+            bz = ez - basis_z * head;
             let lx: int = tx;
             let ly: int = ty;
             if (r3d_project(bx, by, bz) == 1) {
@@ -6882,6 +7031,36 @@ fn view3d_draw_gizmo() {
     gz_on = 1;
 }
 
+fn view3d_use_local(slot: int): int {
+    if (xform_local == 0) return 0;
+    if (slot < 0) return 0;
+    if (ent_is_camera_ent(slot) == 1) return 0;
+    return 1;
+}
+
+/* Unit axis in render space. 1 X, 2 Y, 3 Z. Local follows the object's facing. */
+fn view3d_render_axis(slot: int, axis: int) {
+    basis_x = 0.0;
+    basis_y = 0.0;
+    basis_z = 0.0;
+    let lx: float = 0.0;
+    let ly: float = 0.0;
+    let lz: float = 0.0;
+    if (axis == 1) lx = 1.0;
+    if (axis == 2) ly = 1.0;
+    if (axis == 3) lz = 1.0;
+    if (view3d_use_local(slot) == 0) {
+        basis_x = lx;
+        basis_y = ly;
+        basis_z = lz;
+        return;
+    }
+    eng_orient_vec(slot, lx, ly, lz);
+    basis_x = eng_orient_x();
+    basis_y = eng_orient_y();
+    basis_z = eng_orient_z();
+}
+
 /* Pivot and the three axis tips, in screen pixels. 1 when the pivot is on screen. */
 fn view3d_axes_place(slot: int): int {
     let px: float = v3_center_x(slot);
@@ -6893,12 +7072,10 @@ fn view3d_axes_place(slot: int): int {
     gz_len = 70.0 * view3d_px_scale(slot) * V3_UNIT;
     let i: int = 0;
     while (i < 3) {
-        let ex: float = px;
-        let ey: float = py;
-        let ez: float = pz;
-        if (i == 0) ex = px + gz_len;
-        if (i == 1) ey = py + gz_len;
-        if (i == 2) ez = pz + gz_len;
+        view3d_render_axis(slot, i + 1);
+        let ex: float = px + basis_x * gz_len;
+        let ey: float = py + basis_y * gz_len;
+        let ez: float = pz + basis_z * gz_len;
         gz_ok[i] = r3d_project(ex, ey, ez);
         if (gz_ok[i] == 1) {
             gz_x1[i] = r3d_px();
@@ -6946,12 +7123,22 @@ fn view3d_ring_rad(): float { return gz_len * 1.7; }
 fn view3d_ring_project(axis: int, ang: float, rad: float, px: float, py: float, pz: float): int {
     let c: float = rad * m3_cos(ang);
     let s: float = rad * m3_sin(ang);
-    let x: float = px;
-    let y: float = py;
-    let z: float = pz;
-    if (axis == 1) { y = py + c; z = pz + s; }
-    else if (axis == 2) { x = px + s; z = pz + c; }
-    else { x = px + c; y = py + s; }
+    let ox: float = 0.0;
+    let oy: float = 0.0;
+    let oz: float = 0.0;
+    if (axis == 1) { oy = c; oz = s; }
+    else if (axis == 2) { ox = s; oz = c; }
+    else { ox = c; oy = s; }
+    let slot: int = sel_first();
+    if (view3d_use_local(slot) == 1) {
+        eng_orient_vec(slot, ox, oy, oz);
+        ox = eng_orient_x();
+        oy = eng_orient_y();
+        oz = eng_orient_z();
+    }
+    let x: float = px + ox;
+    let y: float = py + oy;
+    let z: float = pz + oz;
     ring_wx = x;
     ring_wy = y;
     ring_wz = z;
@@ -7194,10 +7381,37 @@ fn view3d_rotate_capture() {
 }
 
 fn view3d_spin_angle(slot: int, axis: int, mx: int, my: int): float {
+    if (view3d_use_local(slot) == 1) {
+        view3d_render_axis(slot, axis);
+        let nx: float = basis_x;
+        let ny: float = basis_y;
+        let nz: float = basis_z;
+        let ux: float = 0.0;
+        let uy: float = 0.0;
+        let uz: float = 0.0;
+        let vx: float = 0.0;
+        let vy: float = 0.0;
+        let vz: float = 0.0;
+        if (axis == 1) { uy = 1.0; vz = 1.0; }
+        else if (axis == 2) { uz = 1.0; vx = 1.0; }
+        else { ux = 1.0; vy = 1.0; }
+        eng_orient_vec(slot, ux, uy, uz);
+        ux = eng_orient_x();
+        uy = eng_orient_y();
+        uz = eng_orient_z();
+        eng_orient_vec(slot, vx, vy, vz);
+        vx = eng_orient_x();
+        vy = eng_orient_y();
+        vz = eng_orient_z();
+        let a: int = r3d_basis_angle(mx, my, v3_center_x(slot), v3_center_y(slot), v3_center_z(slot),
+                                     nx, ny, nz, ux, uy, uz, vx, vy, vz);
+        if (a > 90000) return angle_deg_at(gz_ox, gz_oy, mx, my);
+        return a;
+    }
     if (axis == 3) return view3d_cursor_angle(slot, mx, my);
-    let a: int = r3d_axis_angle(mx, my, axis, v3_center_x(slot), v3_center_y(slot), v3_center_z(slot));
-    if (a > 90000) return angle_deg_at(gz_ox, gz_oy, mx, my);
-    return a;
+    let a2: int = r3d_axis_angle(mx, my, axis, v3_center_x(slot), v3_center_y(slot), v3_center_z(slot));
+    if (a2 > 90000) return angle_deg_at(gz_ox, gz_oy, mx, my);
+    return a2;
 }
 
 /* Factor from the frozen grab. 80 screen px along a handle doubles the size. */
@@ -7256,7 +7470,7 @@ fn view3d_apply_rotate(mx: int, my: int) {
         return;
     }
     view3d_undo_record();
-    xform_grab_spin(rt3_axis, want);
+    xform_grab_spin_local(rt3_axis, want, xform_local);
     rt3_applied = want;
 }
 
@@ -8713,10 +8927,14 @@ fn viewport_input() {
     if (edit_tool == "scale" && inside && mouse_pressed(MOUSE_LEFT) &&
         drag_active == 0 && box_select_active == 0 && rotate_active == 0 &&
         scale_uniform_active == 0 && resize_active == 0) {
-        let rh: int = resize_handle_at(mx, my);
-        if (rh >= 0 && resize_slot >= 0) {
-            resize_begin(resize_slot, rh);
-            return;
+        if (xform_local == 1) {
+            if (scale_local_press(mx, my) == 1) return;
+        } else {
+            let rh: int = resize_handle_at(mx, my);
+            if (rh >= 0 && resize_slot >= 0) {
+                resize_begin(resize_slot, rh);
+                return;
+            }
         }
     }
 
@@ -8798,8 +9016,9 @@ fn viewport_input() {
             let dyw: float = dy_screen;
             let dx: int = dxw / cam_zoom;
             let dy: int = dyw / cam_zoom;
-            if (move_axis == 1) dy = 0;
-            if (move_axis == 2) dx = 0;
+            move_along(dx, dy, move_axis, sel_first());
+            dx = move_out_x;
+            dy = move_out_y;
             if (dx != 0 || dy != 0) {
                 let s2: int = sel_first();
                 while (s2 >= 0) {
@@ -10521,6 +10740,12 @@ fn toolbar_input() {
     if (ui_tool_btn_input(toolbar_tool_rect(1), "Move", "W", move_on) == 1) edit_tool = "move";
     if (ui_tool_btn_input(toolbar_tool_rect(2), "Rotate", "E", rot_on) == 1) edit_tool = "rotate";
     if (ui_tool_btn_input(toolbar_tool_rect(3), "Scale", "R", scale_on) == 1) edit_tool = "scale";
+    let space_label: string = "World";
+    if (xform_local == 1) space_label = "Local";
+    if (ui_tool_btn_input(toolbar_tool_rect(4), space_label, "L", xform_local) == 1) {
+        if (xform_local == 1) xform_local = 0;
+        else xform_local = 1;
+    }
 
     if (app_state == "edit" && point_in_rect(mx, my, toolbar_settings_rect())) {
         settings_show();
@@ -10569,6 +10794,9 @@ fn toolbar_draw() {
     ui_tool_btn_draw(toolbar_tool_rect(1), "Move", "W", move_on);
     ui_tool_btn_draw(toolbar_tool_rect(2), "Rot", "E", rot_on);
     ui_tool_btn_draw(toolbar_tool_rect(3), "Scale", "R", scale_on);
+    let space_label: string = "World";
+    if (xform_local == 1) space_label = "Local";
+    ui_tool_btn_draw(toolbar_tool_rect(4), space_label, "L", xform_local);
 
     let save_r: Rect = toolbar_save_rect();
     chrome_vsep(save_r.x - 8, toolbar_btn_y() + 4, toolbar_btn_h() - 8);
@@ -10653,6 +10881,10 @@ fn edit_hotkeys() {
         if (key_pressed(VK_W)) edit_tool = "move";
         if (key_pressed(VK_E)) edit_tool = "rotate";
         if (key_pressed(VK_R)) edit_tool = "scale";
+        if (key_pressed(VK_L)) {
+            if (xform_local == 1) xform_local = 0;
+            else xform_local = 1;
+        }
     }
     if (ctrl_held() && app_state != "play") {
         if (key_pressed(VK_S)) save_active_scene();

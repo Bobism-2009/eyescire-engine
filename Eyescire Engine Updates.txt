@@ -34,7 +34,7 @@ Add a way to allow AI models to connect to Eyescire Engine and use it like any n
 
 Ability to install "Plugins" via DLL files- Etc. that it will load at runtime.
 
-Way to swap between local and non local movement of objects.
+✔ Way to swap between local and non local movement of objects.
 
 ✔ Grid snapping support.
 
