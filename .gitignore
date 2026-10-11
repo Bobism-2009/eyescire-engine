@@ -22,3 +22,6 @@ __pycache__/
 # Local editor state
 eyescire_recent.txt
 _play_snapshot.scene
+
+# Local project for trying engine features
+/gallery/
