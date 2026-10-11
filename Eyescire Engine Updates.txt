@@ -71,3 +71,41 @@ Change current function names to ones that are easier to understand- Current fun
 More realistic looking games.
 
 ✔ Port to Opengl 3.3 instead of 1.1 (Will also update inside of nexa.)- Keep 1.1 but allow the function that swaps between opengl and vulkan to accept "OpenGL 3.3", and make it line by line a perfect port.
+
+Cast shadows from lights onto the ground and onto other objects.
+
+Fog in a 3D scene, so far objects fade into a color.
+
+Gamepad support, and a way to rebind keys.
+
+Tags on objects, so a script can find every object with that tag.
+
+Trigger volumes that run a script when something enters or leaves.
+
+Snap a move onto the face of another object, not only onto the grid.
+
+Show how long each frame took, in the editor.
+
+Normal maps and roughness on a material, so a surface is not one flat color.
+
+Align and space out several selected objects.
+
+Copy objects from one scene and paste them into another.
+
+Nine-slice panels, so a UI box can stretch without blurring its corners.
+
+Folders in the hierarchy, so objects can be grouped.
+
+Collision layers, so you can choose which objects pass through each other.
+
+Pathfinding, so a character can walk around walls in 2D and in 3D.
+
+Tweens: move, turn, or fade an object over time from a script.
+
+Saved camera angles in the editor, so you can jump back to a view.
+
+Decals, like a poster or a sign stuck onto a surface.
+
+A simple water surface.
+
+Save and load the player's progress from a script.
