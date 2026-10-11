@@ -1956,3 +1956,5 @@ static void particles33(const PartDraw* draws, int n) {
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 }
+
+#include "render3d_vk.inl"

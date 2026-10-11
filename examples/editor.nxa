@@ -11737,7 +11737,7 @@ fn settings_page_graphics(x: int, y: int, w: int) {
     y = y + 40;
     draw_text(x, y, "Takes effect on the next frame. This frame: " + r3d_backend_name(), col_text_dim());
     y = y + 22;
-    draw_text(x, y, "Vulkan 1.4 draws the view. Shadows, fog, and materials stay on OpenGL 3.3.", col_text_dim());
+    draw_text(x, y, "Vulkan 1.4 draws the same view as OpenGL 3.3.", col_text_dim());
     y = y + 36;
     y = chrome_section(x, y, w, "PLAY WINDOW");
     draw_text(x, y, "3D Play and an exported game open at this size.", col_text_dim());

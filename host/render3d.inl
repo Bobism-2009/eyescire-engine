@@ -1497,9 +1497,10 @@ static bool ready() {
                             GetModuleHandleA(nullptr), nullptr);
     if (!S.wnd) return false;
     if (g_wantVk) {
-        if (nexa_vk14::open(S.wnd, g_vsync)) {
+        if (nexa_vk14::open(S.wnd, g_vsync) && nexa_vk14::scene_ok()) {
             S.vk = true;
             S.ok = true;
+            S.maxSamples = 8;
             return true;
         }
         nexa_vk14::shutdown();
@@ -1698,232 +1699,21 @@ static void sky_draw11(int br, int bg, int bb) {
     glMatrixMode(GL_MODELVIEW);
 }
 
-static float g_vkVP[16];
 
-static void vk_mul(float* o, const float* a, const float* b) {
-    for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r)
-            o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1]
-                         + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
-}
-
-static void vk_light(float px, float py, float pz, float nx, float ny, float nz,
-                     int er, int eg, int eb, float* rgb) {
-    float ar = 0.35f, ag = 0.35f, ab = 0.35f;
-    float dr = 0, dg = 0, db = 0;
-    bool amb = false, sun = false, lamp = false;
-    for (const Light& l : g_lights) {
-        if (l.type == 3) {
-            if (!amb) { ar = ag = ab = 0; amb = true; }
-            ar += l.r; ag += l.g; ab += l.b;
-        } else if (l.type == 0) {
-            sun = true;
-            float nd = -(nx * l.dir.x + ny * l.dir.y + nz * l.dir.z);
-            if (nd < 0) nd = 0;
-            dr += l.r * nd; dg += l.g * nd; db += l.b * nd;
-        } else if (l.type == 1 || l.type == 2) {
-            lamp = true;
-            float lx = l.pos.x - px, ly = l.pos.y - py, lz = l.pos.z - pz;
-            float len = std::sqrt(lx * lx + ly * ly + lz * lz);
-            if (len < 1e-4f) continue;
-            lx /= len; ly /= len; lz /= len;
-            if (l.type == 2) {
-                float cd = -(lx * l.dir.x + ly * l.dir.y + lz * l.dir.z);
-                float lim = std::cos(l.cone * 0.5f * 3.14159265f / 180.0f);
-                if (cd < lim) continue;
-            }
-            float nd = nx * lx + ny * ly + nz * lz;
-            if (nd < 0) nd = 0;
-            float att = (l.range > 1e-3f) ? std::max(0.0f, 1.0f - len / l.range) : 1.0f;
-            dr += l.r * nd * att; dg += l.g * nd * att; db += l.b * nd * att;
-        }
-    }
-    if (!sun && !lamp) {
-        float nd = nx * kDefaultLight.x + ny * kDefaultLight.y + nz * kDefaultLight.z;
-        if (nd < 0) nd = 0;
-        dr += 0.95f * nd; dg += 0.95f * nd; db += 0.95f * nd;
-    }
-    rgb[0] = std::min(1.0f, (er / 255.0f) * (ar + dr));
-    rgb[1] = std::min(1.0f, (eg / 255.0f) * (ag + dg));
-    rgb[2] = std::min(1.0f, (eb / 255.0f) * (ab + db));
-}
-
-static void vk_vert(std::vector<float>& o, const float* M, const float* N,
-                    float x, float y, float z, float nx, float ny, float nz,
-                    int er, int eg, int eb) {
-    float px = M[0] * x + M[4] * y + M[8] * z + M[12];
-    float py = M[1] * x + M[5] * y + M[9] * z + M[13];
-    float pz = M[2] * x + M[6] * y + M[10] * z + M[14];
-    float nnx = N[0] * nx + N[4] * ny + N[8] * nz;
-    float nny = N[1] * nx + N[5] * ny + N[9] * nz;
-    float nnz = N[2] * nx + N[6] * ny + N[10] * nz;
-    float nl = std::sqrt(nnx * nnx + nny * nny + nnz * nnz);
-    if (nl > 1e-8f) { nnx /= nl; nny /= nl; nnz /= nl; }
-    float col[3];
-    vk_light(px, py, pz, nnx, nny, nnz, er, eg, eb, col);
-    o.push_back(px); o.push_back(py); o.push_back(pz);
-    o.push_back(col[0]); o.push_back(col[1]); o.push_back(col[2]);
-}
+static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb);
+static void vk_frame_entity(const Entity& e, int slot);
+static void vk_frame_line(V3 a, V3 b, int r, int g, int bl, int alpha);
 
 static int vk_begin(int w, int h, double fov_deg, int br, int bg, int bb) {
-    place(C.sx, C.sy, w, h);
-    S.w = w;
-    S.h = h;
-    nexa_vk14::set_vsync(g_vsync);
-    float aspect = h > 0 ? (float)w / (float)h : 1.0f;
-    float proj[16] = {};
-    const float pi = 3.14159265f;
-    float f = 1.0f / std::tan((float)fov_deg * 0.5f * pi / 180.0f);
-    const float zn = kNear, zf = 4000.0f;
-    proj[0] = f / aspect;
-    proj[5] = f;
-    proj[10] = (zf + zn) / (zn - zf);
-    proj[11] = -1.0f;
-    proj[14] = (2.0f * zf * zn) / (zn - zf);
-    float view[16] = {
-        C.right.x, C.up.x, -C.fwd.x, 0,
-        C.right.y, C.up.y, -C.fwd.y, 0,
-        C.right.z, C.up.z, -C.fwd.z, 0,
-        0, 0, 0, 1
-    };
-    view[12] = -(C.right.x * C.eye.x + C.right.y * C.eye.y + C.right.z * C.eye.z);
-    view[13] = -(C.up.x * C.eye.x + C.up.y * C.eye.y + C.up.z * C.eye.z);
-    view[14] = C.fwd.x * C.eye.x + C.fwd.y * C.eye.y + C.fwd.z * C.eye.z;
-    vk_mul(g_vkVP, proj, view);
-    return nexa_vk14::begin(br / 255.0f, bg / 255.0f, bb / 255.0f, w, h);
+    return vk_frame_begin(w, h, fov_deg, br, bg, bb);
 }
 
-static void vk_entity(const Entity& e, int) {
-    float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
-    if (w <= 0 || h <= 0) return;
-    float sx = w * kUnit, sy = h * kUnit, sz = d * kUnit;
-    const Model* mdl = nullptr;
-    bool cap = false;
-    if (e.kind == "sphere") {
-        float dm = std::min(w, h) * kUnit;
-        sx = sy = sz = dm;
-    } else if (e.kind == "cylinder") {
-        sz = w * kUnit;
-    } else if (e.kind == "capsule") {
-        sz = w * kUnit;
-        cap = true;
-    } else if (e.kind == "model" && !e.model.empty()) {
-        mdl = &model_load(model_path(e.model));
-        if (mdl && mdl->ok) {
-            float s = std::max(w, h) * kUnit;
-            sx = sy = sz = s;
-        } else mdl = nullptr;
-    }
-    if (sx < 1e-4f) sx = 1e-4f;
-    if (sy < 1e-4f) sy = 1e-4f;
-    if (sz < 1e-4f) sz = 1e-4f;
-    float Tm[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-    float Rm[16], Sm[16] = {sx,0,0,0, 0,sy,0,0, 0,0,sz,0, 0,0,0,1};
-    float iS[16] = {1/sx,0,0,0, 0,1/sy,0,0, 0,0,1/sz,0, 0,0,0,1};
-    float RS[16], M[16], N[16];
-    ::orient_matrix(Rm, e.rotX, e.rotY, e.rotDeg);
-    Tm[12] = (e.x + w * 0.5f) * kUnit;
-    Tm[13] = -(e.y + h * 0.5f) * kUnit;
-    Tm[14] = -(e.z + d * 0.5f) * kUnit;
-    vk_mul(RS, Rm, Sm);
-    vk_mul(M, Tm, RS);
-    if (cap) std::memcpy(N, Rm, sizeof(N));
-    else vk_mul(N, Rm, iS);
-
-    static std::vector<float> verts;
-    verts.clear();
-    auto push = [&](float x, float y, float z, float nx, float ny, float nz) {
-        vk_vert(verts, M, N, x, y, z, nx, ny, nz, e.r, e.g, e.b);
-    };
-    if (e.kind == "sphere") {
-        const int SEG = 16, RING = 12;
-        for (int j = 0; j < RING; ++j) {
-            for (int i = 0; i < SEG; ++i) {
-                auto at = [&](int jj, int ii) {
-                    float th = (float)jj / RING * 3.14159265f;
-                    float ph = (float)ii / SEG * 6.2831853f;
-                    float x = std::sin(th) * std::cos(ph);
-                    float y = std::cos(th);
-                    float z = std::sin(th) * std::sin(ph);
-                    push(x * 0.5f, y * 0.5f, z * 0.5f, x, y, z);
-                };
-                at(j, i); at(j + 1, i); at(j + 1, i + 1);
-                at(j, i); at(j + 1, i + 1); at(j, i + 1);
-            }
-        }
-    } else if (e.kind == "cylinder") {
-        const int CS = 20;
-        for (int i = 0; i < CS; ++i) {
-            float a0 = (float)i / CS * 6.2831853f;
-            float a1 = (float)(i + 1) / CS * 6.2831853f;
-            float x0 = std::cos(a0), z0 = std::sin(a0), x1 = std::cos(a1), z1 = std::sin(a1);
-            push(x0 * 0.5f, 0.5f, z0 * 0.5f, x0, 0, z0);
-            push(x0 * 0.5f, -0.5f, z0 * 0.5f, x0, 0, z0);
-            push(x1 * 0.5f, -0.5f, z1 * 0.5f, x1, 0, z1);
-            push(x0 * 0.5f, 0.5f, z0 * 0.5f, x0, 0, z0);
-            push(x1 * 0.5f, -0.5f, z1 * 0.5f, x1, 0, z1);
-            push(x1 * 0.5f, 0.5f, z1 * 0.5f, x1, 0, z1);
-            push(0, 0.5f, 0, 0, 1, 0);
-            push(x0 * 0.5f, 0.5f, z0 * 0.5f, 0, 1, 0);
-            push(x1 * 0.5f, 0.5f, z1 * 0.5f, 0, 1, 0);
-            push(0, -0.5f, 0, 0, -1, 0);
-            push(x1 * 0.5f, -0.5f, z1 * 0.5f, 0, -1, 0);
-            push(x0 * 0.5f, -0.5f, z0 * 0.5f, 0, -1, 0);
-        }
-    } else if (cap) {
-        CapsuleLocal cl = capsule_local(w, h);
-        capsule_emit(cl, sx, sy, sz, [&](float px, float py, float pz, float nx, float ny, float nz) {
-            push(px, py, pz, nx, ny, nz);
-        });
-    } else if (mdl) {
-        for (size_t k = 0; k + 2 < mdl->tri.size(); k += 3) {
-            V3 a = mdl->pos[mdl->tri[k]], b = mdl->pos[mdl->tri[k + 1]], c = mdl->pos[mdl->tri[k + 2]];
-            V3 n = norm(cross(b - a, c - a));
-            push(a.x, a.y, a.z, n.x, n.y, n.z);
-            push(b.x, b.y, b.z, n.x, n.y, n.z);
-            push(c.x, c.y, c.z, n.x, n.y, n.z);
-        }
-    } else {
-        static const float F[6][4][3] = {
-            { { .5f,-.5f,-.5f},{ .5f, .5f,-.5f},{ .5f, .5f, .5f},{ .5f,-.5f, .5f} },
-            { {-.5f,-.5f, .5f},{-.5f, .5f, .5f},{-.5f, .5f,-.5f},{-.5f,-.5f,-.5f} },
-            { {-.5f, .5f,-.5f},{-.5f, .5f, .5f},{ .5f, .5f, .5f},{ .5f, .5f,-.5f} },
-            { {-.5f,-.5f, .5f},{-.5f,-.5f,-.5f},{ .5f,-.5f,-.5f},{ .5f,-.5f, .5f} },
-            { {-.5f,-.5f, .5f},{ .5f,-.5f, .5f},{ .5f, .5f, .5f},{-.5f, .5f, .5f} },
-            { { .5f,-.5f,-.5f},{-.5f,-.5f,-.5f},{-.5f, .5f,-.5f},{ .5f, .5f,-.5f} },
-        };
-        static const float FN[6][3] = { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
-        const int GRID = 4;
-        for (int fce = 0; fce < 6; ++fce) {
-            auto at = [&](float u, float v) {
-                float p[3];
-                for (int c = 0; c < 3; ++c) {
-                    float a = F[fce][0][c] + (F[fce][1][c] - F[fce][0][c]) * u;
-                    float b = F[fce][3][c] + (F[fce][2][c] - F[fce][3][c]) * u;
-                    p[c] = a + (b - a) * v;
-                }
-                push(p[0], p[1], p[2], FN[fce][0], FN[fce][1], FN[fce][2]);
-            };
-            for (int i = 0; i < GRID; ++i) {
-                for (int j = 0; j < GRID; ++j) {
-                    float u0 = (float)i / GRID, u1 = (float)(i + 1) / GRID;
-                    float v0 = (float)j / GRID, v1 = (float)(j + 1) / GRID;
-                    at(u0, v0); at(u1, v0); at(u1, v1);
-                    at(u0, v0); at(u1, v1); at(u0, v1);
-                }
-            }
-        }
-    }
-    if (verts.size() >= 6)
-        nexa_vk14::draw(verts.data(), (int)(verts.size() / 6), 0, 1, g_vkVP);
+static void vk_entity(const Entity& e, int slot) {
+    vk_frame_entity(e, slot);
 }
 
-static void vk_line(V3 a, V3 b, int r, int g, int bl) {
-    float v[12] = {
-        a.x, a.y, a.z, r / 255.0f, g / 255.0f, bl / 255.0f,
-        b.x, b.y, b.z, r / 255.0f, g / 255.0f, bl / 255.0f
-    };
-    nexa_vk14::draw(v, 2, 1, 1, g_vkVP);
+static void vk_line(V3 a, V3 b, int r, int g, int bl, int alpha) {
+    vk_frame_line(a, b, r, g, bl, alpha);
 }
 
 static bool is_vk() { return S.vk; }
@@ -2640,10 +2430,13 @@ extern "C" void engine_r3d_hitbox(int s) {
     if (e.hitbox <= 0 || e.kind != "model" || e.model.empty()) return;
     float w = (float)e.w, h = (float)e.h;
     if (w <= 0 || h <= 0) return;
-    if (g_useGL) {
-        glb::aa_for(e);
-        glb::cover_model(e, 70, 210, 120, 90);
-        glb::aa_project();
+    if (g_useGL || g_useVk) {
+        if (g_useVk) glb::vk_frame_cover_model(e, 70, 210, 120, 90);
+        else {
+            glb::aa_for(e);
+            glb::cover_model(e, 70, 210, 120, 90);
+            glb::aa_project();
+        }
         return;
     }
     const Model* m = &model_load(model_path(e.model));
@@ -2709,6 +2502,7 @@ extern "C" void engine_r3d_cone(double bx, double by, double bz,
     }
     int ntri = (int)verts.size() / 18;
     if (ntri <= 0) return;
+    if (g_useVk) { glb::vk_frame_painted(verts.data(), ntri); return; }
     if (g_useGL) {
         glb::painted(verts.data(), ntri);
         return;
@@ -2759,6 +2553,7 @@ extern "C" void engine_r3d_sector(double cx, double cy, double cz, int axis,
         pts.push_back(at(a0 + step * (i + 1)));
     }
     int ntri = steps;
+    if (g_useVk) { glb::vk_frame_sector(pts.data(), ntri, r, g, b, a); return; }
     if (g_useGL) {
         glb::sector(pts.data(), ntri, r, g, b, a);
         return;
@@ -2790,12 +2585,13 @@ extern "C" void engine_r3d_screen_rect(int x, int y, int w, int h, int r, int g_
     if (x1 > T.w) x1 = T.w;
     if (y1 > T.h) y1 = T.h;
     if (x1 <= x0 || y1 <= y0) return;
-    if (g_useGL) {
+    if (g_useGL || g_useVk) {
         float nx0 = (float)x0 / (float)T.w * 2.0f - 1.0f;
         float nx1 = (float)x1 / (float)T.w * 2.0f - 1.0f;
         float ny0 = (float)y0 / (float)T.h * 2.0f - 1.0f;
         float ny1 = (float)y1 / (float)T.h * 2.0f - 1.0f;
-        glb::screen_rect(nx0, ny0, nx1, ny1, r, g_, b, a);
+        if (g_useVk) glb::vk_frame_screen(nx0, ny0, nx1, ny1, r, g_, b, a);
+        else glb::screen_rect(nx0, ny0, nx1, ny1, r, g_, b, a);
         return;
     }
     int ia = 255 - a;
@@ -2820,7 +2616,7 @@ extern "C" void engine_r3d_line(double x1, double y1, double z1, double x2, doub
     using namespace r3d;
     if (!C.valid) return;
     if (g_useVk) {
-        glb::vk_line(v3((float)x1, (float)y1, (float)z1), v3((float)x2, (float)y2, (float)z2), r, g_, b);
+        glb::vk_line(v3((float)x1, (float)y1, (float)z1), v3((float)x2, (float)y2, (float)z2), r, g_, b, a);
         return;
     }
     if (g_useGL) {
@@ -2863,6 +2659,9 @@ extern "C" void engine_r3d_end(int or_, int og, int ob) {
         glb::particles_gl();
         if (or_ >= 0) glb::outline(or_, og, ob);
         glb::finish();
+        } else {
+        glb::vk_frame_particles();
+        if (or_ >= 0) glb::vk_frame_outline(or_, og, ob);
         }
         /* Key color under the gizmos and HUD. The view window shows the 3D
            picture; present() copies this rectangle on top with the key transparent. */

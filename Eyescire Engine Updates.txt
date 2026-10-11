@@ -46,7 +46,7 @@ Reflections- Mirrors- Things like that.
 
 ✔ In project settings, ability to turn on and off VSync
 
-Ability to change rendering from Vulkan to OpenGL, Etc.
+✔ Ability to change rendering from Vulkan to OpenGL, Etc.
 
 Support for more programming languages- like lua, Via extensions. (Will be DLL files + Json for highlighting).
 
