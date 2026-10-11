@@ -109,3 +109,113 @@ Decals, like a poster or a sign stuck onto a surface.
 A simple water surface.
 
 Save and load the player's progress from a script.
+
+Bloom, so bright spots glow.
+
+Ambient occlusion, so corners and places where objects meet get darker.
+
+Color grading, so the whole picture can be warmer, colder, or flatter.
+
+A draw distance, so objects past it stop drawing.
+
+Level of detail, so a far model swaps to a simpler mesh.
+
+A wireframe view in the editor.
+
+Show collision shapes while you edit.
+
+Frame the selection, so the camera jumps to the object you picked.
+
+Duplicate objects in a line, a grid, or a circle.
+
+Lock an object so it cannot be moved until you unlock it.
+
+Change one property on every selected object at once.
+
+A raycast from a script, so the game can ask what is in front of something.
+
+Change to another scene from a script, with a loading screen between them.
+
+Variables for the whole scene, separate from one object's public values.
+
+A spawner that makes copies of an object on a timer.
+
+An object that follows a path you draw.
+
+A camera that follows a path.
+
+Moving platforms, and one-way platforms you can jump through from below.
+
+Joints, so two objects can hinge or stay a set distance apart.
+
+3D physics, so objects can fall and bump in the 3D view, not only on the flat plane.
+
+Trails behind a moving object, and a beam such as a laser.
+
+God rays from a light.
+
+A second camera drawn onto a surface in the scene, like a monitor.
+
+UI anchors, so a widget stays on a screen edge when the window changes size.
+
+More than one font.
+
+A custom mouse cursor.
+
+Reverb zones, so a sound changes inside a cave or a hall.
+
+Crossfade from one music track to another.
+
+Surface types, so a footstep can differ on stone and on wood.
+
+Time scale, so a script can slow the game or pause it, and the editor can step one frame.
+
+Click an error in the console and open that script.
+
+Drag a texture or a model from a folder onto an object.
+
+A warning on an object whose texture or script is missing.
+
+Notes on an object that stay in the scene and do not show in the game.
+
+An icon and a window title for the exported game.
+
+A crash log written next to the game.
+
+An interaction prompt a script can show, such as "Press E".
+
+A checkpoint a script can send the player back to, and a teleport volume.
+
+A camera zone that changes the view when the player walks into it.
+
+Day and night, so the directional light can move over time.
+
+Rain and snow.
+
+Scatter grass and small rocks across a surface.
+
+Break an object into pieces.
+
+Outline an object during play, so the player can see what they can use.
+
+World-aligned textures, so a large floor does not show an obvious repeat.
+
+Shadow distance, so shadows fade out far from the camera.
+
+Input actions, so a script reads "jump" or "use" and the keys can change.
+
+Subtitles, and a dialogue box.
+
+Localization, so the game can swap language files.
+
+A minimap, and objective markers in the world.
+
+Keep a chosen object alive when the scene changes.
+
+Fade the screen to a color, and shake it, from a script.
+
+Prefab overrides, so a placed copy can differ and you can still see what it inherited.
+
+Snap rotation to a step, such as 15 degrees.
+
+Show light ranges and trigger sizes as faint shapes while you edit.
