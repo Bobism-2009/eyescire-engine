@@ -466,16 +466,23 @@ float shadow_pcf(vec4 clip) {
     if (clip.w <= 0.0) return 1.0;
     vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
     if (p.z > 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) return 1.0;
+    const vec2 kOff[16] = vec2[](
+        vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725),
+        vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
+        vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464),
+        vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
+        vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420),
+        vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19048895),
+        vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),
+        vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
+    );
     float s = 0.0;
-    /* Soft edges: 5x5 PCF across ~5 texels on the 2048 shadow map. */
-    vec2 o = vec2(2.5 / 2048.0);
-    for (int y = -2; y <= 2; y++) {
-        for (int x = -2; x <= 2; x++) {
-            float d = texture(uShadowMap, p.xy + vec2(float(x), float(y)) * o).r;
-            s += (p.z - 0.0015 > d) ? 0.0 : 1.0;
-        }
+    float scale = 10.0 / 4096.0;
+    for (int i = 0; i < 16; i++) {
+        float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
+        s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
     }
-    return s / 25.0;
+    return s / 16.0;
 }
 void main() {
     vec3 col = gl_FrontFacing ? vFront : vBack;
@@ -558,16 +565,23 @@ float shadow_pcf(vec4 clip) {
     if (clip.w <= 0.0) return 1.0;
     vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
     if (p.z > 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) return 1.0;
+    const vec2 kOff[16] = vec2[](
+        vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725),
+        vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
+        vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464),
+        vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
+        vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420),
+        vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19048895),
+        vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),
+        vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
+    );
     float s = 0.0;
-    /* Soft edges: 5x5 PCF across ~5 texels on the 2048 shadow map. */
-    vec2 o = vec2(2.5 / 2048.0);
-    for (int y = -2; y <= 2; y++) {
-        for (int x = -2; x <= 2; x++) {
-            float d = texture(uShadowMap, p.xy + vec2(float(x), float(y)) * o).r;
-            s += (p.z - 0.0015 > d) ? 0.0 : 1.0;
-        }
+    float scale = 10.0 / 4096.0;
+    for (int i = 0; i < 16; i++) {
+        float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
+        s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
     }
-    return s / 25.0;
+    return s / 16.0;
 }
 vec3 shade(vec3 n, vec3 pe, vec3 albedo, float metal, float rough) {
     vec3 direct = vec3(0.0);
@@ -1294,6 +1308,8 @@ using FbTexFn = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
 static FbTexFn g_fbTex = nullptr;
 static int g_shFailed = 0;
 
+static constexpr int kShadowMap = 4096;
+
 static bool ensure_shadow_target() {
     if (g_shFailed) return false;
     if (K.shFbo && K.shTex) return true;
@@ -1301,7 +1317,7 @@ static bool ensure_shadow_target() {
     if (!g_fbTex || !S.genFb || !S.bindFb || !S.status) return false;
     glGenTextures(1, &K.shTex);
     glBindTexture(GL_TEXTURE_2D, K.shTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, 0x81A6, 2048, 2048, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, 0x81A6, kShadowMap, kShadowMap, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812D);
@@ -1318,6 +1334,27 @@ static bool ensure_shadow_target() {
     S.bindFb(kFramebuffer, S.fbo);
     if (!ok) { g_shFailed = 1; return false; }
     return true;
+}
+
+/* Fit the light box to what the camera sees so huge floors do not stretch
+   each shadow texel across the whole ground. */
+static void shadow_fit_box(V3& center, float& half, float sceneRadius) {
+    float halfScene = sceneRadius * 1.15f;
+    if (halfScene < 8.f) halfScene = 8.f;
+    float halfCam = halfScene;
+    if (C.valid) {
+        V3 gap = C.target - C.eye;
+        float d = std::sqrt(dot(gap, gap));
+        halfCam = d * 0.8f + 8.f;
+        if (halfCam < 12.f) halfCam = 12.f;
+        if (halfCam > 48.f) halfCam = 48.f;
+    }
+    if (halfScene > halfCam) {
+        half = halfCam;
+        if (C.valid) center = C.target;
+    } else {
+        half = halfScene;
+    }
 }
 
 static void shadow_publish(int on, int sunSlot) {
@@ -1375,11 +1412,13 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
     float radius = std::sqrt(dot(ext, ext));
     if (radius < 0.5f) radius = 0.5f;
     V3 center = v3((minx + maxx) * 0.5f, (miny + maxy) * 0.5f, (minz + maxz) * 0.5f);
+    float half = radius * 1.15f;
+    shadow_fit_box(center, half, radius);
     V3 fwd = norm(shine);
     V3 upRef = std::fabs(fwd.y) > 0.95f ? v3(0, 0, 1) : v3(0, 1, 0);
     V3 right = norm(cross(fwd, upRef));
     V3 up = norm(cross(right, fwd));
-    float dist = radius + 4.0f;
+    float dist = half + 4.0f;
     V3 eye = center - fwd * dist;
     float basis[16] = {
         right.x, up.x, -fwd.x, 0,
@@ -1391,8 +1430,7 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
     ident(tr);
     tr[12] = -eye.x; tr[13] = -eye.y; tr[14] = -eye.z;
     mul(view, basis, tr);
-    float half = radius * 1.2f;
-    float z0 = 0.05f, z1 = dist + radius + 4.0f;
+    float z0 = 0.05f, z1 = dist + half + 4.0f;
     std::memset(ortho, 0, sizeof(ortho));
     ortho[0] = 1.0f / half;
     ortho[5] = 1.0f / half;
@@ -1402,7 +1440,7 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
     mul(K.lightVP, ortho, view);
 
     S.bindFb(kFramebuffer, K.shFbo);
-    glViewport(0, 0, 2048, 2048);
+    glViewport(0, 0, kShadowMap, kShadowMap);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glDepthMask(GL_TRUE);

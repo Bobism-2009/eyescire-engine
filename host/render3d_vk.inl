@@ -641,18 +641,35 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
             float radius = std::sqrt(dot(ext, ext));
             if (radius < 0.5f) radius = 0.5f;
             V3 center = v3((minx + maxx) * 0.5f, (miny + maxy) * 0.5f, (minz + maxz) * 0.5f);
+            float half = radius * 1.15f;
+            float halfScene = radius * 1.15f;
+            if (halfScene < 8.f) halfScene = 8.f;
+            float halfCam = halfScene;
+            if (C.valid) {
+                V3 gap = C.target - C.eye;
+                float d = std::sqrt(dot(gap, gap));
+                halfCam = d * 0.8f + 8.f;
+                if (halfCam < 12.f) halfCam = 12.f;
+                if (halfCam > 48.f) halfCam = 48.f;
+            }
+            if (halfScene > halfCam) {
+                half = halfCam;
+                if (C.valid) center = C.target;
+            } else {
+                half = halfScene;
+            }
             V3 fwd = norm(shine);
             V3 upRef = std::fabs(fwd.y) > 0.95f ? v3(0, 0, 1) : v3(0, 1, 0);
             V3 rightv = norm(cross(fwd, upRef));
             V3 up = norm(cross(rightv, fwd));
-            float dist = radius + 4.0f;
+            float dist = half + 4.0f;
             V3 eye = center - fwd * dist;
             float b2[16] = { rightv.x, up.x, -fwd.x, 0, rightv.y, up.y, -fwd.y, 0, rightv.z, up.z, -fwd.z, 0, 0, 0, 0, 1 };
             float trs[16], view[16], ortho[16];
             ident(trs);
             trs[12] = -eye.x; trs[13] = -eye.y; trs[14] = -eye.z;
             mul(view, b2, trs);
-            float half = radius * 1.2f, z0 = 0.05f, z1 = dist + radius + 4.0f;
+            float z0 = 0.05f, z1 = dist + half + 4.0f;
             std::memset(ortho, 0, sizeof(ortho));
             ortho[0] = 1.0f / half; ortho[5] = 1.0f / half;
             ortho[10] = -2.0f / (z1 - z0); ortho[14] = -(z1 + z0) / (z1 - z0); ortho[15] = 1;
