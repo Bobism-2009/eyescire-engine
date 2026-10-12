@@ -10580,31 +10580,24 @@ fn export_close() {
 }
 
 fn export_panel(): Rect {
-    let w: int = 860;
-    let h: int = 520;
+    let w: int = 720;
+    let h: int = 420;
     if (w > WIN_W - 40) w = WIN_W - 40;
     if (h > WIN_H - 40) h = WIN_H - 40;
     return rect((WIN_W - w) / 2, (WIN_H - h) / 2, w, h);
 }
 
-fn export_preset_row(nav: Rect, y: int, id: int, title: string, subtitle: string) {
-    let r: Rect = rect(nav.x + 10, y, nav.w - 20, 54);
+fn export_preset_row(x: int, y: int, w: int, id: int, title: string, subtitle: string) {
+    let r: Rect = rect(x, y, w, 44);
     let on: int = 0;
     if (export_preset == id) on = 1;
     let hover: int = 0;
     if (mouse_hover_held(r) >= 1) hover = 1;
-    if (on == 1) {
-        th_fill(r, th_radius_for(r.h), col_accent_dim());
-        th_edge(r, th_radius_for(r.h), col_accent());
-    } else if (hover == 1) {
-        th_fill(r, th_radius_for(r.h), col_panel_lit());
-    }
-    th_font_semi(13);
-    let tc: Color = col_text_main();
-    if (on == 1) tc = th_shade(col_accent(), 90);
-    draw_text(r.x + 12, r.y + 10, title, tc);
+    th_row(r, on, hover);
+    th_font_semi(12);
+    draw_text(r.x + 14, r.y + 8, title, col_text_main());
     th_font(11);
-    draw_text(r.x + 12, r.y + 30, subtitle, col_text_dim());
+    draw_text(r.x + 14, r.y + 25, subtitle, col_text_dim());
     th_font(14);
     if (hover == 1 && mouse_pressed(MOUSE_LEFT) && on == 0) {
         export_preset = id;
@@ -10612,15 +10605,35 @@ fn export_preset_row(nav: Rect, y: int, id: int, title: string, subtitle: string
     }
 }
 
-fn export_onoff(x: int, y: int, label: string, key: string, def: int) {
-    draw_text(x, y + 6, label, col_text_main());
+fn export_onoff(x: int, y: int, w: int, label: string, key: string, def: int) {
+    draw_text(x, th_text_y(y, 28), label, col_text_main());
     let on: int = pref_int(key, def);
     let k0: string = "secondary";
     let k1: string = "secondary";
     if (on == 1) k1 = "primary";
     else k0 = "primary";
-    if (ui_button_kind(rect(x + 280, y, 72, 28), "Off", k0) == 1 && on == 1) pref_set_int(key, 0);
-    if (ui_button_kind(rect(x + 360, y, 72, 28), "On", k1) == 1 && on == 0) pref_set_int(key, 1);
+    if (ui_button_kind(rect(x + w - 168, y, 76, 28), "Off", k0) == 1 && on == 1) pref_set_int(key, 0);
+    if (ui_button_kind(rect(x + w - 84, y, 76, 28), "On", k1) == 1 && on == 0) pref_set_int(key, 1);
+}
+
+fn export_path_label(path: string, max_w: int): string {
+    th_font(12);
+    if (eng_text_width(path) <= max_w) {
+        th_font(14);
+        return path;
+    }
+    let ell: string = "...";
+    let i: int = 0;
+    while (i < path.len()) {
+        let tail: string = ell + path.substring(i, path.len() - i);
+        if (eng_text_width(tail) <= max_w) {
+            th_font(14);
+            return tail;
+        }
+        i = i + 1;
+    }
+    th_font(14);
+    return ell;
 }
 
 fn export_run() {
@@ -10638,61 +10651,74 @@ fn export_draw() {
     if (export_open == 0) return;
     eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 150);
     let p: Rect = export_panel();
-    draw_fill_rect(p, col_panel_dark());
-    draw_outline_rect(p, 1, col_border_soft());
+    th_popup(p);
 
-    let nav: Rect = rect(p.x, p.y, 220, p.h - 56);
+    let foot_h: int = 52;
+    let nav_w: int = 200;
+    let nav: Rect = rect(p.x, p.y, nav_w, p.h - foot_h);
+    let body: Rect = rect(p.x + nav_w, p.y, p.w - nav_w, p.h - foot_h);
+    let foot: Rect = rect(p.x, p.y + p.h - foot_h, p.w, foot_h);
+
     draw_fill_rect(nav, col_bg_deep());
     draw_fill_rect(rect(nav.x + nav.w - 1, nav.y, 1, nav.h), col_border_soft());
-    th_font(16);
-    draw_text(nav.x + 16, nav.y + 18, "Export", col_text_main());
-    th_font(11);
-    draw_text(nav.x + 16, nav.y + 42, "Presets", col_text_dim());
-    th_font(14);
-    export_preset_row(nav, nav.y + 64, 0, "Windows Desktop", "Standalone .exe build");
-    export_preset_row(nav, nav.y + 126, 1, "Web (HTML)", "Browser player (2D)");
+    draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
 
-    let x: int = p.x + nav.w + 22;
-    let y: int = p.y + 22;
-    let w: int = p.w - nav.w - 44;
-    th_font(16);
+    th_font_semi(14);
+    draw_text(nav.x + 14, nav.y + 16, "Export", col_text_main());
+    th_font(11);
+    draw_text(nav.x + 14, nav.y + 38, "PRESETS", col_text_dim());
+    th_font(14);
+    export_preset_row(nav.x + 8, nav.y + 58, nav.w - 16, 0, "Windows Desktop", "Standalone .exe");
+    export_preset_row(nav.x + 8, nav.y + 106, nav.w - 16, 1, "Web (HTML)", "Browser player");
+
+    let x: int = body.x + 20;
+    let y: int = body.y + 18;
+    let w: int = body.w - 40;
+
+    th_font_semi(14);
     if (export_preset == 1) draw_text(x, y, "Web (HTML)", col_text_main());
     else draw_text(x, y, "Windows Desktop", col_text_main());
     th_font(14);
-    y = y + 36;
+    y = y + 28;
 
     y = chrome_section(x, y, w, "OUTPUT");
     chrome_field_label(x, y, "Export path");
-    y = y + 16;
-    let path_r: Rect = rect(x, y, w - 96, 28);
-    ui_field_draw(path_r, export_dest, 0);
-    if (ui_button(rect(x + w - 88, y, 88, 28), "Browse") == 1) {
+    y = y + 14;
+    let gap: int = 8;
+    let browse_w: int = 84;
+    let path_r: Rect = rect(x, y, w - browse_w - gap, 28);
+    let shown: string = export_path_label(export_dest, path_r.w - 18);
+    ui_field_draw(path_r, shown, 0);
+    if (ui_button(rect(x + w - browse_w, y, browse_w, 28), "Browse") == 1) {
         let initial: string = export_dest;
         if (initial.len() == 0) initial = proj_root();
         let picked: string = eng_open_folder_dialog("Choose export folder", initial);
         if (picked.len() > 0) export_dest = picked;
     }
-    y = y + 40;
-    draw_text(x, y, "Desktop builds as <folder>/<Project>.exe. Web writes HTML into the folder.", col_text_dim());
     y = y + 36;
+    th_font(11);
+    if (export_preset == 1) draw_text(x, y, "Writes index.html and game files into this folder.", col_text_dim());
+    else draw_text(x, y, "Writes the game .exe and bundled files into this folder.", col_text_dim());
+    th_font(14);
+    y = y + 28;
 
-    y = chrome_section(x, y, w, "RESOURCES");
-    export_onoff(x, y, "Export used files only", "export_used", 1);
-    y = y + 36;
-    draw_text(x, y, "On ships the launch scene and files scripts name. Off copies everything.", col_text_dim());
-    y = y + 36;
-    export_onoff(x, y, "Open folder when done", "export_open_folder", 1);
-    y = y + 40;
+    y = chrome_section(x, y, w, "OPTIONS");
+    export_onoff(x, y, w, "Export used files only", "export_used", 1);
+    y = y + 34;
+    th_font(11);
+    draw_text(x, y, "On: launch scene and referenced files. Off: whole project.", col_text_dim());
+    th_font(14);
+    y = y + 26;
+    export_onoff(x, y, w, "Open folder when done", "export_open_folder", 1);
+    y = y + 34;
     if (export_preset == 1 && scene_render3d() == 1) {
-        draw_text(x, y, "Note: the web player is 2D; this 3D scene exports flat.", col_text_dim());
-        y = y + 24;
+        th_font(11);
+        draw_text(x, y, "Web player is 2D; this 3D scene exports flat.", col_text_dim());
+        th_font(14);
     }
 
-    let foot: Rect = rect(p.x, p.y + p.h - 56, p.w, 56);
-    draw_fill_rect(foot, col_bg_deep());
-    draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
-    if (ui_button(rect(foot.x + foot.w - 288, foot.y + 14, 120, 28), "Close") == 1) export_close();
-    if (ui_button_primary(rect(foot.x + foot.w - 156, foot.y + 14, 140, 28), "Export Project") == 1) export_run();
+    if (ui_button(rect(foot.x + foot.w - 268, foot.y + 12, 100, 28), "Close") == 1) export_close();
+    if (ui_button_primary(rect(foot.x + foot.w - 156, foot.y + 12, 140, 28), "Export Project") == 1) export_run();
 
     if (export_guard == 0 && mouse_pressed(MOUSE_LEFT) && point_in_rect(eng_mouse_x(), eng_mouse_y(), p) == false) {
         export_close();
