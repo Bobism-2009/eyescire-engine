@@ -3100,8 +3100,9 @@ fn btn_cut_line(line: string): string {
 
 fn btn_skip_name(name: string): int {
     if (name == "script_init" || name == "script_update" || name == "script_draw") return 1;
-    if (name.len() >= 8 && name.substring(0, 8) == "bp_read_") return 1;
-    if (name.len() >= 9 && name.substring(0, 9) == "bp_write_") return 1;
+    /* Blueprint helpers are always emitted as bp_*; only bpfn_* is a user On click target. */
+    if (name.len() >= 5 && name.substring(0, 5) == "bpfn_") return 0;
+    if (name.len() >= 3 && name.substring(0, 3) == "bp_") return 1;
     return 0;
 }
 
@@ -3210,6 +3211,7 @@ fn btn_rescan(sc: string) {
         if (btn_ident(name) == 0) continue;
         if (btn_skip_name(name) == 1) continue;
         let sig: string = btn_arg_sig(args);
+        if (sig == "?") continue;
         let token: string = name + "#" + sig;
         if (btn_fn_blob.len() == 0) btn_fn_blob = token;
         else btn_fn_blob = btn_fn_blob + "\n" + token;
@@ -3220,6 +3222,7 @@ fn insp_button_action(s: int, x: int, yy: int, w: int): int {
     let was: int = insp_btn_pick;
     let mx: int = eng_mouse_x();
     let my: int = eng_mouse_y();
+    let ate: int = 0;
     chrome_field_label(x, yy, "On click");
     yy = yy + 16;
     let sc: string = ent_button_script(s);
@@ -3229,6 +3232,7 @@ fn insp_button_action(s: int, x: int, yy: int, w: int): int {
     if (was == 1) son = 1;
     let y_script: int = yy;
     if (ui_pill(rect(x, yy, w, 24), slabel, son) == 1) {
+        ate = 1;
         if (was == 1) insp_btn_pick = 0;
         else insp_btn_pick = 1;
     }
@@ -3237,6 +3241,7 @@ fn insp_button_action(s: int, x: int, yy: int, w: int): int {
         let none_on: int = 0;
         if (sc.len() == 0) none_on = 1;
         if (ui_pill(rect(x, yy, w, 24), "None", none_on) == 1) {
+            ate = 1;
             undo_save_modify(s);
             ent_set_button_script(s, "");
             ent_set_button_fn(s, "");
@@ -3251,6 +3256,7 @@ fn insp_button_action(s: int, x: int, yy: int, w: int): int {
             let on: int = 0;
             if (sname == sc) on = 1;
             if (ui_pill(rect(x, yy, w, 24), sname, on) == 1) {
+                ate = 1;
                 undo_save_modify(s);
                 ent_set_button_script(s, sname);
                 ent_set_button_fn(s, "");
@@ -3267,49 +3273,42 @@ fn insp_button_action(s: int, x: int, yy: int, w: int): int {
         btn_fn_blob = "";
     }
     let fnm: string = ent_button_fn(s);
-    /* A click on a row commits that function and nothing else this frame.
-       The row under the pointer wins, including the gap between pills. */
-    let row_hit: int = -2;
-    let row_sym: string = "";
-    if (was == 2 && sc.len() > 0 && mouse_pressed(MOUSE_LEFT)) {
-        let ry: int = yy + 28;
-        if (my >= ry && my < ry + 26 && mx >= x && mx < x + w) row_hit = -1;
-        ry = ry + 26;
-        let fi: int = 0;
-        let fnc: int = btn_fn_count();
-        while (fi < fnc) {
-            if (my >= ry && my < ry + 26 && mx >= x && mx < x + w) {
-                row_hit = fi;
-                row_sym = btn_fn_at(fi);
-            }
-            ry = ry + 26;
-            fi = fi + 1;
+    /* Drop a stale pick that is no longer a listed On click target. */
+    if (fnm.len() > 0) {
+        let known: int = 0;
+        let ki: int = 0;
+        let kn: int = btn_fn_count();
+        while (ki < kn) {
+            if (btn_fn_at(ki) == fnm) known = 1;
+            ki = ki + 1;
         }
-    }
-    if (row_hit >= -1) {
-        undo_save_modify(s);
-        ent_set_button_fn(s, row_sym);
-        insp_btn_pick = 0;
-        fnm = row_sym;
+        if (known == 0) {
+            ent_set_button_fn(s, "");
+            fnm = "";
+        }
     }
     let flabel: string = "Function: none";
     if (fnm.len() > 0) flabel = btn_fn_label(fnm);
     let fon: int = 0;
-    if (was == 2 && row_hit < -1) fon = 1;
-    if (row_hit < -1 && ui_pill(rect(x, yy, w, 24), flabel, fon) == 1 && sc.len() > 0) {
+    if (was == 2) fon = 1;
+    if (ui_pill(rect(x, yy, w, 24), flabel, fon) == 1 && sc.len() > 0) {
+        ate = 1;
         if (was == 2) insp_btn_pick = 0;
         else {
             insp_btn_pick = 2;
             btn_fn_for = "";
         }
-    } else {
-        ui_pill_draw(rect(x, yy, w, 24), flabel, fon);
     }
     yy = yy + 28;
     if (was == 2 && sc.len() > 0) {
         let fnone: int = 0;
         if (fnm.len() == 0) fnone = 1;
-        ui_pill_draw(rect(x, yy, w, 24), "None", fnone);
+        if (ui_pill(rect(x, yy, w, 24), "None", fnone) == 1) {
+            ate = 1;
+            undo_save_modify(s);
+            ent_set_button_fn(s, "");
+            insp_btn_pick = 0;
+        }
         yy = yy + 26;
         let fi: int = 0;
         let fnc: int = btn_fn_count();
@@ -3317,22 +3316,27 @@ fn insp_button_action(s: int, x: int, yy: int, w: int): int {
             let sym: string = btn_fn_at(fi);
             let onf: int = 0;
             if (sym == fnm) onf = 1;
-            ui_pill_draw(rect(x, yy, w, 24), btn_fn_label(sym), onf);
+            if (ui_pill(rect(x, yy, w, 24), btn_fn_label(sym), onf) == 1) {
+                ate = 1;
+                undo_save_modify(s);
+                ent_set_button_fn(s, sym);
+                insp_btn_pick = 0;
+            }
             yy = yy + 26;
             fi = fi + 1;
         }
         if (fnc == 0) {
             th_font(11);
-            draw_text(x, yy, "This script has no functions.", col_text_dim());
+            draw_text(x, yy, "This script has no On click functions.", col_text_dim());
             th_font(14);
             yy = yy + 16;
         }
     }
     th_font(11);
-    draw_text(x, yy, "Click runs that function on this button.", col_text_dim());
+    draw_text(x, yy, "Play and click. Runs on an object that uses this script.", col_text_dim());
     th_font(14);
     yy = yy + 16;
-    if (row_hit < -1 && mouse_pressed(MOUSE_LEFT) && was != 0) {
+    if (ate == 0 && mouse_pressed(MOUSE_LEFT) && was != 0) {
         if (my < y_script || my >= yy || mx < x || mx >= x + w) insp_btn_pick = 0;
     }
     return yy + 8;

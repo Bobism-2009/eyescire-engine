@@ -29,7 +29,7 @@ if not exist bin\box2d.lib (
 if not exist bin\box2d.lib (echo box2d build failed & exit /b 1)
 
 echo == compiling engine.dll
-call clang++ -std=c++17 -O2 -shared -DEYESCIRE_BUILDING=1 %BOX2D_INC% host\engine.cpp bin\box2d.lib -o bin\engine.dll -Wl,--out-implib,bin\engine.lib -lgdi32 -luser32 -lgdiplus -lcomdlg32 -lwinmm -lole32 -luuid -lshell32 -lopengl32
+call clang++ -std=c++17 -O2 -shared -DEYESCIRE_BUILDING=1 %BOX2D_INC% host\engine.cpp bin\box2d.lib -o bin\engine.dll -Wl,--out-implib,bin\engine.lib -lgdi32 -luser32 -lgdiplus -lcomdlg32 -lwinmm -lole32 -luuid -lshell32 -lopengl32 -lmfplat -lmfreadwrite -lmfuuid -ldwmapi
 if not exist bin\engine.dll (echo engine.dll build failed & exit /b 1)
 copy /y bin\engine.dll build\engine.dll >nul
 copy /y bin\engine.lib build\engine.lib >nul

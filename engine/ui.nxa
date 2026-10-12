@@ -163,6 +163,27 @@ fn ui_resolve_fill(slot: int, sx: int, sy: int, sw: int, sh: int) {
     ui_fill_b = ent_button_fill(slot, hit, held, 2);
 }
 
+/* Prefer a world object that already runs this script so Self and variables
+   match Play. Fall back to the button when nothing else has it attached. */
+fn ui_button_host(sc: string, button: int): int {
+    let host: int = -1;
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        if (ent_script(i) == sc) {
+            if (i == button) {
+                if (host < 0) host = button;
+            } else if (ent_is_ui(i) == 0) {
+                return i;
+            } else if (host < 0 || ent_is_ui(host) == 1) {
+                host = i;
+            }
+        }
+        i = ent_iter_next(i + 1);
+    }
+    if (host >= 0) return host;
+    return button;
+}
+
 /* Click flips a toggle button and runs its On click function.
    The caller has already laid out the canvas. The last hit wins, matching paint order. */
 fn ui_button_call(slot: int) {
@@ -191,7 +212,8 @@ fn ui_button_call(slot: int) {
     }
     let h: int = eng_dll_load(dll);
     if (h == 0) return;
-    eng_set_self(slot);
+    let self: int = ui_button_host(sc, slot);
+    eng_set_self(self);
     if (eng_dll_call_sig(h, sym, sig) == 0) eng_log("[button] no function " + sym + " in " + sc);
     eng_set_self(-1);
 }

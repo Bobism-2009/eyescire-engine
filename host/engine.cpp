@@ -6036,16 +6036,14 @@ extern "C" int engine_dll_call(int handle, const char* sym) {
 
 /* Button clicks call a script function with zeros. sig is a string of
    f (float), i (int/bool) and s (string), one character per argument.
-   Nexa compiles float parameters as double. */
+   Nexa compiles float parameters as double. eng_self is already set to the
+   host object, so blueprint values use that entity — same as script_update. */
 
 extern "C" int engine_dll_call_sig(int handle, const char* sym, const char* sig) {
     auto it = g.dlls.find(handle);
     if (it == g.dlls.end() || !it->second || !sym) return 0;
     FARPROC raw = GetProcAddress(it->second, sym);
     if (!raw) return 0;
-    /* Button calls into one script share its values. Update on an object still keeps its own. */
-    engine_bp_share_push(handle);
-    struct SharePop { ~SharePop() { engine_bp_share_pop(); } } share_pop;
     std::string s = sig ? sig : "";
     const double z = 0.0;
     const int n = 0;
