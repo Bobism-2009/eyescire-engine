@@ -180,6 +180,8 @@ A warning on an object whose texture or script is missing.
 
 Notes on an object that stay in the scene and do not show in the game.
 
+✔ Godot-style export picker (presets for Windows / Web, export path, used-files and open-folder options).
+
 An icon and a window title for the exported game.
 
 A crash log written next to the game.

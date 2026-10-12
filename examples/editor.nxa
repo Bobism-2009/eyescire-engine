@@ -43,6 +43,11 @@ let settings_page: int = 0;
 let settings_ready: int = 0;
 let settings_guard: int = 0;
 let settings_block_ui: int = 0;
+/* Godot-style export picker: presets on the left, options on the right. */
+let export_open: int = 0;
+let export_preset: int = 0;   /* 0 = Windows Desktop, 1 = Web (HTML) */
+let export_guard: int = 0;
+let export_dest: string = ""; /* empty = default dist/<ProjectName>[/web] */
 let settings_name: string = "";
 let settings_gx: string = "";
 let settings_gy: string = "";
@@ -2347,8 +2352,7 @@ fn assets_grid_scripts(b: Rect) {
     }
     if (ui_pill(rect(sx + 102, sy, bw, bh), "Build All", 1) == 1) compile_begin("idle");
     sy = sy + 26;
-    if (ui_pill(rect(sx, sy, bw, bh), "Export", 1) == 1) build_game_begin();
-    if (ui_pill(rect(sx + 102, sy, bw, bh), "Export Web", 0) == 1) build_web_begin();
+    if (ui_pill(rect(sx, sy, 200, bh), "Export…", 1) == 1) export_show(0);
     sy = sy + 26;
     if (ui_pill(rect(sx, sy, bw, bh), "Rebuild", 0) == 1) {
         force_rebuild = 1;
@@ -9208,9 +9212,7 @@ fn menu_dropdown_project(rx: int, ry: int) {
     if (menu_item(rx + 2, yy, dw - 4, "Play",             "Ctrl+P")       == 1) { menu_open = ""; want_play = 1; }
     yy = yy + 22;
     menu_separator(rx, yy + 4, dw); yy = yy + 8;
-    if (menu_item(rx + 2, yy, dw - 4, "Build Game (Export)", "Ctrl+E")    == 1) { menu_open = ""; build_game_begin(); }
-    yy = yy + 22;
-    if (menu_item(rx + 2, yy, dw - 4, "Export Web (HTML)", "Ctrl+Shift+E") == 1) { menu_open = ""; build_web_begin(); }
+    if (menu_item(rx + 2, yy, dw - 4, "Export…", "Ctrl+E") == 1) { menu_open = ""; export_show(0); }
     yy = yy + 22;
     menu_separator(rx, yy + 4, dw); yy = yy + 8;
     if (menu_item(rx + 2, yy, dw - 4, "Rescan Scripts",   "")             == 1) { menu_open = ""; proj_rescan_scripts(); }
@@ -9258,7 +9260,7 @@ fn menubar_draw() {
         th_font(12);
         draw_text_centered(mr.x, mr.y, mr.w, mr.h, lab, tc);
         th_font(14);
-        if (hover && mouse_pressed(MOUSE_LEFT) && settings_open == 0) {
+        if (hover && mouse_pressed(MOUSE_LEFT) && settings_open == 0 && export_open == 0) {
             if (menu_open == id) menu_open = "";
             else                 { menu_open = id; menu_just_opened = 1; }
         }
@@ -10468,6 +10470,7 @@ fn do_export_web() {
 
     let dist_dir: string = proj_path_join(proj_path_join(proj_root(), "dist"), pname);
     let web_dir:  string = proj_path_join(dist_dir, "web");
+    if (export_dest.len() > 0) web_dir = export_dest;
 
     eng_log("[web] target: " + web_dir);
     eng_fs_make_dir(dist_dir);
@@ -10520,7 +10523,8 @@ fn do_export_web() {
 
     eng_log("[web] DONE -> " + proj_path_join(web_dir, "index.html"));
     eng_log("[web] Tip: run a local server in the web folder (e.g. npx serve .)");
-    eng_run_command("explorer \"" + web_dir + "\"");
+    if (pref_int("export_open_folder", 1) == 1) eng_run_command("explorer \"" + web_dir + "\"");
+    export_dest = "";
 }
 
 /* EyescirePlayer3D.exe (examples/player3d.nxa), next to the editor */
@@ -10542,6 +10546,159 @@ fn launch_play_3d() {
     let cmd: string = "\"" + exe + "\" \"" + proj_root() + "\" " + proj_active_scene();
     if (eng_launch(cmd, proj_root()) == 1) eng_log("[play3d] started (Esc closes the 3D window)");
     else                                  eng_log("[play3d] FAILED to start " + exe);
+}
+
+fn export_default_dir(preset: int): string {
+    let pname: string = proj_name();
+    if (pname.len() == 0) pname = "Game";
+    let base: string = proj_path_join(proj_path_join(proj_root(), "dist"), pname);
+    if (preset == 1) return proj_path_join(base, "web");
+    return base;
+}
+
+fn export_show(preset: int) {
+    if (app_state != "edit") return;
+    if (proj_loaded() == 0) {
+        eng_log("[export] no project open");
+        return;
+    }
+    if (settings_open == 1) settings_close();
+    export_open = 1;
+    export_preset = preset;
+    if (export_preset < 0) export_preset = 0;
+    if (export_preset > 1) export_preset = 1;
+    export_dest = export_default_dir(export_preset);
+    export_guard = 1;
+    menu_open = "";
+    if (edit_target.len() >= 4 && edit_target.substring(0, 4) == "exp_") edit_target = "";
+}
+
+fn export_close() {
+    export_open = 0;
+    export_guard = 0;
+    if (edit_target.len() >= 4 && edit_target.substring(0, 4) == "exp_") edit_target = "";
+}
+
+fn export_panel(): Rect {
+    let w: int = 860;
+    let h: int = 520;
+    if (w > WIN_W - 40) w = WIN_W - 40;
+    if (h > WIN_H - 40) h = WIN_H - 40;
+    return rect((WIN_W - w) / 2, (WIN_H - h) / 2, w, h);
+}
+
+fn export_preset_row(nav: Rect, y: int, id: int, title: string, subtitle: string) {
+    let r: Rect = rect(nav.x + 10, y, nav.w - 20, 54);
+    let on: int = 0;
+    if (export_preset == id) on = 1;
+    let hover: int = 0;
+    if (mouse_hover_held(r) >= 1) hover = 1;
+    if (on == 1) {
+        th_fill(r, th_radius_for(r.h), col_accent_dim());
+        th_edge(r, th_radius_for(r.h), col_accent());
+    } else if (hover == 1) {
+        th_fill(r, th_radius_for(r.h), col_panel_lit());
+    }
+    th_font_semi(13);
+    let tc: Color = col_text_main();
+    if (on == 1) tc = th_shade(col_accent(), 90);
+    draw_text(r.x + 12, r.y + 10, title, tc);
+    th_font(11);
+    draw_text(r.x + 12, r.y + 30, subtitle, col_text_dim());
+    th_font(14);
+    if (hover == 1 && mouse_pressed(MOUSE_LEFT) && on == 0) {
+        export_preset = id;
+        export_dest = export_default_dir(export_preset);
+    }
+}
+
+fn export_onoff(x: int, y: int, label: string, key: string, def: int) {
+    draw_text(x, y + 6, label, col_text_main());
+    let on: int = pref_int(key, def);
+    let k0: string = "secondary";
+    let k1: string = "secondary";
+    if (on == 1) k1 = "primary";
+    else k0 = "primary";
+    if (ui_button_kind(rect(x + 280, y, 72, 28), "Off", k0) == 1 && on == 1) pref_set_int(key, 0);
+    if (ui_button_kind(rect(x + 360, y, 72, 28), "On", k1) == 1 && on == 0) pref_set_int(key, 1);
+}
+
+fn export_run() {
+    if (proj_loaded() == 0) return;
+    let preset: int = export_preset;
+    let dest: string = export_dest;
+    export_close();
+    if (dest.len() == 0) dest = export_default_dir(preset);
+    export_dest = dest;
+    if (preset == 1) build_web_begin();
+    else build_game_begin();
+}
+
+fn export_draw() {
+    if (export_open == 0) return;
+    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 150);
+    let p: Rect = export_panel();
+    draw_fill_rect(p, col_panel_dark());
+    draw_outline_rect(p, 1, col_border_soft());
+
+    let nav: Rect = rect(p.x, p.y, 220, p.h - 56);
+    draw_fill_rect(nav, col_bg_deep());
+    draw_fill_rect(rect(nav.x + nav.w - 1, nav.y, 1, nav.h), col_border_soft());
+    th_font(16);
+    draw_text(nav.x + 16, nav.y + 18, "Export", col_text_main());
+    th_font(11);
+    draw_text(nav.x + 16, nav.y + 42, "Presets", col_text_dim());
+    th_font(14);
+    export_preset_row(nav, nav.y + 64, 0, "Windows Desktop", "Standalone .exe build");
+    export_preset_row(nav, nav.y + 126, 1, "Web (HTML)", "Browser player (2D)");
+
+    let x: int = p.x + nav.w + 22;
+    let y: int = p.y + 22;
+    let w: int = p.w - nav.w - 44;
+    th_font(16);
+    if (export_preset == 1) draw_text(x, y, "Web (HTML)", col_text_main());
+    else draw_text(x, y, "Windows Desktop", col_text_main());
+    th_font(14);
+    y = y + 36;
+
+    y = chrome_section(x, y, w, "OUTPUT");
+    chrome_field_label(x, y, "Export path");
+    y = y + 16;
+    let path_r: Rect = rect(x, y, w - 96, 28);
+    ui_field_draw(path_r, export_dest, 0);
+    if (ui_button(rect(x + w - 88, y, 88, 28), "Browse") == 1) {
+        let initial: string = export_dest;
+        if (initial.len() == 0) initial = proj_root();
+        let picked: string = eng_open_folder_dialog("Choose export folder", initial);
+        if (picked.len() > 0) export_dest = picked;
+    }
+    y = y + 40;
+    draw_text(x, y, "Desktop builds as <folder>/<Project>.exe. Web writes HTML into the folder.", col_text_dim());
+    y = y + 36;
+
+    y = chrome_section(x, y, w, "RESOURCES");
+    export_onoff(x, y, "Export used files only", "export_used", 1);
+    y = y + 36;
+    draw_text(x, y, "On ships the launch scene and files scripts name. Off copies everything.", col_text_dim());
+    y = y + 36;
+    export_onoff(x, y, "Open folder when done", "export_open_folder", 1);
+    y = y + 40;
+    if (export_preset == 1 && scene_render3d() == 1) {
+        draw_text(x, y, "Note: the web player is 2D; this 3D scene exports flat.", col_text_dim());
+        y = y + 24;
+    }
+
+    let foot: Rect = rect(p.x, p.y + p.h - 56, p.w, 56);
+    draw_fill_rect(foot, col_bg_deep());
+    draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
+    if (ui_button(rect(foot.x + foot.w - 288, foot.y + 14, 120, 28), "Close") == 1) export_close();
+    if (ui_button_primary(rect(foot.x + foot.w - 156, foot.y + 14, 140, 28), "Export Project") == 1) export_run();
+
+    if (export_guard == 0 && mouse_pressed(MOUSE_LEFT) && point_in_rect(eng_mouse_x(), eng_mouse_y(), p) == false) {
+        export_close();
+    }
+    export_guard = 0;
+    th_font(14);
 }
 
 fn build_game_begin() {
@@ -10588,6 +10745,7 @@ fn do_export() {
     if (pname.len() == 0) pname = "Game";
     let dist_root: string = proj_path_join(proj_root(), "dist");
     let dist_dir:  string = proj_path_join(dist_root, pname);
+    if (export_dest.len() > 0) dist_dir = export_dest;
 
     eng_log("[export] target: " + dist_dir);
     eng_fs_remove_tree(dist_dir);
@@ -10665,7 +10823,8 @@ fn do_export() {
     if (eng_fs_exists(logo_src) == 1) eng_fs_copy_file(logo_src, proj_path_join(icons_dst, "eyescire.png"));
 
     eng_log("[export] DONE -> " + runtime_dst);
-    eng_run_command("explorer \"" + dist_dir + "\"");
+    if (pref_int("export_open_folder", 1) == 1) eng_run_command("explorer \"" + dist_dir + "\"");
+    export_dest = "";
 }
 
 /* ----- toolbar pill button helpers ----- */
@@ -10885,6 +11044,10 @@ fn toolbar_draw() {
 // =============================================================================
 
 fn edit_hotkeys() {
+    if (export_open == 1) {
+        if (edit_target.len() == 0 && key_pressed(VK_ESCAPE)) export_close();
+        return;
+    }
     if (settings_open == 1) {
         if (edit_target.len() == 0 && key_pressed(VK_ESCAPE)) settings_close();
         return;
@@ -10929,8 +11092,7 @@ fn edit_hotkeys() {
         if (key_pressed(VK_Y))                 redo();
         if (key_pressed(VK_B) && shift_held()) { force_rebuild = 1; compile_begin("idle"); }
         else if (key_pressed(VK_B))            compile_begin("idle");
-        if (key_pressed(VK_E) && shift_held())  build_web_begin();
-        else if (key_pressed(VK_E))            build_game_begin();
+        if (key_pressed(VK_E)) export_show(0);
         if (key_pressed(VK_P))                 want_play = 1;
         if (key_pressed(VK_PAGEUP))            cycle_scene(-1);
         if (key_pressed(VK_PAGEDOWN))          cycle_scene(1);
@@ -11651,18 +11813,12 @@ fn settings_page_build(x: int, y: int, w: int) {
     draw_text(x, y, "Build compiles scripts that changed. Rebuild all compiles every script.", col_text_dim());
     y = y + 36;
     y = chrome_section(x, y, w, "EXPORT");
-    if (ui_button(rect(x, y, 200, 28), "Export game") == 1) {
+    if (ui_button(rect(x, y, 200, 28), "Export…") == 1) {
         settings_close();
-        build_game_begin();
-    }
-    if (ui_button(rect(x + 208, y, 200, 28), "Export web") == 1) {
-        settings_close();
-        build_web_begin();
+        export_show(0);
     }
     y = y + 40;
-    draw_text(x, y, "Export game writes a desktop build under dist.", col_text_dim());
-    y = y + 20;
-    draw_text(x, y, "Export web writes an HTML build. Web export stays 2D.", col_text_dim());
+    draw_text(x, y, "Opens the export picker (Windows or Web presets, path, and options).", col_text_dim());
     y = y + 36;
     settings_onoff(x, y, "Export used files", "export_used", 1);
     y = y + 36;
@@ -11932,6 +12088,7 @@ fn edit_frame() {
     if (drag_is_active())            menu_capturing = 1;
     if (hier_drag_active == 1)       menu_capturing = 1;
     if (settings_open == 1)          menu_capturing = 1;
+    if (export_open == 1)            menu_capturing = 1;
 
     if (menu_capturing == 0) {
         toolbar_input();
@@ -11947,10 +12104,10 @@ fn edit_frame() {
     if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
     else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
 
-    if (settings_open == 1) settings_block_ui = 1;
+    if (settings_open == 1 || export_open == 1) settings_block_ui = 1;
     menubar_draw();
     toolbar_draw();
-    if (settings_open == 0) {
+    if (settings_open == 0 && export_open == 0) {
         left_draw();
         viewport_tabs_draw();
     }
@@ -11959,7 +12116,7 @@ fn edit_frame() {
     else if (viewport_mode == "play") play_viewport_draw();
     else if (view3d_active() == 1) viewport3d_overlay();
     else                           viewport_draw();
-    if (settings_open == 0) {
+    if (settings_open == 0 && export_open == 0) {
         inspector_draw();
         dock_draw();
     }
@@ -11968,6 +12125,7 @@ fn edit_frame() {
 
     /* overlays drawn last so they sit above everything */
     settings_draw();
+    export_draw();
     if (context_menu_active == 1) context_menu_draw();
     menu_draw_dropdown_overlay();
     scene_picker_draw();
