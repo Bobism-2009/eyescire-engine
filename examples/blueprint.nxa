@@ -438,7 +438,7 @@ fn bp_drop_object(slot: int, mx: int, my: int) {
     bp_key_open = 0;
     bp_clear_edit();
     bp_sel = idx;
-    eng_log("[blueprint] " + label + " — wire the left pin to set x, y, z, and rotation");
+    eng_log("[blueprint] " + label + " — wire Then into it; X/Y/Z/Rotation are written when it runs");
 }
 
 fn bp_add_at(kind: int, gx: int, gy: int) {

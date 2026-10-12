@@ -1532,22 +1532,16 @@ void emit_node(Emit& e, int node, int ind) {
                 if (L.to_node == node && L.to_pin == pin) return true;
             return false;
         };
-        if (linked(1)) {
-            indent_nxa(o, ind + 1);
-            o << "ent_set_x(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 1, 0) << "));\n";
-        }
-        if (linked(2)) {
-            indent_nxa(o, ind + 1);
-            o << "ent_set_y(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 2, 0) << "));\n";
-        }
-        if (linked(3)) {
-            indent_nxa(o, ind + 1);
-            o << "ent_set_z(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 3, 0) << "));\n";
-        }
-        if (linked(4)) {
-            indent_nxa(o, ind + 1);
-            o << "ent_set_rot(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 4, 0) << "));\n";
-        }
+        /* Panel x/y/z/rot are the pose written on run — wired value or the
+           stored default. Skipping unlinked pins left Next/Last Test empty. */
+        indent_nxa(o, ind + 1);
+        o << "ent_set_x(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 1, 0) << "));\n";
+        indent_nxa(o, ind + 1);
+        o << "ent_set_y(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 2, 0) << "));\n";
+        indent_nxa(o, ind + 1);
+        o << "ent_set_z(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 3, 0) << "));\n";
+        indent_nxa(o, ind + 1);
+        o << "ent_set_rot(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 4, 0) << "));\n";
         if (linked(12)) {
             indent_nxa(o, ind + 1);
             o << "bp_set_yaw(bp_o" << node << ", " << expr_in_raw(*e.d, node, 12, 0) << ");\n";
