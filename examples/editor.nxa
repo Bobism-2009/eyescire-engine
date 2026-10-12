@@ -2352,7 +2352,7 @@ fn assets_grid_scripts(b: Rect) {
     }
     if (ui_pill(rect(sx + 102, sy, bw, bh), "Build All", 1) == 1) compile_begin("idle");
     sy = sy + 26;
-    if (ui_pill(rect(sx, sy, 200, bh), "Export…", 1) == 1) export_show(0);
+    if (ui_pill(rect(sx, sy, 200, bh), "Export...", 1) == 1) export_show(0);
     sy = sy + 26;
     if (ui_pill(rect(sx, sy, bw, bh), "Rebuild", 0) == 1) {
         force_rebuild = 1;
@@ -9212,7 +9212,7 @@ fn menu_dropdown_project(rx: int, ry: int) {
     if (menu_item(rx + 2, yy, dw - 4, "Play",             "Ctrl+P")       == 1) { menu_open = ""; want_play = 1; }
     yy = yy + 22;
     menu_separator(rx, yy + 4, dw); yy = yy + 8;
-    if (menu_item(rx + 2, yy, dw - 4, "Export…", "Ctrl+E") == 1) { menu_open = ""; export_show(0); }
+    if (menu_item(rx + 2, yy, dw - 4, "Export...", "Ctrl+E") == 1) { menu_open = ""; export_show(0); }
     yy = yy + 22;
     menu_separator(rx, yy + 4, dw); yy = yy + 8;
     if (menu_item(rx + 2, yy, dw - 4, "Rescan Scripts",   "")             == 1) { menu_open = ""; proj_rescan_scripts(); }
@@ -11839,7 +11839,7 @@ fn settings_page_build(x: int, y: int, w: int) {
     draw_text(x, y, "Build compiles scripts that changed. Rebuild all compiles every script.", col_text_dim());
     y = y + 36;
     y = chrome_section(x, y, w, "EXPORT");
-    if (ui_button(rect(x, y, 200, 28), "Export…") == 1) {
+    if (ui_button(rect(x, y, 200, 28), "Export...") == 1) {
         settings_close();
         export_show(0);
     }
@@ -12127,22 +12127,30 @@ fn edit_frame() {
         console_input();
     }
 
-    if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
-    else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
+    /* GL/VK present punches the 3D view on top of the back buffer. Skip it
+       while a modal covers the viewport or the 3D picture shows through text. */
+    let modal_open: int = 0;
+    if (settings_open == 1 || export_open == 1) modal_open = 1;
+    if (modal_open == 0) {
+        if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
+        else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
+    }
 
-    if (settings_open == 1 || export_open == 1) settings_block_ui = 1;
+    if (modal_open == 1) settings_block_ui = 1;
     menubar_draw();
     toolbar_draw();
-    if (settings_open == 0 && export_open == 0) {
+    if (modal_open == 0) {
         left_draw();
         viewport_tabs_draw();
     }
-    if (viewport_mode == "script") script_editor_draw();
-    else if (viewport_mode == "ui") ui_viewport_draw();
-    else if (viewport_mode == "play") play_viewport_draw();
-    else if (view3d_active() == 1) viewport3d_overlay();
-    else                           viewport_draw();
-    if (settings_open == 0 && export_open == 0) {
+    if (modal_open == 0) {
+        if (viewport_mode == "script") script_editor_draw();
+        else if (viewport_mode == "ui") ui_viewport_draw();
+        else if (viewport_mode == "play") play_viewport_draw();
+        else if (view3d_active() == 1) viewport3d_overlay();
+        else                           viewport_draw();
+    }
+    if (modal_open == 0) {
         inspector_draw();
         dock_draw();
     }
