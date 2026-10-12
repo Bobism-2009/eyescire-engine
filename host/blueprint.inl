@@ -14,6 +14,10 @@
 //   16 Get Value  17 Set Value  18 If
 //   19 Set Velocity  20 Get Velocity  21 Mouse
 //   22 Overlap  23 Spawn Actor  24 Set Yaw  25 Get Yaw
+//   33 Delta Time  34 Play Sound  35 Play Music  36 Stop Music
+//   37 Apply Force  38 Apply Impulse  39 Set Visible
+//   40 Set Color  41 Set Size  42 Set Text  43 Load Scene
+//   44 Tween Pose  45 Tween Fade
 // If stores the comparison in op: 0 equal, 1 not equal, 2 greater,
 // 3 less, 4 at least, 5 at most. Pins are exec in, value, is, true, false.
 // Custom functions, then custom values, are stored after the version-1
@@ -57,7 +61,20 @@ enum BpKind {
     BP_GETPITCH = 29,
     BP_VIEW = 30,
     BP_WALK = 31,
-    BP_NUDGE = 32
+    BP_NUDGE = 32,
+    BP_DT = 33,
+    BP_SFX = 34,
+    BP_MUSIC = 35,
+    BP_MUSIC_STOP = 36,
+    BP_FORCE = 37,
+    BP_IMPULSE = 38,
+    BP_VISIBLE = 39,
+    BP_COLOR = 40,
+    BP_SIZE = 41,
+    BP_SETTEXT = 42,
+    BP_SCENE = 43,
+    BP_TWEEN = 44,
+    BP_FADE = 45
 };
 
 enum BpType { BP_EXEC = 0, BP_BOOL = 1, BP_FLOAT = 2, BP_STRING = 3, BP_ENTITY = 4 };
@@ -280,72 +297,168 @@ PinSet pins_for(int kind) {
         { 0, BP_FLOAT, "z" },
         { 1, BP_EXEC, "then" }
     };
+    static const PinDef dt[] = { { 1, BP_FLOAT, "dt" } };
+    static const PinDef sfx[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_STRING, "path" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef music[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_STRING, "path" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef music_stop[] = {
+        { 0, BP_EXEC, "" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef force[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_FLOAT, "x" },
+        { 0, BP_FLOAT, "y" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef impulse[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_FLOAT, "x" },
+        { 0, BP_FLOAT, "y" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef visible[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_BOOL, "on" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef color[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_FLOAT, "r" },
+        { 0, BP_FLOAT, "g" },
+        { 0, BP_FLOAT, "b" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef size[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_FLOAT, "w" },
+        { 0, BP_FLOAT, "h" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef settext[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_STRING, "text" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef scene[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_STRING, "path" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef tween[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_FLOAT, "x" },
+        { 0, BP_FLOAT, "y" },
+        { 0, BP_FLOAT, "z" },
+        { 0, BP_FLOAT, "rot" },
+        { 0, BP_FLOAT, "sec" },
+        { 1, BP_EXEC, "then" }
+    };
+    static const PinDef fade[] = {
+        { 0, BP_EXEC, "" },
+        { 0, BP_FLOAT, "alpha" },
+        { 0, BP_FLOAT, "sec" },
+        { 1, BP_EXEC, "then" }
+    };
     switch (kind) {
-    case BP_INIT:     return { init, 1 };
-    case BP_UPDATE:   return { update, 1 };
-    case BP_BRANCH:   return { branch, 4 };
-    case BP_SEQUENCE: return { sequence, 3 };
-    case BP_LOG:      return { logn, 3 };
-    case BP_GET:      return { getp, 3 };
-    case BP_SET:      return { setp, 4 };
-    case BP_KEY:      return { key, 1 };
-    case BP_SPAWN:    return { spawn, 5 };
-    case BP_DESTROY:  return { destroy, 3 };
-    case BP_MATH:     return { math, 3 };
-    case BP_OBJECT:   return { object, 14 };
-    case BP_VEL:      return { vel, 4 };
-    case BP_GETVEL:   return { getvel, 2 };
-    case BP_MOUSE:    return { mouse, 1 };
-    case BP_HIT:      return { hit, 4 };
-    case BP_SPAWN3:   return { spawn3, 8 };
-    case BP_YAW:      return { yaw, 3 };
-    case BP_GETYAW:   return { getyaw, 1 };
-    case BP_AXIS:     return { axis, 1 };
-    case BP_LOOK:     return { look, 4 };
-    case BP_PITCH:    return { pitch, 3 };
-    case BP_GETPITCH: return { getpitch, 1 };
-    case BP_VIEW:     return { view, 8 };
-    case BP_WALK:     return { walk, 7 };
-    case BP_NUDGE:    return { nudge, 5 };
-    default:          return { nullptr, 0 };
+    case BP_INIT:       return { init, 1 };
+    case BP_UPDATE:     return { update, 1 };
+    case BP_BRANCH:     return { branch, 4 };
+    case BP_SEQUENCE:   return { sequence, 3 };
+    case BP_LOG:        return { logn, 3 };
+    case BP_GET:        return { getp, 3 };
+    case BP_SET:        return { setp, 4 };
+    case BP_KEY:        return { key, 1 };
+    case BP_SPAWN:      return { spawn, 5 };
+    case BP_DESTROY:    return { destroy, 3 };
+    case BP_MATH:       return { math, 3 };
+    case BP_OBJECT:     return { object, 14 };
+    case BP_VEL:        return { vel, 4 };
+    case BP_GETVEL:     return { getvel, 2 };
+    case BP_MOUSE:      return { mouse, 1 };
+    case BP_HIT:        return { hit, 4 };
+    case BP_SPAWN3:     return { spawn3, 8 };
+    case BP_YAW:        return { yaw, 3 };
+    case BP_GETYAW:     return { getyaw, 1 };
+    case BP_AXIS:       return { axis, 1 };
+    case BP_LOOK:       return { look, 4 };
+    case BP_PITCH:      return { pitch, 3 };
+    case BP_GETPITCH:   return { getpitch, 1 };
+    case BP_VIEW:       return { view, 8 };
+    case BP_WALK:       return { walk, 7 };
+    case BP_NUDGE:      return { nudge, 5 };
+    case BP_DT:         return { dt, 1 };
+    case BP_SFX:        return { sfx, 3 };
+    case BP_MUSIC:      return { music, 3 };
+    case BP_MUSIC_STOP: return { music_stop, 2 };
+    case BP_FORCE:      return { force, 4 };
+    case BP_IMPULSE:    return { impulse, 4 };
+    case BP_VISIBLE:    return { visible, 3 };
+    case BP_COLOR:      return { color, 5 };
+    case BP_SIZE:       return { size, 4 };
+    case BP_SETTEXT:    return { settext, 3 };
+    case BP_SCENE:      return { scene, 3 };
+    case BP_TWEEN:      return { tween, 7 };
+    case BP_FADE:       return { fade, 4 };
+    default:            return { nullptr, 0 };
     }
 }
 
 const char* kind_name_of(int kind) {
     switch (kind) {
-    case BP_INIT:     return "Init";
-    case BP_UPDATE:   return "Update";
-    case BP_BRANCH:   return "Branch";
-    case BP_SEQUENCE: return "Sequence";
-    case BP_LOG:      return "Log";
-    case BP_GET:      return "Get Position";
-    case BP_SET:      return "Set Position";
-    case BP_KEY:      return "Key Pressed";
-    case BP_SPAWN:    return "Spawn";
-    case BP_DESTROY:  return "Destroy";
-    case BP_MATH:     return "Math";
-    case BP_OBJECT:   return "Object";
-    case BP_ENTRY:    return "Function";
-    case BP_RETURN:   return "Return";
-    case BP_CALL:     return "Call";
-    case BP_GETVAR:   return "Get Value";
-    case BP_SETVAR:   return "Set Value";
-    case BP_IF:       return "If";
-    case BP_VEL:      return "Set Velocity";
-    case BP_GETVEL:   return "Get Velocity";
-    case BP_MOUSE:    return "Mouse";
-    case BP_HIT:      return "Overlap";
-    case BP_SPAWN3:   return "Spawn Actor";
-    case BP_YAW:      return "Set Yaw";
-    case BP_GETYAW:   return "Get Yaw";
-    case BP_AXIS:     return "Axis";
-    case BP_LOOK:     return "Mouse Look";
-    case BP_PITCH:    return "Set Pitch";
-    case BP_GETPITCH: return "Get Pitch";
-    case BP_VIEW:     return "View Offset";
-    case BP_WALK:     return "Walk";
-    case BP_NUDGE:    return "Move By";
-    default:          return "";
+    case BP_INIT:       return "Init";
+    case BP_UPDATE:     return "Update";
+    case BP_BRANCH:     return "Branch";
+    case BP_SEQUENCE:   return "Sequence";
+    case BP_LOG:        return "Log";
+    case BP_GET:        return "Get Position";
+    case BP_SET:        return "Set Position";
+    case BP_KEY:        return "Key Pressed";
+    case BP_SPAWN:      return "Spawn";
+    case BP_DESTROY:    return "Destroy";
+    case BP_MATH:       return "Math";
+    case BP_OBJECT:     return "Object";
+    case BP_ENTRY:      return "Function";
+    case BP_RETURN:     return "Return";
+    case BP_CALL:       return "Call";
+    case BP_GETVAR:     return "Get Value";
+    case BP_SETVAR:     return "Set Value";
+    case BP_IF:         return "If";
+    case BP_VEL:        return "Set Velocity";
+    case BP_GETVEL:     return "Get Velocity";
+    case BP_MOUSE:      return "Mouse";
+    case BP_HIT:        return "Overlap";
+    case BP_SPAWN3:     return "Spawn Actor";
+    case BP_YAW:        return "Set Yaw";
+    case BP_GETYAW:     return "Get Yaw";
+    case BP_AXIS:       return "Axis";
+    case BP_LOOK:       return "Mouse Look";
+    case BP_PITCH:      return "Set Pitch";
+    case BP_GETPITCH:   return "Get Pitch";
+    case BP_VIEW:       return "View Offset";
+    case BP_WALK:       return "Walk";
+    case BP_NUDGE:      return "Move By";
+    case BP_DT:         return "Delta Time";
+    case BP_SFX:        return "Play Sound";
+    case BP_MUSIC:      return "Play Music";
+    case BP_MUSIC_STOP: return "Stop Music";
+    case BP_FORCE:      return "Apply Force";
+    case BP_IMPULSE:    return "Apply Impulse";
+    case BP_VISIBLE:    return "Set Visible";
+    case BP_COLOR:      return "Set Color";
+    case BP_SIZE:       return "Set Size";
+    case BP_SETTEXT:    return "Set Text";
+    case BP_SCENE:      return "Load Scene";
+    case BP_TWEEN:      return "Tween Pose";
+    case BP_FADE:       return "Tween Fade";
+    default:            return "";
     }
 }
 
@@ -1043,7 +1156,7 @@ bool read_node(Rdr& r, BpNode& n) {
     n.text = r.str();
     n.name = r.str();
     if (!r.ok) return false;
-    if (n.kind < BP_INIT || n.kind > BP_NUDGE) return false;
+    if (n.kind < BP_INIT || n.kind > BP_FADE) return false;
     if (n.kind == BP_KEY && (n.op < 1 || n.op > 254)) n.op = 32;
     if (n.kind == BP_MATH && (n.op < 0 || n.op > 3)) n.op = 0;
     if (n.kind == BP_IF && (n.op < 0 || n.op > 5)) n.op = 0;
@@ -1235,6 +1348,15 @@ float object_tween_sec(const std::string& text) {
     return (float)std::atof(text.c_str() + (int)bar + 1);
 }
 
+void tween_defaults(const std::string& text, float& z, float& rot, float& sec) {
+    z = 0.f;
+    rot = 0.f;
+    sec = 0.5f;
+    if (text.empty()) return;
+    std::istringstream in(text);
+    in >> z >> rot >> sec;
+}
+
 std::string object_ref(const BpNode& n) {
     if (n.op > 0) return "ent_find_by_id(" + std::to_string(n.op) + ")";
     if (!n.name.empty() && n.name != "(unnamed)")
@@ -1304,7 +1426,10 @@ std::string expr_in_raw(const BpDoc& d, int node, int pin, int depth) {
     }
     PinInfo p = pin_info(n, pin);
     if (!p.ok) return "0";
-    if (p.type == BP_BOOL) return "false";
+    if (p.type == BP_BOOL) {
+        if (n.kind == BP_VISIBLE && pin == 1) return n.op != 0 ? "true" : "false";
+        return "false";
+    }
     if (p.type == BP_STRING) return nxa_str(n.text);
     if (p.type == BP_ENTITY) return "me";
     if (p.type == BP_FLOAT) {
@@ -1322,7 +1447,9 @@ std::string expr_in_raw(const BpDoc& d, int node, int pin, int depth) {
             object_extra(n.text, z, rot);
             return nxa_float(pin == 3 ? z : rot);
         }
-        if ((n.kind == BP_MATH && pin == 1) || (n.kind == BP_SET && pin == 2) || (n.kind == BP_SPAWN && pin == 2) || (n.kind == BP_OBJECT && pin == 2))
+        if ((n.kind == BP_MATH && pin == 1) || (n.kind == BP_SET && pin == 2) || (n.kind == BP_SPAWN && pin == 2) || (n.kind == BP_OBJECT && pin == 2)
+            || ((n.kind == BP_FORCE || n.kind == BP_IMPULSE || n.kind == BP_SIZE || n.kind == BP_FADE) && pin == 2)
+            || (n.kind == BP_COLOR && pin == 2) || (n.kind == BP_TWEEN && pin == 2))
             return nxa_float(n.b);
         if (n.kind == BP_VEL) return nxa_float(pin == 2 ? n.b : n.a);
         if (n.kind == BP_YAW) return nxa_float(n.a);
@@ -1336,6 +1463,14 @@ std::string expr_in_raw(const BpDoc& d, int node, int pin, int depth) {
             if (pin == 2) return nxa_float(n.b);
             if (pin == 1) return nxa_float(n.a);
             return "0.0";
+        }
+        if (n.kind == BP_COLOR && pin == 3) return nxa_float((float)n.op);
+        if (n.kind == BP_TWEEN && (pin == 3 || pin == 4 || pin == 5)) {
+            float z = 0.f, rot = 0.f, sec = 0.5f;
+            tween_defaults(n.text, z, rot, sec);
+            if (pin == 3) return nxa_float(z);
+            if (pin == 4) return nxa_float(rot);
+            return nxa_float(sec);
         }
         return nxa_float(n.a);
     }
@@ -1415,6 +1550,7 @@ std::string expr_out(const BpDoc& d, int node, int pin, int depth) {
     }
     if (n.kind == BP_GETVEL) return pin == 1 ? "ent_velocity_y(me)" : "ent_velocity_x(me)";
     if (n.kind == BP_GETYAW) return "bp_yaw(me)";
+    if (n.kind == BP_DT) return "eng_dt_seconds()";
     if (n.kind == BP_HIT && pin == 3) return "bp_h" + std::to_string(node);
     if (n.kind == BP_SPAWN3 && pin == 6) return "bp_e" + std::to_string(node);
     if (n.kind == BP_MATH && pin == 2) {
@@ -1608,6 +1744,79 @@ void emit_node(Emit& e, int node, int ind) {
           << expr_in_raw(*e.d, node, 2, 0) << ", " << expr_in_raw(*e.d, node, 3, 0)
           << ", " << nxa_float(speed) << ");\n";
         emit_from(e, node, 4, ind);
+    } else if (n.kind == BP_SFX) {
+        indent_nxa(o, ind);
+        o << "sfx_play(" << expr_in_raw(*e.d, node, 1, 0) << ");\n";
+        emit_from(e, node, 2, ind);
+    } else if (n.kind == BP_MUSIC) {
+        int loop = n.op != 0 ? 1 : 0;
+        indent_nxa(o, ind);
+        o << "eng_music_play(" << expr_in_raw(*e.d, node, 1, 0) << ", " << loop << ");\n";
+        emit_from(e, node, 2, ind);
+    } else if (n.kind == BP_MUSIC_STOP) {
+        indent_nxa(o, ind);
+        o << "eng_music_stop();\n";
+        emit_from(e, node, 1, ind);
+    } else if (n.kind == BP_FORCE) {
+        indent_nxa(o, ind);
+        o << "if (me >= 0) ent_apply_force(me, " << expr_in_raw(*e.d, node, 1, 0)
+          << ", " << expr_in_raw(*e.d, node, 2, 0) << ");\n";
+        emit_from(e, node, 3, ind);
+    } else if (n.kind == BP_IMPULSE) {
+        indent_nxa(o, ind);
+        o << "if (me >= 0) ent_apply_impulse(me, " << expr_in_raw(*e.d, node, 1, 0)
+          << ", " << expr_in_raw(*e.d, node, 2, 0) << ");\n";
+        emit_from(e, node, 3, ind);
+    } else if (n.kind == BP_VISIBLE) {
+        indent_nxa(o, ind);
+        o << "let bp_vis" << node << ": int = 0;\n";
+        indent_nxa(o, ind);
+        o << "if (" << expr_in_raw(*e.d, node, 1, 0) << ") { bp_vis" << node << " = 1; }\n";
+        indent_nxa(o, ind);
+        o << "if (me >= 0) ent_set_visible(me, bp_vis" << node << ");\n";
+        emit_from(e, node, 2, ind);
+    } else if (n.kind == BP_COLOR) {
+        indent_nxa(o, ind);
+        o << "if (me >= 0) ent_set_color(me, (int)(" << expr_in_raw(*e.d, node, 1, 0)
+          << "), (int)(" << expr_in_raw(*e.d, node, 2, 0) << "), (int)("
+          << expr_in_raw(*e.d, node, 3, 0) << "));\n";
+        emit_from(e, node, 4, ind);
+    } else if (n.kind == BP_SIZE) {
+        indent_nxa(o, ind);
+        o << "if (me >= 0) {\n";
+        indent_nxa(o, ind + 1);
+        o << "ent_set_w(me, (int)(" << expr_in_raw(*e.d, node, 1, 0) << "));\n";
+        indent_nxa(o, ind + 1);
+        o << "ent_set_h(me, (int)(" << expr_in_raw(*e.d, node, 2, 0) << "));\n";
+        indent_nxa(o, ind);
+        o << "}\n";
+        emit_from(e, node, 3, ind);
+    } else if (n.kind == BP_SETTEXT) {
+        indent_nxa(o, ind);
+        o << "if (me >= 0) ent_set_text(me, " << expr_in_raw(*e.d, node, 1, 0) << ");\n";
+        emit_from(e, node, 2, ind);
+    } else if (n.kind == BP_SCENE) {
+        indent_nxa(o, ind);
+        o << "{\n";
+        indent_nxa(o, ind + 1);
+        o << "let bp_sp" << node << ": string = proj_root() + \"/\" + "
+          << expr_in_raw(*e.d, node, 1, 0) << ";\n";
+        indent_nxa(o, ind + 1);
+        o << "if (eng_fs_exists(bp_sp" << node << ") == 1) eng_scene_load(bp_sp" << node << ");\n";
+        indent_nxa(o, ind);
+        o << "}\n";
+        emit_from(e, node, 2, ind);
+    } else if (n.kind == BP_TWEEN) {
+        indent_nxa(o, ind);
+        o << "if (me >= 0) eng_tween_pose(me, " << expr_in_raw(*e.d, node, 1, 0) << ", "
+          << expr_in_raw(*e.d, node, 2, 0) << ", " << expr_in_raw(*e.d, node, 3, 0) << ", "
+          << expr_in_raw(*e.d, node, 4, 0) << ", " << expr_in_raw(*e.d, node, 5, 0) << ");\n";
+        emit_from(e, node, 6, ind);
+    } else if (n.kind == BP_FADE) {
+        indent_nxa(o, ind);
+        o << "if (me >= 0) eng_tween_fade(me, " << expr_in_raw(*e.d, node, 1, 0) << ", "
+          << expr_in_raw(*e.d, node, 2, 0) << ");\n";
+        emit_from(e, node, 3, ind);
     } else if (n.kind == BP_HIT) {
         std::string prefix = n.text.empty() ? "" : n.text;
         indent_nxa(o, ind);
@@ -2244,7 +2453,7 @@ extern "C" int engine_bp_set_key_label(int i, const char* s) {
 
 extern "C" int engine_bp_add_node(int kind, int x, int y) {
     if (!g_bp.open) return -1;
-    if (kind < BP_INIT || kind > BP_NUDGE) return -1;
+    if (kind < BP_INIT || kind > BP_FADE) return -1;
     if (kind == BP_ENTRY) return -1;
     if (kind == BP_RETURN && g_bp.edit_fn < 0) return -1;
     if ((kind == BP_INIT || kind == BP_UPDATE) && g_bp.edit_fn >= 0) return -1;
@@ -2260,6 +2469,15 @@ extern "C" int engine_bp_add_node(int kind, int x, int y) {
     if (kind == BP_HIT) n.text = "crate";
     if (kind == BP_SPAWN3) { n.text = "sphere"; n.name = "spawned"; n.op = 32; }
     if (kind == BP_MOUSE) n.op = 0;
+    if (kind == BP_SFX) n.text = "sfx/click.wav";
+    if (kind == BP_MUSIC) { n.text = "music.ogg"; n.op = 1; }
+    if (kind == BP_VISIBLE) n.op = 1;
+    if (kind == BP_COLOR) { n.a = 255.f; n.b = 255.f; n.op = 255; }
+    if (kind == BP_SIZE) { n.a = 48.f; n.b = 48.f; }
+    if (kind == BP_SETTEXT) n.text = "Hello";
+    if (kind == BP_SCENE) n.text = "scenes/main.scene";
+    if (kind == BP_TWEEN) { n.a = 0.f; n.b = 0.f; n.text = "0 0 0.5"; }
+    if (kind == BP_FADE) { n.a = 0.f; n.b = 0.5f; }
     g_bp.nodes.push_back(n);
     touch();
     return (int)g_bp.nodes.size() - 1;

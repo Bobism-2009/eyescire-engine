@@ -203,7 +203,7 @@ fn bp_over_props(mx: int, my: int): int {
     return 0;
 }
 
-fn bp_palette_count(): int { return 24; }
+fn bp_palette_count(): int { return 37; }
 
 fn bp_palette_kind(i: int): int {
     if (i == 0) return 18;
@@ -229,7 +229,20 @@ fn bp_palette_kind(i: int): int {
     if (i == 20) return 29;
     if (i == 21) return 30;
     if (i == 22) return 31;
-    return 32;
+    if (i == 23) return 32;
+    if (i == 24) return 33;
+    if (i == 25) return 34;
+    if (i == 26) return 35;
+    if (i == 27) return 36;
+    if (i == 28) return 37;
+    if (i == 29) return 38;
+    if (i == 30) return 39;
+    if (i == 31) return 40;
+    if (i == 32) return 41;
+    if (i == 33) return 42;
+    if (i == 34) return 43;
+    if (i == 35) return 44;
+    return 45;
 }
 
 fn bp_font_px(): int {
@@ -369,13 +382,16 @@ fn bp_head_color(kind: int): Color {
     if (kind == 1 || kind == 2) return rgb(168, 124, 48);
     if (kind == 3 || kind == 4) return rgb(56, 104, 168);
     if (kind == 18) return rgb(72, 96, 184);
-    if (kind == 6 || kind == 8 || kind == 11 || kind == 20 || kind == 21 || kind == 25 || kind == 26 || kind == 29 || kind == 30) return rgb(108, 78, 158);
+    if (kind == 6 || kind == 8 || kind == 11 || kind == 20 || kind == 21 || kind == 25 || kind == 26 || kind == 29 || kind == 30 || kind == 33) return rgb(108, 78, 158);
     if (kind == 12) return rgb(64, 112, 168);
     if (kind == 13) return rgb(46, 140, 96);
     if (kind == 14) return rgb(176, 96, 48);
     if (kind == 15) return rgb(96, 78, 168);
     if (kind == 16) return rgb(48, 150, 132);
     if (kind == 17) return rgb(36, 116, 138);
+    if (kind == 34 || kind == 35 || kind == 36) return rgb(140, 88, 48);
+    if (kind == 37 || kind == 38) return rgb(72, 120, 140);
+    if (kind == 44 || kind == 45) return rgb(88, 132, 112);
     return rgb(48, 122, 96);
 }
 
@@ -1555,6 +1571,158 @@ fn bp_draw_props() {
         y = y + step;
         let ns: string = ui_field("bp_nudge", rect(fx, y, fw, 28), bp_a_text(bp_sel));
         bp_set_a_text(bp_sel, ns);
+    } else if (kind == 33) {
+        draw_text(fx, y, "Seconds since the last frame.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Wire into Math to move by speed * dt.", col_text_dim());
+    } else if (kind == 34) {
+        draw_text(fx, y, "Sound path", col_text_dim());
+        y = y + step;
+        let sp: string = ui_field("bp_sfx", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, sp);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Relative to the project, such as sfx/click.wav.", col_text_dim());
+    } else if (kind == 35) {
+        draw_text(fx, y, "Music path", col_text_dim());
+        y = y + step;
+        let mp: string = ui_field("bp_music", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, mp);
+        th_font(14);
+        y = y + 36;
+        let loop_on: int = 0;
+        if (bp_node_op(bp_sel) != 0) loop_on = 1;
+        let loop_off: int = 0;
+        if (loop_on == 0) loop_off = 1;
+        if (ui_pill(rect(fx, y, 108, 28), "Loop", loop_on) == 1) bp_node_set_op(bp_sel, 1);
+        if (ui_pill(rect(fx + 116, y, 108, 28), "Once", loop_off) == 1) bp_node_set_op(bp_sel, 0);
+        th_font(14);
+    } else if (kind == 36) {
+        draw_text(fx, y, "Stops the music that is playing.", col_text_main());
+    } else if (kind == 37) {
+        draw_text(fx, y, "Continuous force on this entity.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "X", col_text_dim());
+        y = y + step;
+        let fxv: string = ui_field("bp_force_x", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, fxv);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Y", col_text_dim());
+        y = y + step;
+        let fyv: string = ui_field("bp_force_y", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, fyv);
+        th_font(14);
+    } else if (kind == 38) {
+        draw_text(fx, y, "One-shot impulse on this entity.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "X", col_text_dim());
+        y = y + step;
+        let ixv: string = ui_field("bp_imp_x", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, ixv);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Y", col_text_dim());
+        y = y + step;
+        let iyv: string = ui_field("bp_imp_y", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, iyv);
+        th_font(14);
+    } else if (kind == 39) {
+        draw_text(fx, y, "Show or hide this entity.", col_text_main());
+        y = y + step;
+        let von: int = 0;
+        let voff: int = 0;
+        if (bp_node_op(bp_sel) != 0) von = 1;
+        else voff = 1;
+        if (ui_pill(rect(fx, y, 108, 28), "Show", von) == 1) bp_node_set_op(bp_sel, 1);
+        if (ui_pill(rect(fx + 116, y, 108, 28), "Hide", voff) == 1) bp_node_set_op(bp_sel, 0);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Or wire a bool into On.", col_text_dim());
+    } else if (kind == 40) {
+        draw_text(fx, y, "RGB 0 to 255 when a pin is empty.", col_text_dim());
+        y = y + step;
+        draw_text(fx, y, "R", col_text_dim());
+        y = y + step;
+        let cr: string = ui_field("bp_col_r", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, cr);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "G", col_text_dim());
+        y = y + step;
+        let cg: string = ui_field("bp_col_g", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, cg);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "B", col_text_dim());
+        y = y + step;
+        let cb: string = ui_field("bp_col_b", rect(fx, y, fw, 28), "" + bp_node_op(bp_sel));
+        bp_node_set_op(bp_sel, parse_int_or(cb, bp_node_op(bp_sel)));
+        th_font(14);
+    } else if (kind == 41) {
+        draw_text(fx, y, "Width and height when a pin is empty.", col_text_dim());
+        y = y + step;
+        draw_text(fx, y, "W", col_text_dim());
+        y = y + step;
+        let sw: string = ui_field("bp_size_w", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, sw);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "H", col_text_dim());
+        y = y + step;
+        let sh: string = ui_field("bp_size_h", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, sh);
+        th_font(14);
+    } else if (kind == 42) {
+        draw_text(fx, y, "Label text", col_text_dim());
+        y = y + step;
+        let tx: string = ui_field("bp_settext", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, tx);
+        th_font(14);
+    } else if (kind == 43) {
+        draw_text(fx, y, "Scene path", col_text_dim());
+        y = y + step;
+        let sc: string = ui_field("bp_scene", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, sc);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Relative to the project, such as scenes/main.scene.", col_text_dim());
+    } else if (kind == 44) {
+        draw_text(fx, y, "Eases this entity to a pose.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "X", col_text_dim());
+        y = y + step;
+        let twx: string = ui_field("bp_tw_x", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, twx);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Y", col_text_dim());
+        y = y + step;
+        let twy: string = ui_field("bp_tw_y", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, twy);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Z, rotation, seconds", col_text_dim());
+        y = y + step;
+        let twz: string = ui_field("bp_tw_zrs", rect(fx, y, fw, 28), bp_node_text(bp_sel));
+        bp_node_set_text(bp_sel, twz);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Example: 0 90 0.5", col_text_dim());
+    } else if (kind == 45) {
+        draw_text(fx, y, "Fades this entity's alpha.", col_text_main());
+        y = y + step;
+        draw_text(fx, y, "Alpha", col_text_dim());
+        y = y + step;
+        let fda: string = ui_field("bp_fade_a", rect(fx, y, fw, 28), bp_a_text(bp_sel));
+        bp_set_a_text(bp_sel, fda);
+        th_font(14);
+        y = y + 36;
+        draw_text(fx, y, "Seconds", col_text_dim());
+        y = y + step;
+        let fds: string = ui_field("bp_fade_s", rect(fx, y, fw, 28), bp_b_text(bp_sel));
+        bp_set_b_text(bp_sel, fds);
+        th_font(14);
     } else if (kind == 14) {
         draw_text(fx, y, "Sends this value back and stops", col_text_main());
         y = y + step;
@@ -1813,7 +1981,7 @@ fn bp_menu_cat_of(i: int): int {
     if (i < bp_palette_count()) {
         let k: int = bp_palette_kind(i);
         if (k == 18 || k == 3 || k == 4) return 0;
-        if (k == 11) return 1;
+        if (k == 11 || k == 33) return 1;
         if (k == 6 || k == 7 || k == 20 || k == 25 || k == 26 || k == 29 || k == 30) return 2;
         return 3;
     }
