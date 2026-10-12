@@ -32,8 +32,15 @@ if not exist "installer\payload\package\engine.nxa" (echo payload missing packag
 
 if not exist installer\out mkdir installer\out
 
+if not exist build\eyescire_res.o (
+  if not exist icons\eyescire.ico (echo icons\eyescire.ico missing - run: python icons\make_app_icon.py & exit /b 1)
+  if not exist build mkdir build
+  call windres -O coff -I icons -o build\eyescire_res.o icons\eyescire.rc
+  if not exist build\eyescire_res.o (echo windres failed for eyescire.rc & exit /b 1)
+)
+
 echo Compiling setup stub...
-call NexaC installer\setup.nxa -p --no-console -o installer\out\setup_stub.exe
+call NexaC installer\setup.nxa --link build\eyescire_res.o -p --no-console -o installer\out\setup_stub.exe
 if errorlevel 1 exit /b 1
 
 echo Compiling packer...

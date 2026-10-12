@@ -1,0 +1,3 @@
+/* Application icon for Eyescire editor / player / setup executables.
+   Built from eyescire.ico (same mark as icons/eyescire.png). */
+1 ICON "eyescire.ico"

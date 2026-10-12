@@ -42,10 +42,18 @@ echo == copying editor icons
 if not exist build\icons mkdir build\icons
 copy /y icons\*.png build\icons\ >nul
 
+echo == application icon resource
+if not exist icons\eyescire.ico (
+  echo icons\eyescire.ico missing - run: python icons\make_app_icon.py
+  exit /b 1
+)
+call windres -O coff -I icons -o build\eyescire_res.o icons\eyescire.rc
+if not exist build\eyescire_res.o (echo windres failed for eyescire.rc & exit /b 1)
+
 echo == compiling editor
 if exist build\editor.exe del build\editor.exe
 if exist build\editor.exe (echo build\editor.exe is in use - close it and rebuild & exit /b 1)
-call NexaC examples\editor.nxa --link build\engine.lib -p --no-console -o build\editor.exe
+call NexaC examples\editor.nxa --link build\engine.lib --link build\eyescire_res.o -p --no-console -o build\editor.exe
 if not exist build\editor.exe (echo editor build failed & exit /b 1)
 
 echo == compiling EyescirePlayer.dll
@@ -62,13 +70,13 @@ if not exist build\EyescirePlayer.dll (echo EyescirePlayer.dll build failed & ex
 echo == compiling EyescirePlayer3D.exe (std/gfx3d player for 3D scenes)
 if exist build\EyescirePlayer3D.exe del build\EyescirePlayer3D.exe
 if exist build\EyescirePlayer3D.exe (echo build\EyescirePlayer3D.exe is in use - close it and rebuild & exit /b 1)
-call NexaC examples\player3d.nxa --link build\engine.lib -p --no-console -o build\EyescirePlayer3D.exe
+call NexaC examples\player3d.nxa --link build\engine.lib --link build\eyescire_res.o -p --no-console -o build\EyescirePlayer3D.exe
 if not exist build\EyescirePlayer3D.exe (echo EyescirePlayer3D.exe build failed & exit /b 1)
 
 echo == compiling EyescirePlayer.exe launcher
 if exist build\EyescirePlayer.exe del build\EyescirePlayer.exe
 if exist build\EyescirePlayer.exe (echo build\EyescirePlayer.exe is in use - close it and rebuild & exit /b 1)
-call NexaC examples\player_launcher.nxa --link build\engine.lib -p -o build\EyescirePlayer.exe
+call NexaC examples\player_launcher.nxa --link build\engine.lib --link build\eyescire_res.o -p -o build\EyescirePlayer.exe
 if not exist build\EyescirePlayer.exe (echo EyescirePlayer.exe build failed & exit /b 1)
 
 echo.
