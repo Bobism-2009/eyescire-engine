@@ -477,7 +477,7 @@ float shadow_pcf(vec4 clip) {
         vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
     );
     float s = 0.0;
-    float scale = 10.0 / 4096.0;
+    float scale = 48.0 / 4096.0;
     for (int i = 0; i < 16; i++) {
         float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
         s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
@@ -576,7 +576,7 @@ float shadow_pcf(vec4 clip) {
         vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
     );
     float s = 0.0;
-    float scale = 10.0 / 4096.0;
+    float scale = 48.0 / 4096.0;
     for (int i = 0; i < 16; i++) {
         float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
         s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
@@ -1336,25 +1336,35 @@ static bool ensure_shadow_target() {
     return true;
 }
 
-/* Fit the light box to what the camera sees so huge floors do not stretch
-   each shadow texel across the whole ground. */
+/* Fit the light box to the camera so a huge ground plane cannot dilute the
+   shadow map into blocky texels. */
 static void shadow_fit_box(V3& center, float& half, float sceneRadius) {
-    float halfScene = sceneRadius * 1.15f;
-    if (halfScene < 8.f) halfScene = 8.f;
-    float halfCam = halfScene;
-    if (C.valid) {
-        V3 gap = C.target - C.eye;
-        float d = std::sqrt(dot(gap, gap));
-        halfCam = d * 0.8f + 8.f;
-        if (halfCam < 12.f) halfCam = 12.f;
-        if (halfCam > 48.f) halfCam = 48.f;
-    }
-    if (halfScene > halfCam) {
-        half = halfCam;
-        if (C.valid) center = C.target;
-    } else {
+    float halfScene = sceneRadius * 1.1f;
+    if (halfScene < 6.f) halfScene = 6.f;
+    if (!C.valid) {
         half = halfScene;
+        if (half > 24.f) half = 24.f;
+        return;
     }
+    V3 gap = C.target - C.eye;
+    float d = std::sqrt(dot(gap, gap));
+    float tanHalf = (T.h * 0.5f) / std::max(C.f, 1.f);
+    float aspect = (float)T.w / (float)std::max(T.h, 1);
+    float halfCam = d * tanHalf * std::max(aspect, 1.f) * 1.35f + 4.f;
+    if (halfCam < 10.f) halfCam = 10.f;
+    if (halfCam > 24.f) halfCam = 24.f;
+    half = halfCam;
+    if (halfScene < half) half = std::max(halfScene, 8.f);
+    center = C.target;
+}
+
+/* Large flat floors inflate the light box; skip them when measuring casters. */
+static bool shadow_is_floor(float c0, float c1, float c2) {
+    float a = c0, b = c1, c = c2;
+    if (a > b) { float t = a; a = b; b = t; }
+    if (b > c) { float t = b; b = c; c = t; }
+    if (a > b) { float t = a; a = b; b = t; }
+    return c > 18.f && a < c * 0.08f;
 }
 
 static void shadow_publish(int on, int sunSlot) {
@@ -1394,6 +1404,7 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
         float c0 = std::sqrt(shape[0] * shape[0] + shape[1] * shape[1] + shape[2] * shape[2]);
         float c1 = std::sqrt(shape[4] * shape[4] + shape[5] * shape[5] + shape[6] * shape[6]);
         float c2 = std::sqrt(shape[8] * shape[8] + shape[9] * shape[9] + shape[10] * shape[10]);
+        if (shadow_is_floor(c0, c1, c2)) continue;
         float rad = 0.5f * std::sqrt(c0 * c0 + c1 * c1 + c2 * c2);
         float x = shape[12], y = shape[13], z = shape[14];
         if (x - rad < minx) minx = x - rad;
@@ -1404,15 +1415,18 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
         if (z + rad > maxz) maxz = z + rad;
         casters++;
     }
-    if (casters == 0) {
+    V3 center = C.valid ? C.target : v3(0, 0, 0);
+    float radius = 8.f;
+    if (casters > 0) {
+        V3 ext = v3(maxx - minx, maxy - miny, maxz - minz) * 0.5f;
+        radius = std::sqrt(dot(ext, ext));
+        if (radius < 0.5f) radius = 0.5f;
+        center = v3((minx + maxx) * 0.5f, (miny + maxy) * 0.5f, (minz + maxz) * 0.5f);
+    } else if (!C.valid) {
         shadow_publish(0, -1);
         return;
     }
-    V3 ext = v3(maxx - minx, maxy - miny, maxz - minz) * 0.5f;
-    float radius = std::sqrt(dot(ext, ext));
-    if (radius < 0.5f) radius = 0.5f;
-    V3 center = v3((minx + maxx) * 0.5f, (miny + maxy) * 0.5f, (minz + maxz) * 0.5f);
-    float half = radius * 1.15f;
+    float half = radius * 1.1f;
     shadow_fit_box(center, half, radius);
     V3 fwd = norm(shine);
     V3 upRef = std::fabs(fwd.y) > 0.95f ? v3(0, 0, 1) : v3(0, 1, 0);
@@ -1420,6 +1434,16 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
     V3 up = norm(cross(right, fwd));
     float dist = half + 4.0f;
     V3 eye = center - fwd * dist;
+    /* Snap the light origin to the shadow texel grid so edges do not crawl. */
+    float texel = (half * 2.f) / (float)kShadowMap;
+    if (texel > 1e-6f) {
+        float lx = dot(eye, right);
+        float ly = dot(eye, up);
+        lx = std::floor(lx / texel) * texel;
+        ly = std::floor(ly / texel) * texel;
+        float lz = dot(eye, fwd);
+        eye = right * lx + up * ly + fwd * lz;
+    }
     float basis[16] = {
         right.x, up.x, -fwd.x, 0,
         right.y, up.y, -fwd.y, 0,

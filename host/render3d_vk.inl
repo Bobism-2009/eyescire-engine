@@ -626,6 +626,7 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
             float c0 = std::sqrt(L.shape[0] * L.shape[0] + L.shape[1] * L.shape[1] + L.shape[2] * L.shape[2]);
             float c1 = std::sqrt(L.shape[4] * L.shape[4] + L.shape[5] * L.shape[5] + L.shape[6] * L.shape[6]);
             float c2 = std::sqrt(L.shape[8] * L.shape[8] + L.shape[9] * L.shape[9] + L.shape[10] * L.shape[10]);
+            if (shadow_is_floor(c0, c1, c2)) continue;
             float rad = 0.5f * std::sqrt(c0 * c0 + c1 * c1 + c2 * c2);
             float x = L.shape[12], y = L.shape[13], z = L.shape[14];
             if (x - rad < minx) minx = x - rad;
@@ -636,34 +637,32 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
             if (z + rad > maxz) maxz = z + rad;
             casters++;
         }
+        V3 center = C.valid ? C.target : v3(0, 0, 0);
+        float radius = 8.f;
         if (casters > 0) {
             V3 ext = v3(maxx - minx, maxy - miny, maxz - minz) * 0.5f;
-            float radius = std::sqrt(dot(ext, ext));
+            radius = std::sqrt(dot(ext, ext));
             if (radius < 0.5f) radius = 0.5f;
-            V3 center = v3((minx + maxx) * 0.5f, (miny + maxy) * 0.5f, (minz + maxz) * 0.5f);
-            float half = radius * 1.15f;
-            float halfScene = radius * 1.15f;
-            if (halfScene < 8.f) halfScene = 8.f;
-            float halfCam = halfScene;
-            if (C.valid) {
-                V3 gap = C.target - C.eye;
-                float d = std::sqrt(dot(gap, gap));
-                halfCam = d * 0.8f + 8.f;
-                if (halfCam < 12.f) halfCam = 12.f;
-                if (halfCam > 48.f) halfCam = 48.f;
-            }
-            if (halfScene > halfCam) {
-                half = halfCam;
-                if (C.valid) center = C.target;
-            } else {
-                half = halfScene;
-            }
+            center = v3((minx + maxx) * 0.5f, (miny + maxy) * 0.5f, (minz + maxz) * 0.5f);
+        }
+        if (casters > 0 || C.valid) {
+            float half = radius * 1.1f;
+            shadow_fit_box(center, half, radius);
             V3 fwd = norm(shine);
             V3 upRef = std::fabs(fwd.y) > 0.95f ? v3(0, 0, 1) : v3(0, 1, 0);
             V3 rightv = norm(cross(fwd, upRef));
             V3 up = norm(cross(rightv, fwd));
             float dist = half + 4.0f;
             V3 eye = center - fwd * dist;
+            float texel = (half * 2.f) / 4096.f;
+            if (texel > 1e-6f) {
+                float lx = dot(eye, rightv);
+                float ly = dot(eye, up);
+                lx = std::floor(lx / texel) * texel;
+                ly = std::floor(ly / texel) * texel;
+                float lz = dot(eye, fwd);
+                eye = rightv * lx + up * ly + fwd * lz;
+            }
             float b2[16] = { rightv.x, up.x, -fwd.x, 0, rightv.y, up.y, -fwd.y, 0, rightv.z, up.z, -fwd.z, 0, 0, 0, 0, 1 };
             float trs[16], view[16], ortho[16];
             ident(trs);
