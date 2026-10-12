@@ -415,6 +415,20 @@ fn bp_before_bar(t: string): string {
     return t;
 }
 
+fn bp_after_bar(t: string): string {
+    let i: int = 0;
+    while (i < t.len()) {
+        if (t.substring(i, 1) == "|") return t.substring(i + 1, t.len() - i - 1);
+        i = i + 1;
+    }
+    return "";
+}
+
+fn bp_pack_zr_tween(zr: string, tween: string): string {
+    if (tween.len() == 0) return zr;
+    return zr + "|" + tween;
+}
+
 /* Hierarchy drop. The node keeps the entity id, so a later rename still hits it. */
 fn bp_drop_object(slot: int, mx: int, my: int) {
     if (bp_is_open() == 0 || slot < 0) return;
@@ -1351,20 +1365,34 @@ fn bp_draw_props() {
         if (oy != oynow) bp_set_b_text(bp_sel, oy);
         th_font(14);
         y = y + 36;
-        let packed: string = bp_before_bar(bp_node_text(bp_sel));
+        let full: string = bp_node_text(bp_sel);
+        let packed: string = bp_before_bar(full);
+        let twnow: string = bp_after_bar(full);
         draw_text(fx, y, "Z", col_text_dim());
         y = y + step;
         let hz: string = bp_text_head(packed);
         let oz: string = ui_field("bp_oz" + bp_sel, rect(fx, y, fw, 28), hz);
-        if (oz != hz) bp_node_set_text(bp_sel, oz + " " + bp_text_tail(packed));
+        if (oz != hz) bp_node_set_text(bp_sel, bp_pack_zr_tween(oz + " " + bp_text_tail(packed), twnow));
         th_font(14);
         y = y + 36;
         packed = bp_before_bar(bp_node_text(bp_sel));
+        twnow = bp_after_bar(bp_node_text(bp_sel));
         draw_text(fx, y, "Rotation", col_text_dim());
         y = y + step;
         let hrot: string = bp_text_tail(packed);
         let oro: string = ui_field("bp_orot" + bp_sel, rect(fx, y, fw, 28), hrot);
-        if (oro != hrot) bp_node_set_text(bp_sel, bp_text_head(packed) + " " + oro);
+        if (oro != hrot) bp_node_set_text(bp_sel, bp_pack_zr_tween(bp_text_head(packed) + " " + oro, twnow));
+        th_font(14);
+        y = y + 36;
+        packed = bp_before_bar(bp_node_text(bp_sel));
+        twnow = bp_after_bar(bp_node_text(bp_sel));
+        draw_text(fx, y, "Tween (sec)", col_text_dim());
+        y = y + step;
+        let otw: string = ui_field("bp_otw" + bp_sel, rect(fx, y, fw, 28), twnow);
+        if (otw != twnow) bp_node_set_text(bp_sel, bp_pack_zr_tween(packed, otw));
+        th_font(14);
+        y = y + 20;
+        draw_text(fx, y, "0 snaps. Above 0 eases to the pose.", col_text_dim());
         th_font(14);
     } else if (kind == 13) {
         draw_text(fx, y, "Name", col_text_dim());

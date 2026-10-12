@@ -4491,11 +4491,123 @@ extern "C" int engine_take_leave_play() {
     return v;
 }
 
+namespace {
+
+struct EntTween {
+    int   id = 0;
+    float t = 0.f;
+    float dur = 0.f;
+    float x0 = 0.f, y0 = 0.f, z0 = 0.f, r0 = 0.f, a0 = 0.f;
+    float x1 = 0.f, y1 = 0.f, z1 = 0.f, r1 = 0.f, a1 = 0.f;
+    int   flags = 0; /* 1=x 2=y 4=z 8=rot 16=alpha */
+};
+std::vector<EntTween> g_tweens;
+
+int tween_slot_for_id(int id) {
+    if (id <= 0) return -1;
+    for (int s = 0; s < (int)g.entities.size(); ++s) {
+        if (g.entities[s].active && g.entities[s].id == id) return s;
+    }
+    return -1;
+}
+
+void tween_remove_id(int id, int flags) {
+    for (int i = (int)g_tweens.size() - 1; i >= 0; --i) {
+        if (g_tweens[i].id != id) continue;
+        g_tweens[i].flags &= ~flags;
+        if (g_tweens[i].flags == 0) g_tweens.erase(g_tweens.begin() + i);
+    }
+}
+
+void tween_step(float dt) {
+    for (int i = (int)g_tweens.size() - 1; i >= 0; --i) {
+        EntTween& tw = g_tweens[i];
+        int s = tween_slot_for_id(tw.id);
+        if (s < 0) { g_tweens.erase(g_tweens.begin() + i); continue; }
+        tw.t += dt;
+        float u = tw.dur > 1e-6f ? tw.t / tw.dur : 1.f;
+        if (u > 1.f) u = 1.f;
+        /* smoothstep so camera moves ease in and out */
+        float sfu = u * u * (3.f - 2.f * u);
+        Entity& e = g.entities[s];
+        if (tw.flags & 1) engine_entity_set_x(s, (int)std::lround(tw.x0 + (tw.x1 - tw.x0) * sfu));
+        if (tw.flags & 2) engine_entity_set_y(s, (int)std::lround(tw.y0 + (tw.y1 - tw.y0) * sfu));
+        if (tw.flags & 4) engine_entity_set_z(s, (int)std::lround(tw.z0 + (tw.z1 - tw.z0) * sfu));
+        if (tw.flags & 8) {
+            float d = tw.r1 - tw.r0;
+            while (d > 180.f) d -= 360.f;
+            while (d < -180.f) d += 360.f;
+            int deg = (int)std::lround(tw.r0 + d * sfu);
+            deg %= 360;
+            if (deg < 0) deg += 360;
+            engine_entity_set_rot(s, deg);
+        }
+        if (tw.flags & 16) engine_entity_set_alpha(s, (int)std::lround(tw.a0 + (tw.a1 - tw.a0) * sfu));
+        if (u >= 1.f) g_tweens.erase(g_tweens.begin() + i);
+    }
+}
+
+} // namespace
+
+extern "C" void engine_tween_clear() { g_tweens.clear(); }
+
+extern "C" void engine_tween_pose(int slot, float x, float y, float z, float rot, float sec) {
+    if (!active_slot(slot)) return;
+    Entity& e = g.entities[slot];
+    int flags = 1 | 2 | 4 | 8;
+    if (sec <= 0.001f) {
+        tween_remove_id(e.id, flags);
+        engine_entity_set_x(slot, (int)std::lround(x));
+        engine_entity_set_y(slot, (int)std::lround(y));
+        engine_entity_set_z(slot, (int)std::lround(z));
+        int deg = (int)std::lround(rot);
+        deg %= 360;
+        if (deg < 0) deg += 360;
+        engine_entity_set_rot(slot, deg);
+        return;
+    }
+    tween_remove_id(e.id, flags);
+    EntTween tw;
+    tw.id = e.id;
+    tw.t = 0.f;
+    tw.dur = sec;
+    tw.x0 = (float)e.x; tw.y0 = (float)e.y; tw.z0 = (float)e.z; tw.r0 = (float)e.rotDeg;
+    tw.x1 = x; tw.y1 = y; tw.z1 = z; tw.r1 = rot;
+    tw.a0 = (float)e.a; tw.a1 = (float)e.a;
+    tw.flags = flags;
+    g_tweens.push_back(tw);
+}
+
+extern "C" void engine_tween_fade(int slot, float alpha, float sec) {
+    if (!active_slot(slot)) return;
+    Entity& e = g.entities[slot];
+    int flags = 16;
+    if (alpha < 0.f) alpha = 0.f;
+    if (alpha > 255.f) alpha = 255.f;
+    if (sec <= 0.001f) {
+        tween_remove_id(e.id, flags);
+        engine_entity_set_alpha(slot, (int)std::lround(alpha));
+        return;
+    }
+    tween_remove_id(e.id, flags);
+    EntTween tw;
+    tw.id = e.id;
+    tw.t = 0.f;
+    tw.dur = sec;
+    tw.x0 = (float)e.x; tw.y0 = (float)e.y; tw.z0 = (float)e.z; tw.r0 = (float)e.rotDeg;
+    tw.x1 = tw.x0; tw.y1 = tw.y0; tw.z1 = tw.z0; tw.r1 = tw.r0;
+    tw.a0 = (float)e.a; tw.a1 = alpha;
+    tw.flags = flags;
+    g_tweens.push_back(tw);
+}
+
 extern "C" void engine_physics_step(double dt) {
-    if (!g.physWorld || g_gamePaused) return;
+    if (g_gamePaused) return;
     float step = (float)dt;
     if (step <= 0.0f) step = 1.0f / 60.0f;
     if (step > 0.05f) step = 0.05f;   /* clamp so a stall can't explode the sim */
+    tween_step(step);
+    if (!g.physWorld) return;
     g.physWorld->Step(step, 8, 3);
 
     float ppm = g.pixelsPerMeter;
@@ -4529,6 +4641,7 @@ extern "C" void engine_physics_end() {
         g.physWorld = nullptr;
     }
     for (Entity& e : g.entities) e.body = nullptr;
+    g_tweens.clear();
 }
 
 /* ---- per-entity rigidbody component accessors ---- */
@@ -6036,14 +6149,17 @@ extern "C" int engine_dll_call(int handle, const char* sym) {
 
 /* Button clicks call a script function with zeros. sig is a string of
    f (float), i (int/bool) and s (string), one character per argument.
-   Nexa compiles float parameters as double. eng_self is already set to the
-   host object, so blueprint values use that entity — same as script_update. */
+   Nexa compiles float parameters as double. Values share one store per
+   script DLL so Next/Last buttons see the same TestNum; eng_self is still
+   the host object for Self pins. */
 
 extern "C" int engine_dll_call_sig(int handle, const char* sym, const char* sig) {
     auto it = g.dlls.find(handle);
     if (it == g.dlls.end() || !it->second || !sym) return 0;
     FARPROC raw = GetProcAddress(it->second, sym);
     if (!raw) return 0;
+    engine_bp_share_push(handle);
+    struct SharePop { ~SharePop() { engine_bp_share_pop(); } } share_pop;
     std::string s = sig ? sig : "";
     const double z = 0.0;
     const int n = 0;

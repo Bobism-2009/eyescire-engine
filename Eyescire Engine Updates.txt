@@ -100,7 +100,7 @@ Collision layers, so you can choose which objects pass through each other.
 
 Pathfinding, so a character can walk around walls in 2D and in 3D.
 
-Tweens: move, turn, or fade an object over time from a script.
+✔ Tweens: move, turn, or fade an object over time from a script.
 
 Saved camera angles in the editor, so you can jump back to a view.
 

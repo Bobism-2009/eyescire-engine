@@ -368,6 +368,11 @@ EYESCIRE_API void engine_physics_begin();
 EYESCIRE_API void engine_physics_step(double dt);
 EYESCIRE_API void engine_physics_end();
 
+/* Soft move/turn/fade. sec <= 0 snaps. Cleared when physics ends. */
+EYESCIRE_API void engine_tween_pose(int slot, float x, float y, float z, float rot, float sec);
+EYESCIRE_API void engine_tween_fade(int slot, float alpha, float sec);
+EYESCIRE_API void engine_tween_clear();
+
 /* Per-entity rigidbody component. */
 EYESCIRE_API int   engine_entity_has_body(int slot);
 EYESCIRE_API void  engine_entity_set_body(int slot, int on);

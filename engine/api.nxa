@@ -378,6 +378,9 @@ extern "C" void   engine_request_leave_play();
 extern "C" int    engine_take_leave_play();
 extern "C" void   engine_physics_step(double);
 extern "C" void   engine_physics_end();
+extern "C" void   engine_tween_pose(int, float, float, float, float, float);
+extern "C" void   engine_tween_fade(int, float, float);
+extern "C" void   engine_tween_clear();
 extern "C" int    engine_entity_has_body(int);
 extern "C" void   engine_entity_set_body(int, int);
 extern "C" int    engine_entity_body_type(int);
@@ -1483,6 +1486,13 @@ fn eng_paused(): int { let r: int = 0; inline_cpp! { r = engine_paused(); } retu
 fn eng_request_leave_play() { inline_cpp! { engine_request_leave_play(); } }
 fn eng_take_leave_play(): int { let r: int = 0; inline_cpp! { r = engine_take_leave_play(); } return r; }
 fn phys_step(dt: float) { inline_cpp! { engine_physics_step(dt); } }
+fn eng_tween_pose(slot: int, x: float, y: float, z: float, rot: float, sec: float) {
+    inline_cpp! { engine_tween_pose(slot, x, y, z, rot, sec); }
+}
+fn eng_tween_fade(slot: int, alpha: float, sec: float) {
+    inline_cpp! { engine_tween_fade(slot, alpha, sec); }
+}
+fn eng_tween_clear() { inline_cpp! { engine_tween_clear(); } }
 fn phys_end() { inline_cpp! { engine_physics_end(); } }
 
 fn ent_has_body(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_has_body(slot); } return r; }

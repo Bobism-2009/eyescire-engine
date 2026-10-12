@@ -1229,6 +1229,12 @@ void object_extra(const std::string& text, float& z, float& rot) {
     in >> z >> rot;
 }
 
+float object_tween_sec(const std::string& text) {
+    auto bar = text.find('|');
+    if (bar == std::string::npos || bar + 1 >= text.size()) return 0.f;
+    return (float)std::atof(text.c_str() + (int)bar + 1);
+}
+
 std::string object_ref(const BpNode& n) {
     if (n.op > 0) return "ent_find_by_id(" + std::to_string(n.op) + ")";
     if (!n.name.empty() && n.name != "(unnamed)")
@@ -1532,16 +1538,25 @@ void emit_node(Emit& e, int node, int ind) {
                 if (L.to_node == node && L.to_pin == pin) return true;
             return false;
         };
-        /* Panel x/y/z/rot are the pose written on run — wired value or the
-           stored default. Skipping unlinked pins left Next/Last Test empty. */
-        indent_nxa(o, ind + 1);
-        o << "ent_set_x(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 1, 0) << "));\n";
-        indent_nxa(o, ind + 1);
-        o << "ent_set_y(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 2, 0) << "));\n";
-        indent_nxa(o, ind + 1);
-        o << "ent_set_z(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 3, 0) << "));\n";
-        indent_nxa(o, ind + 1);
-        o << "ent_set_rot(bp_o" << node << ", (int)(" << expr_in_raw(*e.d, node, 4, 0) << "));\n";
+        float tween = object_tween_sec(n.text);
+        std::string xs = expr_in_raw(*e.d, node, 1, 0);
+        std::string ys = expr_in_raw(*e.d, node, 2, 0);
+        std::string zs = expr_in_raw(*e.d, node, 3, 0);
+        std::string rs = expr_in_raw(*e.d, node, 4, 0);
+        if (tween > 0.001f) {
+            indent_nxa(o, ind + 1);
+            o << "eng_tween_pose(bp_o" << node << ", " << xs << ", " << ys << ", "
+              << zs << ", " << rs << ", " << nxa_float(tween) << ");\n";
+        } else {
+            indent_nxa(o, ind + 1);
+            o << "ent_set_x(bp_o" << node << ", (int)(" << xs << "));\n";
+            indent_nxa(o, ind + 1);
+            o << "ent_set_y(bp_o" << node << ", (int)(" << ys << "));\n";
+            indent_nxa(o, ind + 1);
+            o << "ent_set_z(bp_o" << node << ", (int)(" << zs << "));\n";
+            indent_nxa(o, ind + 1);
+            o << "ent_set_rot(bp_o" << node << ", (int)(" << rs << "));\n";
+        }
         if (linked(12)) {
             indent_nxa(o, ind + 1);
             o << "bp_set_yaw(bp_o" << node << ", " << expr_in_raw(*e.d, node, 12, 0) << ");\n";
@@ -1834,6 +1849,14 @@ std::string generate_nxa(const BpDoc& src) {
     o << "extern \"C\" void engine_entity_set_look(int, float, float);\n";
     o << "extern \"C\" float engine_entity_look_yaw(int);\n";
     o << "extern \"C\" float engine_entity_look_pitch(int);\n";
+    o << "extern \"C\" void engine_tween_pose(int, float, float, float, float, float);\n";
+    o << "extern \"C\" void engine_tween_fade(int, float, float);\n";
+    o << "}\n";
+    o << "fn eng_tween_pose(slot: int, x: float, y: float, z: float, rot: float, sec: float) {\n";
+    o << "    inline_cpp! { engine_tween_pose(slot, x, y, z, rot, sec); }\n";
+    o << "}\n";
+    o << "fn eng_tween_fade(slot: int, alpha: float, sec: float) {\n";
+    o << "    inline_cpp! { engine_tween_fade(slot, alpha, sec); }\n";
     o << "}\n";
     o << "fn bp_yaw(slot: int): float {\n";
     o << "    let r: float = 0.0;\n";
