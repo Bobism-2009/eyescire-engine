@@ -10580,11 +10580,20 @@ fn export_close() {
 }
 
 fn export_panel(): Rect {
-    let w: int = 720;
-    let h: int = 420;
-    if (w > WIN_W - 40) w = WIN_W - 40;
-    if (h > WIN_H - 40) h = WIN_H - 40;
+    let w: int = 1040;
+    let h: int = 640;
+    if (w > WIN_W - 48) w = WIN_W - 48;
+    if (h > WIN_H - 48) h = WIN_H - 48;
     return rect((WIN_W - w) / 2, (WIN_H - h) / 2, w, h);
+}
+
+/* GL/VK present keys the game view to the scene clear color. After a dim
+   pass, put that key back so the live scene shows around the modal. */
+fn modal_restore_scene_key() {
+    if (view3d_active() == 0) return;
+    if (viewport_mode == "script" || viewport_mode == "ui" || viewport_mode == "play") return;
+    let gv: Rect = game_view_rect();
+    eng_fill_rect(gv.x, gv.y, gv.w, gv.h, scene_clear_r(), scene_clear_g(), scene_clear_b());
 }
 
 fn export_preset_row(x: int, y: int, w: int, id: int, title: string, subtitle: string) {
@@ -10649,12 +10658,13 @@ fn export_run() {
 
 fn export_draw() {
     if (export_open == 0) return;
-    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 150);
+    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 140);
+    modal_restore_scene_key();
     let p: Rect = export_panel();
     th_popup(p);
 
-    let foot_h: int = 52;
-    let nav_w: int = 200;
+    let foot_h: int = 56;
+    let nav_w: int = 240;
     let nav: Rect = rect(p.x, p.y, nav_w, p.h - foot_h);
     let body: Rect = rect(p.x + nav_w, p.y, p.w - nav_w, p.h - foot_h);
     let foot: Rect = rect(p.x, p.y + p.h - foot_h, p.w, foot_h);
@@ -10663,17 +10673,17 @@ fn export_draw() {
     draw_fill_rect(rect(nav.x + nav.w - 1, nav.y, 1, nav.h), col_border_soft());
     draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
 
-    th_font_semi(14);
-    draw_text(nav.x + 14, nav.y + 16, "Export", col_text_main());
+    th_font_semi(16);
+    draw_text(nav.x + 18, nav.y + 18, "Export", col_text_main());
     th_font(11);
-    draw_text(nav.x + 14, nav.y + 38, "PRESETS", col_text_dim());
+    draw_text(nav.x + 18, nav.y + 44, "PRESETS", col_text_dim());
     th_font(14);
-    export_preset_row(nav.x + 8, nav.y + 58, nav.w - 16, 0, "Windows Desktop", "Standalone .exe");
-    export_preset_row(nav.x + 8, nav.y + 106, nav.w - 16, 1, "Web (HTML)", "Browser player");
+    export_preset_row(nav.x + 10, nav.y + 68, nav.w - 20, 0, "Windows Desktop", "Standalone .exe");
+    export_preset_row(nav.x + 10, nav.y + 120, nav.w - 20, 1, "Web (HTML)", "Browser player");
 
-    let x: int = body.x + 20;
-    let y: int = body.y + 18;
-    let w: int = body.w - 40;
+    let x: int = body.x + 28;
+    let y: int = body.y + 24;
+    let w: int = body.w - 56;
 
     th_font_semi(14);
     if (export_preset == 1) draw_text(x, y, "Web (HTML)", col_text_main());
@@ -12030,7 +12040,8 @@ fn settings_page_audio(x: int, y: int, w: int) {
 fn settings_draw() {
     if (settings_open == 0) return;
     settings_sync();
-    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 150);
+    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 140);
+    modal_restore_scene_key();
     let p: Rect = settings_panel();
     draw_fill_rect(p, col_panel_dark());
     draw_outline_rect(p, 1, col_border_soft());
@@ -12127,33 +12138,29 @@ fn edit_frame() {
         console_input();
     }
 
-    /* GL/VK present punches the 3D view on top of the back buffer. Skip it
-       while a modal covers the viewport or the 3D picture shows through text. */
     let modal_open: int = 0;
     if (settings_open == 1 || export_open == 1) modal_open = 1;
-    if (modal_open == 0) {
-        if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
-        else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
-    }
+
+    if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
+    else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
 
     if (modal_open == 1) settings_block_ui = 1;
     menubar_draw();
     toolbar_draw();
-    if (modal_open == 0) {
-        left_draw();
-        viewport_tabs_draw();
+    left_draw();
+    viewport_tabs_draw();
+    if (viewport_mode == "script") script_editor_draw();
+    else if (viewport_mode == "ui") ui_viewport_draw();
+    else if (viewport_mode == "play") play_viewport_draw();
+    else if (view3d_active() == 1) {
+        /* Overlay wipes the chroma key. Keep the key under modals so the
+           live scene shows behind the dimmed export/settings panel. */
+        if (modal_open == 0) viewport3d_overlay();
+    } else {
+        viewport_draw();
     }
-    if (modal_open == 0) {
-        if (viewport_mode == "script") script_editor_draw();
-        else if (viewport_mode == "ui") ui_viewport_draw();
-        else if (viewport_mode == "play") play_viewport_draw();
-        else if (view3d_active() == 1) viewport3d_overlay();
-        else                           viewport_draw();
-    }
-    if (modal_open == 0) {
-        inspector_draw();
-        dock_draw();
-    }
+    inspector_draw();
+    dock_draw();
     settings_block_ui = 0;
     statusbar_draw();
 
