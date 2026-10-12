@@ -2398,10 +2398,13 @@ extern "C" void engine_entity_set_z(int s, int v) {
     if (dz == 0) return;
     g.entities[s].z = v;
     entity_propagate_dz(s, dz);
+    /* Depth changed: wake the body so the 3D contact filter re-checks pairs. */
+    if (g.physWorld && g.entities[s].body) g.entities[s].body->SetAwake(true);
 }
 extern "C" void engine_entity_set_depth(int s, int v) {
     if (!active_slot(s)) return;
     g.entities[s].depth = v < 0 ? 0 : v;
+    if (g.physWorld && g.entities[s].body) g.entities[s].body->SetAwake(true);
 }
 extern "C" int engine_entity_light_intensity(int s) { return active_slot(s) ? g.entities[s].lightIntensity : 0; }
 extern "C" int engine_entity_light_range(int s)     { return active_slot(s) ? g.entities[s].lightRange : 0; }
@@ -4126,8 +4129,52 @@ const std::vector<float>& hitbox_skin(const Entity& e) {
     return hitbox_cache(e).skin;
 }
 
-void physics_create_body(Entity& e) {
-    if (!g.physWorld) return;
+/* In a 3D scene Box2D still runs on the front plane (x/y). Depth is the
+   missing axis: two meshes that only look far apart because of z must not
+   push each other. Slot is stored as userData.pointer = slot + 1. */
+static int phys_body_slot(b2Body* body) {
+    if (!body) return -1;
+    int s = (int)body->GetUserData().pointer - 1;
+    return active_slot(s) ? s : -1;
+}
+
+static int phys_depth_overlap(int a, int b) {
+    if (!active_slot(a) || !active_slot(b)) return 1;
+    const Entity& A = g.entities[a];
+    const Entity& B = g.entities[b];
+    int da = solid_depth(A), db = solid_depth(B);
+    if (da <= 0 || db <= 0) return 1;
+    if (A.z + da <= B.z) return 0;
+    if (B.z + db <= A.z) return 0;
+    return 1;
+}
+
+struct PhysDepthFilter : public b2ContactFilter {
+    bool ShouldCollide(b2Fixture* fa, b2Fixture* fb) override {
+        if (!g.render3d || !fa || !fb) return true;
+        int a = phys_body_slot(fa->GetBody());
+        int b = phys_body_slot(fb->GetBody());
+        if (a < 0 || b < 0) return true;
+        return phys_depth_overlap(a, b) != 0;
+    }
+};
+
+struct PhysDepthListener : public b2ContactListener {
+    void PreSolve(b2Contact* contact, const b2Manifold*) override {
+        if (!g.render3d || !contact) return;
+        int a = phys_body_slot(contact->GetFixtureA()->GetBody());
+        int b = phys_body_slot(contact->GetFixtureB()->GetBody());
+        if (a < 0 || b < 0) return;
+        if (!phys_depth_overlap(a, b)) contact->SetEnabled(false);
+    }
+};
+
+static PhysDepthFilter g_physDepthFilter;
+static PhysDepthListener g_physDepthListener;
+
+void physics_create_body(int slot) {
+    if (!g.physWorld || !active_slot(slot)) return;
+    Entity& e = g.entities[slot];
     float ppm = g.pixelsPerMeter;
     int w = e.w < 4 ? 4 : e.w;
     int h = e.h < 4 ? 4 : e.h;
@@ -4144,6 +4191,7 @@ void physics_create_body(Entity& e) {
     bd.angle = e.rotDeg * kDeg2Rad;
     bd.fixedRotation = e.fixedRotation;
     bd.gravityScale = e.gravityScale;
+    bd.userData.pointer = (uintptr_t)(slot + 1);
     b2Body* body = g.physWorld->CreateBody(&bd);
 
     b2FixtureDef fd;
@@ -4211,13 +4259,14 @@ void physics_create_body(Entity& e) {
     e.body = body;
 }
 
-void physics_rebuild_body(Entity& e) {
-    if (!g.physWorld) return;
+void physics_rebuild_body(int slot) {
+    if (!g.physWorld || !active_slot(slot)) return;
+    Entity& e = g.entities[slot];
     if (e.body) {
         g.physWorld->DestroyBody(e.body);
         e.body = nullptr;
     }
-    if (e.active && e.hasBody) physics_create_body(e);
+    if (e.active && e.hasBody) physics_create_body(slot);
 }
 
 } // namespace
@@ -4261,9 +4310,14 @@ extern "C" void engine_physics_begin() {
     if (g.physWorld) engine_physics_end();
     g.physWorld = new b2World(b2Vec2(g.gravityX / g.pixelsPerMeter,
                                      g.gravityY / g.pixelsPerMeter));
-    for (Entity& e : g.entities) {
-        e.body = nullptr;
-        if (e.active && e.hasBody) physics_create_body(e);
+    /* 3D scenes keep Box2D on x/y, but skip pairs that do not share depth. */
+    if (g.render3d) {
+        g.physWorld->SetContactFilter(&g_physDepthFilter);
+        g.physWorld->SetContactListener(&g_physDepthListener);
+    }
+    for (int s = 0; s < (int)g.entities.size(); ++s) {
+        g.entities[s].body = nullptr;
+        if (g.entities[s].active && g.entities[s].hasBody) physics_create_body(s);
     }
 }
 
@@ -4543,7 +4597,7 @@ extern "C" void engine_entity_set_hitbox(int s, int level) {
     Entity& e = g.entities[s];
     if (e.hitbox == level) return;
     e.hitbox = level;
-    physics_rebuild_body(e);
+    physics_rebuild_body(s);
 }
 extern "C" int engine_entity_hitbox_count(int s) {
     if (!active_slot(s)) return 0;
