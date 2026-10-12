@@ -74,6 +74,8 @@ More realistic looking games.
 
 ✔ Cast shadows from lights onto the ground and onto other objects.
 
+✔ Smooth / soft shadow edges, so shadows are not hard and blocky while the light itself looks smooth.
+
 ✔ Fog in a 3D scene, so far objects fade into a color.
 
 Gamepad support, and a way to rebind keys.
@@ -219,3 +221,381 @@ Prefab overrides, so a placed copy can differ and you can still see what it inhe
 Snap rotation to a step, such as 15 degrees.
 
 Show light ranges and trigger sizes as faint shapes while you edit.
+
+More blueprint nodes so graphs can do what a hand-written .nxa script can: timers, hierarchy, lights, particles, UI clicks, and the rest.
+
+A search box in the hierarchy and in the project folder list.
+
+Favorites or pinned assets, so you can jump back to the ones you use a lot.
+
+Undo that covers inspector edits and hierarchy moves, not only placement.
+
+A play-from-here button, so you start play at the camera view you are looking at.
+
+Hot-reload a script or blueprint while play is running, without stopping.
+
+A profiler panel that shows which scripts and systems take the most time.
+
+Batch rename selected objects with a pattern, such as Crate_01, Crate_02.
+
+Color-tint objects in the hierarchy, so related ones stand out.
+
+A soft parent, so a child follows position but not rotation, or the other way around.
+
+Look-at, so an object or a bone always faces another object or the camera.
+
+Billboards, so a sprite or a plane always faces the camera.
+
+Sprite sheets and flipbook animation for 2D and for billboards.
+
+Tilemap layers you can paint, with collision on some layers and decoration on others.
+
+Auto-tile rules, so painting one cell picks the right edge and corner tiles.
+
+A 2D light that casts soft shadows onto sprites.
+
+Parallax layers with a depth you set, for side-scrollers.
+
+Screen-space outlines and a toon / cel shade option.
+
+SSR-style reflections on a few materials, not only mirror planes.
+
+Volumetric fog near lights, so beams show in the air.
+
+A post stack you can reorder: bloom, color grade, vignette, grain.
+
+Motion blur as an optional post effect.
+
+Depth of field, so far or near objects go soft.
+
+A cubemap bake from the editor camera, for shiny materials.
+
+Light probes or a simple bounce light bake for indoor scenes.
+
+GPU instancing for repeated meshes such as trees and rocks.
+
+Occlusion culling, so objects behind walls do not draw.
+
+A max triangle or draw-call budget warning in the editor.
+
+Import glTF / GLB with materials and simple skins when the file has them.
+
+Export a selection as a glTF for use in another tool.
+
+Skinned meshes and a basic skeleton retarget.
+
+Blend shapes / morph targets on a face or soft body.
+
+Cloth on a cape or a flag, even if it is simple.
+
+Ragdoll when a character dies or falls.
+
+Vehicles with wheels that stick to the ground.
+
+Buoyancy, so objects float and bob in water.
+
+Wind that pushes particles, cloth, and grass.
+
+Destructible props with a health value and a broken mesh swap.
+
+Inventory UI and item pickups that a script can drive.
+
+A dialogue tree editor, not only a single dialogue box.
+
+Quest steps a script can advance, with a simple journal UI.
+
+Save slots on the title screen, not only raw save calls.
+
+An options screen template: volume, resolution, key binds.
+
+A pause menu template that freezes play and shows Resume / Quit.
+
+Steam / platform achievement hooks from a script.
+
+A simple leaderboard or score submit hook for builds that need it.
+
+Voice chat or networked players later; for now, basic listen-server multiplayer for two machines.
+
+State sync for a few chosen objects across the network, not the whole scene.
+
+LAN game discovery so two copies on the same network can find each other.
+
+Replay recording of inputs, so you can watch a run again.
+
+A GIF or short video capture from the editor viewport.
+
+A photo mode: free camera, hide UI, take a PNG.
+
+Debug draw from a script: lines, boxes, and text in the world.
+
+Asserts and a "break on error" toggle in play mode.
+
+Unit-test hooks for Nexa functions that do not need a window.
+
+A headless run mode for build machines and smoke tests.
+
+Package a project as a single installer the player can run.
+
+Delta patching so an update only ships what changed.
+
+A project template gallery inside the editor, with previews.
+
+Offline docs inside the editor, searchable, matched to the build you have.
+
+Tooltips on every inspector field that explain what it does.
+
+A "what's new" panel after an engine update.
+
+Report a bug from the editor with the log and project name attached.
+
+A safe mode that opens a project with scripts disabled if it crashes on load.
+
+Autosave versions you can roll back, not only one autosave file.
+
+Diff two scenes and list what moved, what was added, and what was removed.
+
+Migrate an old project when the scene format changes, with a clear report.
+
+Right-click "Find references" on a script, prefab, or texture.
+
+Replace every use of one asset with another across the project.
+
+A recycle bin for deleted objects and assets, until you empty it.
+
+Curve editor for tweens and for animation tracks.
+
+Timeline that can fire events, move cameras, and play cuts.
+
+Cinematics: hide the player, drive cameras, and skip with a key.
+
+Split-screen for two local players.
+
+Picture-in-picture: a small second view in the corner.
+
+Portal rendering, so a doorway shows another place.
+
+VR preview later; for now, note it as a long-term goal.
+
+Mobile touch controls and a safe area for notches.
+
+Web build target, even if it is limited at first.
+
+Console builds as a long-term goal (Switch, PlayStation, Xbox).
+
+Arabic and other right-to-left text in UI.
+
+Emoji and icon fonts in labels.
+
+Rich text in labels: bold, color, and size spans.
+
+A radial menu / pie menu widget.
+
+Drag-and-drop inventory slots as a built-in UI piece.
+
+Number steppers, sliders, and dropdowns that match the editor theme in-game.
+
+A color picker widget games can show.
+
+Virtual keyboard support for gamepad-only play.
+
+Haptic rumble on gamepads from a script.
+
+Adaptive triggers later, when a platform allows it.
+
+Microphone input for voice or for a loudness meter.
+
+MIDI input for music and rhythm games.
+
+Webcam texture as an optional experiment.
+
+Shader graphs for people who do not want to write GLSL by hand.
+
+Custom post effects from a small shader file the project owns.
+
+Compute-based particles for huge counts, optional and heavy.
+
+Mesh decals that wrap onto curved surfaces better than flat ones.
+
+Impostors: far trees as a billboard that swaps to a mesh when close.
+
+HLOD: merge far static meshes into one simpler mesh at edit time.
+
+Nav mesh bake for 3D pathfinding, separate from the simple grid pathfinding.
+
+Cover nodes for AI that can duck and peek.
+
+Perception: sight and hearing cones for AI.
+
+Behavior trees or state machines for AI, editable in the editor.
+
+Flocking for crowds of simple agents.
+
+Crowd path widen when many agents share a corridor.
+
+Door and elevator prefabs that scripts and AI can use.
+
+Ladders and vault over low walls.
+
+Crouch and prone movement in the 3D controller templates.
+
+Mantling / climb onto ledges.
+
+Swimming and diving volumes.
+
+Zipline and swing rope.
+
+Grapple hook as a template script.
+
+Melee hitboxes that follow a bone for one swing.
+
+Hitscan and projectile weapons as clear templates.
+
+Reload, ammo, and weapon swap as template scripts.
+
+Aim assist option for gamepad shooters.
+
+Bullet spread, recoil, and a simple crosshair UI.
+
+Destructible glass and a shatter sound.
+
+Foot IK so feet meet stairs and slopes.
+
+Head look and eye look toward a target.
+
+Blink and idle face animation on a character.
+
+Lip sync from a rough audio amplitude, even if imperfect.
+
+Sit / sleep / lean idle poses in the character template.
+
+Carry and throw an object.
+
+Push a crate with the player's body.
+
+Two-handed grab for large props.
+
+Climbable ragdoll / physical animation later.
+
+Soft body for a ball or a blob, even if toy-like.
+
+Rope and cable physics with a few segments.
+
+Magnet and attractor volumes.
+
+Gravity volumes that point sideways or up.
+
+Zero-g movement template.
+
+Planet gravity that pulls toward a point.
+
+Time of day that also changes ambient audio and fog.
+
+Weather that can storm, then clear, over minutes.
+
+Lightning that flashes the sky and plays thunder after a delay.
+
+Puddles that reflect when it has rained.
+
+Footprints in snow or mud that fade.
+
+Paint dirt or wear onto a surface in the editor.
+
+Vertex painting for grass density and for color.
+
+Spline mesh: a road or pipe that follows a path you draw.
+
+CSG brush building for blockouts (add / subtract boxes).
+
+Measure tool: distance and angle between two points.
+
+Ruler and unit display (meters vs pixels) in the status bar.
+
+Camera bookmarks that also store orthographic vs perspective.
+
+Bookmarks for hierarchy filters (only lights, only sounds, and so on).
+
+Solo / isolate selection, like hiding everything else while you edit.
+
+X-ray mode so you can click objects inside a mesh.
+
+Snap to vertex, edge, and mid-point while moving.
+
+Mirror modeling: edit one side and copy to the other.
+
+Array modifier: keep live copies until you bake them.
+
+Boolean preview before you commit a cut on a mesh.
+
+Retopology helpers later; for now, a polygon count readout on the selection.
+
+Lightmap UV unwrap assist for static props.
+
+Channel packer: put roughness / metal / AO into one texture in the editor.
+
+Texture resolution caps per platform preset (PC high, PC low, mobile).
+
+Streaming: load a far cell of the world when the player nears it.
+
+World composition: several scene files stitched as one large map.
+
+Seamless travel between two open scenes without a full black load.
+
+Background loading of the next scene while a loading tip shows.
+
+Checksum of cooked content so a broken install is detected.
+
+Signed builds so players can tell the binary was not tampered with.
+
+Anti-cheat is out of scope; note only that dedicated servers are a future path.
+
+A sample co-op lobby UI that can later plug into networking.
+
+Cloud save hooks for platforms that support them.
+
+DLC / extra content folder a game can mount after purchase.
+
+Mod support: load extra scenes and scripts from a mods folder the player owns.
+
+A workshop-style upload helper later; for now, zip a mod folder from the editor.
+
+Telemetry the developer can turn on: anonymous crashes and basic funnels.
+
+In-editor chat with a team is out of scope; keep notes on objects instead.
+
+Comments on a blueprint node, so a team can leave intent on a graph.
+
+Blueprint macros / collapsed graphs you can reuse.
+
+Blueprint interfaces so two graphs agree on a shared event name.
+
+Event dispatchers: one object broadcasts, many listen.
+
+Timers and delays as first-class blueprint and script helpers.
+
+Coroutines / waits in Nexa without blocking the whole game.
+
+Job system so heavy work can run off the main thread when safe.
+
+SIMD or multithreaded physics as an option for big scenes.
+
+Async file IO so loading a big texture does not hitch.
+
+Memory budget readout: textures, meshes, audio.
+
+Texture streaming that drops mip levels when VRAM is tight.
+
+Audio occlusion: a wall muffles a sound behind it.
+
+Audio Doppler for fast movers.
+
+Voice lines queued so two dialogues do not talk over each other.
+
+A mixer bus: music, SFX, UI, voice, each with its own volume.
+
+Ducking: music gets quieter while voice plays.
+
+Output device picker in game settings (which speakers / headset).
+
+Ambisonic or surround as a long-term audio goal.
+
+Controller speaker / headset output where the platform allows it.

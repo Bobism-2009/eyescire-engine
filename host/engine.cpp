@@ -1135,7 +1135,7 @@ namespace r3d { void overlay_present(); }
 static int g_vsync = 1;
 static int g_hd = 0;          /* 1: the 3D picture is drawn at twice the resolution */
 static int g_aa = 1;          /* 1: smooth the edges of the 3D picture */
-static int g_shadows = 1;     /* 1: the directional light casts one soft shadow */
+static int g_shadows = 1;     /* 1: directional light casts a soft-edged shadow map */
 static int g_fog = 0;         /* 1: far objects fade into g_fogR/G/B */
 static int g_fogR = 168, g_fogG = 186, g_fogB = 206;
 static int g_fogDist = 4800;  /* scene pixels until an object is fully the fog color */
