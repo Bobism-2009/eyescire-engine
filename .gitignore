@@ -16,6 +16,10 @@ __pycache__/
 /build/
 /release/
 
+# Installer staging (sources under installer\ are kept)
+/installer/payload/
+/installer/out/
+
 # Generated when the 2D player is built
 /bin/EyescirePlayer.cpp
 

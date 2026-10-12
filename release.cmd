@@ -49,3 +49,7 @@ if exist build\icons (
 
 echo release\:
 dir /b release
+
+echo.
+echo Optional: run installer.cmd to build release\EyescireSetup.exe
+echo ^(GUI installer: engine + eyescire package, optional NexaC / Nexium^)

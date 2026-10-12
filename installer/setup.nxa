@@ -1,0 +1,982 @@
+// Eyescire Setup -- graphical installer for the engine, written in Nexa.
+// Drawn with std/ui (NexaC 0.1.15+). The engine and the eyescire package are
+// always installed; NexaC and Nexium are optional checkboxes.
+//
+// installer/pack.nxa appends the payload (binaries, icons, engine/*.nxa) so the
+// finished EyescireSetup.exe is one self-contained file.
+//
+//   EyescireSetup.exe
+//   EyescireSetup.exe --silent [--scope User|Machine] [--dir <path>]
+//                     [--desktop 0|1] [--startmenu 0|1] [--path 0|1]
+//                     [--nexa 0|1] [--nexium 0|1]
+//   Uninstall.exe --uninstall [--silent] [--scope User|Machine]
+#include <std/io>
+#include <std/os>
+#include <std/file>
+#include <std/ui>
+
+let VERSION = "0.1";
+let NEXA_RELEASES = "https://github.com/Bobism-2009/Nexa-Lang/releases";
+let NEXIUM_RELEASES = "https://github.com/Bobism-2009/Nexium/releases";
+
+let W = 860;
+let H = 560;
+let SIDEBAR = 240;
+let CX = 280;
+let CW = 540;
+let FOOT = 492;
+
+let C_SIDEBAR = 0x16171A;
+let C_LINE = 0x2C2E33;
+let C_TEXT = 0xE8E9EC;
+let C_MUTED = 0x9CA1AA;
+let C_ACCENT = 0x0078D4;
+let C_OK = 0x3FB950;
+let C_WARN = 0xD29922;
+let C_ERROR = 0xF0524F;
+let C_INFO = 0x6CB6FF;
+
+let P_WELCOME = 0;
+let P_OPTIONS = 1;
+let P_PROGRESS = 2;
+let P_FINISH = 3;
+let P_ERROR = 4;
+
+let uninstall_mode = false;
+let silent = false;
+let elevated = false;
+let page = 0;
+let quit = false;
+let exit_code = 0;
+
+let scope = "User";
+let scope_i = 0;
+let install_dir = "";
+let dir_edited = false;
+let opt_desktop = true;
+let opt_startmenu = true;
+let opt_path = true;
+let opt_launch = true;
+let opt_nexa = true;
+let opt_nexium = false;
+let opt_remove_settings = false;
+
+let nexa_path = "";
+let nexium_path = "";
+let installed_version = "";
+let update_needed = false;
+let notice = "";
+let error_msg = "";
+let warnings: []string;
+let steps: []string;
+let step_i = 0;
+
+let helper_ps = "";
+let helper_out = "";
+let elevate_target = "none";
+let elevate_args = "none";
+
+let self_data = "";
+let pk_names: []string;
+let pk_offs: []int;
+let pk_sizes: []int;
+let logo = 0;
+
+let key_enter = false;
+let key_escape = false;
+
+let HELPER_SCRIPT: string = R"PS(
+param(
+  [string]$Action = '',
+  [string]$Dir = '',
+  [string]$Scope = 'User',
+  [string]$Version = '',
+  [int]$Desktop = 0,
+  [int]$StartMenu = 0,
+  [string]$Out = 'none',
+  [string]$Target = 'none',
+  [string]$ArgList = 'none'
+)
+$ErrorActionPreference = 'Stop'
+$machine = $Scope -eq 'Machine'
+$hive = if ($machine) { 'HKLM:' } else { 'HKCU:' }
+$exe = Join-Path $Dir 'editor.exe'
+$uninstaller = Join-Path $Dir 'Uninstall.exe'
+$uninstKey = "$hive\Software\Microsoft\Windows\CurrentVersion\Uninstall\Eyescire"
+$appPathKey = "$hive\Software\Microsoft\Windows\CurrentVersion\App Paths\editor.exe"
+$classes = "$hive\Software\Classes"
+
+function Set-Value([string]$key, [string]$name, $value, [string]$kind = 'String') {
+  if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
+  if ($name -eq '') { Set-Item -LiteralPath $key -Value $value }
+  else { New-ItemProperty -LiteralPath $key -Name $name -Value $value -PropertyType $kind -Force | Out-Null }
+}
+function Remove-Key([string]$key) {
+  if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
+}
+function Shortcut-Paths {
+  $programs = if ($machine) { [Environment]::GetFolderPath('CommonPrograms') } else { [Environment]::GetFolderPath('Programs') }
+  $desktop = if ($machine) { [Environment]::GetFolderPath('CommonDesktopDirectory') } else { [Environment]::GetFolderPath('DesktopDirectory') }
+  return @((Join-Path $programs 'Eyescire Engine.lnk'), (Join-Path $desktop 'Eyescire Engine.lnk'))
+}
+function Notify-Shell {
+  Add-Type -Namespace Eyescire -Name Shell -MemberDefinition '[DllImport("shell32.dll")] public static extern void SHChangeNotify(int e, uint f, IntPtr a, IntPtr b);' -ErrorAction SilentlyContinue
+  [Eyescire.Shell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+}
+function Edit-Path([bool]$add) {
+  $target = if ($machine) { 'Machine' } else { 'User' }
+  $cur = [Environment]::GetEnvironmentVariable('Path', $target)
+  if (-not $cur) { $cur = '' }
+  $norm = $Dir.TrimEnd('\')
+  $parts = @($cur -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ine $norm) })
+  if ($add) { $parts += $Dir }
+  [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), $target)
+}
+function Read-InstalledVersion {
+  if (Test-Path -LiteralPath $uninstKey) {
+    $v = (Get-Item -LiteralPath $uninstKey).GetValue('DisplayVersion')
+    if ($v) { [IO.File]::WriteAllText($Out, [string]$v); exit 0 }
+  }
+  $vf = Join-Path $Dir 'VERSION'
+  if (Test-Path -LiteralPath $vf) { [IO.File]::WriteAllText($Out, (Get-Content -LiteralPath $vf -Raw).Trim()); exit 0 }
+  exit 1
+}
+
+try {
+  switch ($Action) {
+    'is-admin' {
+      $p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+      if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }
+    }
+    'running' {
+      $hit = Get-Process -Name 'editor' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and ($_.Path -ieq $exe) }
+      if ($hit) { exit 1 } else { exit 0 }
+    }
+    'installed-version' { Read-InstalledVersion }
+    'register' {
+      $kb = [int]((Get-ChildItem -LiteralPath $Dir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1KB)
+      Set-Value $uninstKey 'DisplayName' 'Eyescire Engine'
+      Set-Value $uninstKey 'DisplayVersion' $Version
+      Set-Value $uninstKey 'Publisher' 'Eyescire'
+      Set-Value $uninstKey 'DisplayIcon' "$exe,0"
+      Set-Value $uninstKey 'InstallLocation' $Dir
+      Set-Value $uninstKey 'UninstallString' "`"$uninstaller`" --uninstall --scope $Scope"
+      Set-Value $uninstKey 'QuietUninstallString' "`"$uninstaller`" --uninstall --silent --scope $Scope"
+      Set-Value $uninstKey 'URLInfoAbout' 'https://github.com/Bobism-2009/eyescire-engine'
+      Set-Value $uninstKey 'NoModify' 1 'DWord'
+      Set-Value $uninstKey 'NoRepair' 1 'DWord'
+      Set-Value $uninstKey 'EstimatedSize' $kb 'DWord'
+      Set-Value $appPathKey '' $exe
+      Set-Value $appPathKey 'Path' $Dir
+    }
+    'shortcuts' {
+      $shell = New-Object -ComObject WScript.Shell
+      $paths = Shortcut-Paths
+      $want = @($StartMenu, $Desktop)
+      for ($i = 0; $i -lt 2; $i++) {
+        if ($want[$i] -ne 1) { continue }
+        $lnk = $shell.CreateShortcut($paths[$i])
+        $lnk.TargetPath = $exe
+        $lnk.WorkingDirectory = $Dir
+        $lnk.IconLocation = "$exe,0"
+        $lnk.Description = 'Eyescire Engine'
+        $lnk.Save()
+      }
+    }
+    'path-add' { Edit-Path $true }
+    'path-remove' { Edit-Path $false }
+    'unshortcuts' {
+      foreach ($p in (Shortcut-Paths)) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force } }
+    }
+    'unregister' {
+      Remove-Key $appPathKey
+      Remove-Key $uninstKey
+      Notify-Shell
+    }
+    'browse' {
+      Add-Type -AssemblyName System.Windows.Forms
+      $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }
+      $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+      $dlg.Description = 'Choose where to install Eyescire Engine'
+      $dlg.ShowNewFolderButton = $true
+      if ($Dir -and (Test-Path -LiteralPath (Split-Path $Dir))) { $dlg.SelectedPath = Split-Path $Dir }
+      if ($dlg.ShowDialog($owner) -eq 'OK') { [IO.File]::WriteAllText($Out, $dlg.SelectedPath); exit 0 }
+      exit 1
+    }
+    'elevate' {
+      Start-Process -FilePath $Target -ArgumentList $ArgList -Verb RunAs
+    }
+    'install-nexa' {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/Bobism-2009/Nexa-Lang/releases/latest' -Headers @{ 'User-Agent' = 'EyescireSetup' }
+      $asset = $rel.assets | Where-Object { $_.name -like '*Windows.zip' } | Select-Object -First 1
+      if (-not $asset) { exit 4 }
+      $work = Join-Path $env:TEMP ("eyescire-nexa-" + $PID)
+      New-Item -ItemType Directory -Path $work -Force | Out-Null
+      $zip = Join-Path $work $asset.name
+      Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
+      Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
+      $inst = Get-ChildItem -LiteralPath $work -Recurse -Filter 'Installer.exe' | Select-Object -First 1
+      if (-not $inst) { exit 4 }
+      $answers = Join-Path $work 'answers.txt'
+      [IO.File]::WriteAllText($answers, "2`r`n`r`n")
+      $argsList = if ($machine) { @('--system') } else { @() }
+      $p = Start-Process -FilePath $inst.FullName -ArgumentList $argsList -WorkingDirectory $inst.DirectoryName -RedirectStandardInput $answers -Wait -PassThru
+      Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+      $want = if ($machine) { Join-Path $env:ProgramFiles 'NexaC\NexaC.exe' } else { Join-Path $env:LOCALAPPDATA 'NexaC\NexaC.exe' }
+      $alt = Join-Path $env:LOCALAPPDATA 'Programs\NexaC\bin\NexaC.exe'
+      if ((Test-Path -LiteralPath $want) -or (Test-Path -LiteralPath $alt) -or (Get-Command NexaC -ErrorAction SilentlyContinue)) { exit 0 } else { exit 1 }
+    }
+    'install-nexium' {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/Bobism-2009/Nexium/releases/latest' -Headers @{ 'User-Agent' = 'EyescireSetup' }
+      $asset = $rel.assets | Where-Object { $_.name -like '*Windows.zip' } | Select-Object -First 1
+      if (-not $asset) { exit 4 }
+      $work = Join-Path $env:TEMP ("eyescire-nexium-" + $PID)
+      New-Item -ItemType Directory -Path $work -Force | Out-Null
+      $zip = Join-Path $work $asset.name
+      Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
+      Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
+      $setup = Get-ChildItem -LiteralPath $work -Recurse -Filter 'NexiumSetup.exe' | Select-Object -First 1
+      if (-not $setup) {
+        $app = Get-ChildItem -LiteralPath $work -Recurse -Filter 'Nexium.exe' | Select-Object -First 1
+        if (-not $app) { exit 4 }
+        $dest = if ($machine) { Join-Path $env:ProgramFiles 'Nexium' } else { Join-Path $env:LOCALAPPDATA 'Programs\Nexium' }
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        Copy-Item -LiteralPath $app.FullName -Destination (Join-Path $dest 'Nexium.exe') -Force
+        exit 0
+      }
+      $scopeArg = if ($machine) { 'Machine' } else { 'User' }
+      $p = Start-Process -FilePath $setup.FullName -ArgumentList @('--silent', '--scope', $scopeArg, '--nexa', '0') -Wait -PassThru
+      Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+      if ($p.ExitCode -eq 0) { exit 0 } else { exit 1 }
+    }
+    default { exit 3 }
+  }
+  exit 0
+} catch {
+  exit 2
+}
+)PS";
+
+fn b01(v: bool): string {
+    if (v) return "1";
+    return "0";
+}
+
+fn helper(action: string): int {
+    return os.spawn_wait("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                         "-File", helper_ps, "-Action", action, "-Dir", install_dir, "-Scope", scope,
+                         "-Version", VERSION, "-Desktop", b01(opt_desktop), "-StartMenu", b01(opt_startmenu),
+                         "-Out", helper_out, "-Target", elevate_target, "-ArgList", elevate_args);
+}
+
+fn join(a: string, b: string): string {
+    if (a.ends_with("\\") || a.ends_with("/")) return a + b;
+    return a + "\\" + b;
+}
+
+fn clean_dir(d: string): string {
+    let s = d.trim().replace("/", "\\");
+    while (len(s) > 3 && s.ends_with("\\")) {
+        s = s.substring(0, len(s) - 1);
+    }
+    return s;
+}
+
+fn default_dir(): string {
+    if (scope == "Machine") {
+        let pf = os.getenv("ProgramFiles");
+        if (pf == "") pf = "C:\\Program Files";
+        return join(pf, "Eyescire");
+    }
+    return join(join(os.getenv("LOCALAPPDATA"), "Programs"), "Eyescire");
+}
+
+fn package_dir(): string {
+    return join(join(os.getenv("USERPROFILE"), ".nexa"), "packages\\eyescire");
+}
+
+fn load_payload(): bool {
+    self_data = os.load(os.executable());
+    let n = len(self_data);
+    if (n < 17) return false;
+    if (self_data.substring(n - 5, 5) != "NXPK1") return false;
+    let mlen = (int)self_data.substring(n - 17, 12).trim();
+    if (mlen <= 0 || mlen > n - 17) return false;
+    let manifest = self_data.substring(n - 17 - mlen, mlen);
+    for (line in manifest.split("\n")) {
+        if (line.trim() == "") continue;
+        let parts = line.split("|");
+        if (len(parts) != 3) continue;
+        pk_names.push(parts[0]);
+        pk_offs.push((int)parts[1]);
+        pk_sizes.push((int)parts[2]);
+    }
+    return len(pk_names) > 0;
+}
+
+fn has_file(name: string): bool {
+    for (i, len(pk_names)) {
+        if (pk_names[i] == name) return true;
+    }
+    return false;
+}
+
+fn payload(name: string): string {
+    for (i, len(pk_names)) {
+        if (pk_names[i] == name) return self_data.substring(pk_offs[i], pk_sizes[i]);
+    }
+    return "";
+}
+
+fn pad12(n: int): string {
+    let s = (string)n;
+    while (len(s) < 12) s = " " + s;
+    return s;
+}
+
+fn uninstaller_image(): string {
+    let data = payload("stub");
+    let manifest = "stub|0|" + (string)len(data) + "\n";
+    return data + manifest + pad12(len(manifest)) + "NXPK1";
+}
+
+fn fill(x: int, y: int, w: int, h: int, c: int) {
+    gfx.fill(x, y, w, h, (c >> 16) & 255, (c >> 8) & 255, c & 255);
+}
+
+fn line(x1: int, y1: int, x2: int, y2: int, c: int, t: int) {
+    gfx.line(x1, y1, x2, y2, (c >> 16) & 255, (c >> 8) & 255, c & 255, t);
+}
+
+fn check_mark(x: int, y: int, c: int) {
+    line(x, y + 6, x + 4, y + 10, c, 2);
+    line(x + 4, y + 10, x + 12, y + 2, c, 2);
+}
+
+fn textc(x: int, y: int, s: string, size: int, c: int): int {
+    return ui.text(x, y, s, size, (c >> 16) & 255, (c >> 8) & 255, c & 255);
+}
+
+fn fit(s: string, max_w: int, size: int): string {
+    if (ui.text_width(s, size) <= max_w) return s;
+    let t = s;
+    while (len(t) > 1 && ui.text_width("..." + t, size) > max_w) {
+        t = t.substring(1, len(t) - 1);
+    }
+    return "..." + t;
+}
+
+fn para(x: int, y: int, s: string, max_w: int, size: int, c: int): int {
+    let words = s.split(" ");
+    let line_s = "";
+    let cy = y;
+    for (w in words) {
+        let trial = w;
+        if (line_s != "") trial = line_s + " " + w;
+        if (line_s != "" && ui.text_width(trial, size) > max_w) {
+            textc(x, cy, line_s, size, c);
+            cy += size + 6;
+            line_s = w;
+        } else {
+            line_s = trial;
+        }
+    }
+    if (line_s != "") {
+        textc(x, cy, line_s, size, c);
+        cy += size + 6;
+    }
+    return cy - y;
+}
+
+fn footer_button(index: int, label: string, style: string): bool {
+    let bw = 110;
+    let gap = 12;
+    let x = W - 32 - bw;
+    if (index == 0) x = W - 32 - bw;
+    if (index == 1) x = W - 32 - bw * 2 - gap;
+    if (index == 2) x = W - 32 - bw * 3 - gap * 2;
+    return ui.button(x, FOOT + 14, bw, 36, label, style);
+}
+
+fn draw_sidebar() {
+    fill(0, 0, SIDEBAR, H, C_SIDEBAR);
+    line(SIDEBAR, 0, SIDEBAR, H, C_LINE, 1);
+    textc(28, 36, "Eyescire", 28, C_TEXT);
+    let sub = "Setup " + VERSION;
+    if (uninstall_mode) sub = "Uninstall " + VERSION;
+    textc(28, 72, sub, 14, C_MUTED);
+
+    let labels = ["Welcome", "Options", "Install", "Finish"];
+    if (uninstall_mode) labels = ["Confirm", "Remove", "Done"];
+    let active = 0;
+    if (page == P_OPTIONS) active = 1;
+    if (page == P_PROGRESS) active = 2;
+    if (page == P_FINISH) active = 3;
+    if (uninstall_mode) {
+        if (page == P_PROGRESS) active = 1;
+        if (page == P_FINISH) active = 2;
+    }
+    let y = 140;
+    for (i, len(labels)) {
+        let c = C_MUTED;
+        if (i == active) c = C_ACCENT;
+        if (i < active) c = C_OK;
+        if (i < active) check_mark(28, y + 2, C_OK);
+        else {
+            fill(28, y + 4, 10, 10, c);
+        }
+        textc(50, y, labels[i], 15, c);
+        y += 36;
+    }
+}
+
+fn draw_footer() {
+    line(SIDEBAR + 1, FOOT, W, FOOT, C_LINE, 1);
+}
+
+fn page_title(s: string, sub: string) {
+    textc(CX, 36, s, 24, C_TEXT);
+    textc(CX, 68, fit(sub, CW, 14), 14, C_MUTED);
+}
+
+fn ver_parts(v: string): []int {
+    let clean = v.trim();
+    if (clean.starts_with("v") || clean.starts_with("V")) clean = clean.substring(1, len(clean) - 1);
+    let bits = clean.split(".");
+    let out: []int;
+    for (i, 3) {
+        let n = 0;
+        if (i < len(bits)) n = (int)bits[i].trim();
+        out.push(n);
+    }
+    return out;
+}
+
+fn ver_cmp(a: string, b: string): int {
+    let pa = ver_parts(a);
+    let pb = ver_parts(b);
+    for (i, 3) {
+        if (pa[i] < pb[i]) return -1;
+        if (pa[i] > pb[i]) return 1;
+    }
+    return 0;
+}
+
+fn detect_installed() {
+    installed_version = "";
+    update_needed = false;
+    if (helper("installed-version") == 0) {
+        installed_version = file.read(helper_out).trim();
+    }
+    if (installed_version == "" && file.exists(join(install_dir, "VERSION")) == 1) {
+        installed_version = file.read(join(install_dir, "VERSION")).trim();
+    }
+    if (installed_version == "" && file.exists(join(install_dir, "editor.exe")) == 1) {
+        installed_version = "unknown";
+    }
+    if (installed_version != "" && installed_version != "unknown") {
+        if (ver_cmp(installed_version, VERSION) < 0) update_needed = true;
+    } else if (installed_version == "unknown") {
+        update_needed = true;
+    }
+}
+
+fn fail(msg: string) {
+    error_msg = msg;
+    page = P_ERROR;
+    exit_code = 1;
+}
+
+fn warn(msg: string) {
+    warnings.push(msg);
+}
+
+fn plan_install() {
+    steps = ["folder", "files", "package", "register", "shortcuts"];
+    if (opt_path) steps.push("path");
+    if (nexa_path == "" && opt_nexa) steps.push("nexa");
+    if (nexium_path == "" && opt_nexium) steps.push("nexium");
+    steps.push("refresh");
+    step_i = 0;
+    warnings = [];
+}
+
+fn plan_uninstall() {
+    steps = ["check", "unshortcuts", "unregister", "unpath", "files", "package-remove"];
+    if (opt_remove_settings) steps.push("settings");
+    steps.push("cleanup");
+    step_i = 0;
+    warnings = [];
+}
+
+fn write_named(rel: string, data: string): bool {
+    let path = join(install_dir, rel.replace("/", "\\"));
+    let parent = file.dirname(path);
+    if (parent != "" && file.isdir(parent) == 0) file.mkdir(parent);
+    return os.save(path, data) == 1;
+}
+
+fn write_package(name: string, data: string): bool {
+    let dir = package_dir();
+    if (file.isdir(dir) == 0) file.mkdir(dir);
+    return os.save(join(dir, name), data) == 1;
+}
+
+fn step_label(s: string): string {
+    if (s == "folder") return "Creating folders";
+    if (s == "files") return "Copying the engine";
+    if (s == "package") return "Installing eyescire package";
+    if (s == "register") return "Registering the app";
+    if (s == "shortcuts") return "Creating shortcuts";
+    if (s == "path") return "Updating PATH";
+    if (s == "nexa") return "Installing NexaC";
+    if (s == "nexium") return "Installing Nexium";
+    if (s == "refresh") return "Refreshing the shell";
+    if (s == "check") return "Checking for a running editor";
+    if (s == "unshortcuts") return "Removing shortcuts";
+    if (s == "unregister") return "Unregistering the app";
+    if (s == "unpath") return "Cleaning PATH";
+    if (s == "package-remove") return "Removing the eyescire package";
+    if (s == "settings") return "Removing settings";
+    if (s == "cleanup") return "Cleaning up";
+    return s;
+}
+
+fn run_step(s: string) {
+    switch (s) {
+        case "folder":
+            if (file.isdir(install_dir) == 0) file.mkdir(install_dir);
+            if (file.isdir(install_dir) == 0) {
+                fail("Could not create " + install_dir + ". Choose another folder, or install for all users as administrator.");
+            }
+            break;
+        case "files":
+            if (uninstall_mode) {
+                for (name in pk_names) {
+                    if (name == "stub" || name.starts_with("package/")) continue;
+                    let p = join(install_dir, name.replace("/", "\\"));
+                    if (file.exists(p) == 1 && file.remove(p) == 0) warn("Could not remove " + p);
+                }
+                let vf = join(install_dir, "VERSION");
+                if (file.exists(vf) == 1) file.remove(vf);
+            } else {
+                for (name in pk_names) {
+                    if (name == "stub" || name == "VERSION") continue;
+                    if (name.starts_with("package/")) continue;
+                    if (!write_named(name, payload(name))) {
+                        fail("Could not write " + name + " to " + install_dir + ". Close Eyescire if it is open, then try again.");
+                        break;
+                    }
+                }
+                if (page != P_ERROR) {
+                    if (!write_named("VERSION", VERSION + "\n")) warn("VERSION could not be written.");
+                }
+            }
+            break;
+        case "package":
+            let any = 0;
+            for (name in pk_names) {
+                if (!name.starts_with("package/")) continue;
+                let base = name.substring(8, len(name) - 8);
+                if (base == "") continue;
+                if (!write_package(base, payload(name))) {
+                    fail("Could not install the eyescire package to " + package_dir() + ".");
+                    break;
+                }
+                any = 1;
+            }
+            if (page != P_ERROR && any == 0) {
+                fail("This setup is missing the eyescire package files. Rebuild the installer.");
+            }
+            break;
+        case "register":
+            if (helper("register") != 0) warn("Eyescire could not be added to Apps & features.");
+            break;
+        case "shortcuts":
+            if (helper("shortcuts") != 0) warn("Some shortcuts could not be created.");
+            break;
+        case "path":
+            if (helper("path-add") != 0) warn("Eyescire could not be added to PATH.");
+            break;
+        case "nexa":
+            if (helper("install-nexa") == 0) {
+                nexa_path = "installed";
+            } else {
+                warn("NexaC could not be installed. Get it from " + NEXA_RELEASES + ".");
+            }
+            break;
+        case "nexium":
+            if (helper("install-nexium") == 0) {
+                nexium_path = "installed";
+            } else {
+                warn("Nexium could not be installed. Get it from " + NEXIUM_RELEASES + ".");
+            }
+            break;
+        case "refresh":
+            os.spawn_wait("ie4uinit.exe", "-show");
+            break;
+        case "check":
+            if (helper("running") == 1) fail("Eyescire is still running. Close the editor, then run the uninstaller again.");
+            break;
+        case "unshortcuts":
+            if (helper("unshortcuts") != 0) warn("Some shortcuts could not be removed.");
+            break;
+        case "unregister":
+            if (helper("unregister") != 0) warn("Some registry entries could not be removed.");
+            break;
+        case "unpath":
+            if (helper("path-remove") != 0) warn("PATH could not be updated.");
+            break;
+        case "package-remove":
+            let pkg = package_dir();
+            if (file.exists(pkg) == 1 && file.remove_all(pkg) == 0) warn("Could not remove " + pkg);
+            break;
+        case "settings":
+            let cfg = join(os.getenv("APPDATA"), "Eyescire");
+            if (file.exists(cfg) == 1 && file.remove_all(cfg) == 0) warn("Could not remove " + cfg);
+            break;
+        case "cleanup":
+            let bat = join(os.getenv("TEMP"), "eyescire-uninstall-cleanup.cmd");
+            let body = "@echo off\r\n:wait\r\ntimeout /t 1 /nobreak >nul\r\ndel /f /q \"" + join(install_dir, "Uninstall.exe") + "\" 2>nul\r\nrmdir \"" + install_dir + "\" 2>nul\r\ndel /f /q \"%~f0\"\r\n";
+            file.write(bat, body);
+            os.spawn("cmd.exe", "/c", bat);
+            break;
+        case "uninstaller":
+            break;
+    }
+}
+
+fn write_uninstaller() {
+    if (!write_named("Uninstall.exe", uninstaller_image())) warn("The uninstaller could not be written.");
+}
+
+fn is_admin(): bool {
+    return helper("is-admin") == 0;
+}
+
+fn relaunch_elevated(): bool {
+    elevate_target = os.executable();
+    elevate_args = "--elevated --scope Machine --dir \"" + install_dir + "\" --desktop " + b01(opt_desktop) +
+                   " --startmenu " + b01(opt_startmenu) + " --path " + b01(opt_path) +
+                   " --nexa " + b01(opt_nexa) + " --nexium " + b01(opt_nexium);
+    if (silent) elevate_args = "--silent " + elevate_args;
+    if (uninstall_mode) elevate_args = "--uninstall " + elevate_args;
+    return helper("elevate") == 0;
+}
+
+fn preflight(): bool {
+    install_dir = clean_dir(install_dir);
+    if (scope == "Machine" && !is_admin()) {
+        if (!relaunch_elevated()) {
+            notice = "Administrator permission is required for an all-users install.";
+            return false;
+        }
+        quit = true;
+        return false;
+    }
+    if (helper("running") == 1) {
+        notice = "Close Eyescire (editor.exe) before installing.";
+        return false;
+    }
+    return true;
+}
+
+fn page_welcome() {
+    page_title("Welcome to Eyescire", "Setup will install Eyescire Engine " + VERSION + ".");
+    let y = 108;
+    y += para(CX, y, "The editor, the 3D player, and the eyescire Nexa package are always installed so #include <eyescire/engine> keeps working.", CW, 15, C_TEXT);
+    y += 16;
+    ui.panel(CX, y, CW, 150, "What you get");
+    let bullets = ["Eyescire editor and engine runtime",
+                   "Eyescire Nexa package under ~/.nexa/packages/eyescire",
+                   "Optional NexaC compiler if it is missing",
+                   "Optional Nexium IDE from its latest release"];
+    let by = y + 54;
+    for (bl in bullets) {
+        check_mark(CX + 20, by + 5, C_ACCENT);
+        textc(CX + 42, by, bl, 15, C_TEXT);
+        by += 22;
+    }
+
+    let status_y = y + 166;
+    if (update_needed) {
+        ui.panel(CX, status_y, CW, 70, "Update available");
+        textc(CX + 20, status_y + 40, "Eyescire " + installed_version + " is installed. This setup updates it to " + VERSION + ".", 14, C_INFO);
+    } else if (installed_version != "") {
+        ui.panel(CX, status_y, CW, 70, "Already installed");
+        textc(CX + 20, status_y + 40, "Eyescire " + installed_version + " is here. Setup can repair or reinstall it.", 14, C_MUTED);
+    } else {
+        ui.panel(CX, status_y, CW, 70, "Nexa compiler");
+        if (nexa_path != "") {
+            textc(CX + 20, status_y + 40, "NexaC found: " + fit(nexa_path, CW - 40, 14), 14, C_OK);
+        } else {
+            textc(CX + 20, status_y + 40, "NexaC was not found. You can install it on the next page.", 14, C_WARN);
+        }
+    }
+
+    if (footer_button(0, "Cancel", "secondary") || key_escape) quit = true;
+    if (footer_button(1, "Next", "primary") || key_enter) {
+        if (update_needed && !silent) {
+            let a = ui.dialog("Update Eyescire?",
+                              "Eyescire " + installed_version + " is installed.\nUpdate to " + VERSION + "?",
+                              ["Update", "Cancel"]);
+            if (a == 0) page = P_OPTIONS;
+        } else {
+            page = P_OPTIONS;
+        }
+    }
+}
+
+fn page_options() {
+    page_title("Install options", "The engine is always installed. Choose the extras.");
+
+    ui.panel(CX, 96, CW, 132, "Install for");
+    let prev = scope_i;
+    scope_i = ui.radio(CX + 20, 148, "Just me", scope_i, 0);
+    ui.caption(CX + 140, 150, "No administrator rights needed");
+    scope_i = ui.radio(CX + 20, 178, "All users", scope_i, 1);
+    ui.caption(CX + 140, 180, "Asks for administrator permission");
+    if (scope_i != prev) {
+        scope = "User";
+        if (scope_i == 1) scope = "Machine";
+        if (!dir_edited) install_dir = default_dir();
+        detect_installed();
+    }
+    let before = install_dir;
+    install_dir = ui.textbox(CX + 20, 200, CW - 40 - 110, install_dir, "Install folder");
+    if (install_dir != before) dir_edited = true;
+    if (ui.button(CX + CW - 20 - 100, 198, 100, ui.text_height() + 16, "Browse", "secondary")) {
+        if (helper("browse") == 0) {
+            let picked = clean_dir(file.read(helper_out));
+            if (picked != "") {
+                if (!picked.lower().ends_with("eyescire")) picked = join(picked, "Eyescire");
+                install_dir = picked;
+                dir_edited = true;
+                detect_installed();
+            }
+        }
+    }
+
+    ui.panel(CX, 246, CW, 188, "Components");
+    ui.caption(CX + 20, 292, "Eyescire Engine + eyescire package  (always)");
+    opt_startmenu = ui.checkbox(CX + 20, 318, "Add to the Start menu", opt_startmenu);
+    opt_desktop = ui.checkbox(CX + 20, 344, "Create a desktop shortcut", opt_desktop);
+    opt_path = ui.checkbox(CX + 20, 370, "Add Eyescire to PATH", opt_path);
+    if (nexa_path == "") {
+        opt_nexa = ui.checkbox(CX + 20, 396, "Install NexaC (compiler) if missing", opt_nexa);
+    } else {
+        textc(CX + 20, 396, "NexaC is already installed", 14, C_OK);
+        opt_nexa = false;
+    }
+    if (nexium_path == "") {
+        opt_nexium = ui.checkbox(CX + 20, 422, "Install Nexium (Nexa IDE)", opt_nexium);
+    } else {
+        textc(CX + 20, 422, "Nexium is already installed", 14, C_OK);
+        opt_nexium = false;
+    }
+
+    if (notice != "") {
+        textc(CX, 450, fit(notice, CW, 14), 14, C_ERROR);
+    } else if (update_needed) {
+        textc(CX, 450, "Installed " + installed_version + " will be updated to " + VERSION + ".", 14, C_INFO);
+    } else if (installed_version != "") {
+        textc(CX, 450, "Existing install will be replaced with " + VERSION + ".", 14, C_INFO);
+    }
+
+    if (footer_button(0, "Cancel", "secondary")) quit = true;
+    let install = footer_button(1, "Install", "primary");
+    if (footer_button(2, "Back", "ghost")) {
+        notice = "";
+        page = P_WELCOME;
+    }
+    if (install) {
+        if (install_dir.trim() == "") {
+            notice = "Choose a folder to install into.";
+        } else if (preflight()) {
+            plan_install();
+            page = P_PROGRESS;
+        }
+    }
+}
+
+fn page_progress() {
+    let title = "Installing Eyescire";
+    if (uninstall_mode) title = "Removing Eyescire";
+    page_title(title, "This takes a few seconds.");
+    let total = len(steps);
+    let label = "Done";
+    if (step_i < total) label = step_label(steps[step_i]) + "...";
+    textc(CX, 108, label, 15, C_TEXT);
+    let frac = 0.0;
+    if (total > 0) frac = (float)step_i / (float)total;
+    ui.progress(CX, 138, CW, frac);
+    for (i, step_i) {
+        let y = 170 + i * 26;
+        if (y > FOOT - 40) break;
+        check_mark(CX + 2, y + 4, C_OK);
+        textc(CX + 24, y, step_label(steps[i]), 14, C_MUTED);
+    }
+    if (step_i < total) {
+        run_step(steps[step_i]);
+        if (page == P_ERROR) return;
+        if (steps[step_i] == "files" && !uninstall_mode) write_uninstaller();
+        step_i = step_i + 1;
+        if (step_i >= total) page = P_FINISH;
+    }
+}
+
+fn draw_warnings(y: int): int {
+    for (w in warnings) {
+        textc(CX, y, fit("• " + w, CW, 13), 13, C_WARN);
+        y += 20;
+    }
+    return y;
+}
+
+fn page_finish() {
+    if (uninstall_mode) {
+        page_title("Eyescire removed", "The engine files and the eyescire package are gone.");
+        draw_warnings(108);
+        if (footer_button(0, "Close", "primary") || key_enter) quit = true;
+        return;
+    }
+    page_title("Eyescire is ready", "Setup finished installing Eyescire Engine " + VERSION + ".");
+    let y = 108;
+    y += para(CX, y, "Installed to " + install_dir, CW, 15, C_TEXT);
+    y += 8;
+    y += para(CX, y, "Nexa package: " + package_dir(), CW, 14, C_MUTED);
+    y += 16;
+    opt_launch = ui.checkbox(CX, y, "Open Eyescire now", opt_launch);
+    y += 36;
+    y = draw_warnings(y);
+    if (footer_button(0, "Finish", "primary") || key_enter) {
+        if (opt_launch) os.spawn(join(install_dir, "editor.exe"));
+        quit = true;
+    }
+}
+
+fn page_error() {
+    page_title("Setup could not finish", "Nothing was left half-installed on purpose — fix the issue and run setup again.");
+    para(CX, 108, error_msg, CW, 15, C_ERROR);
+    draw_warnings(200);
+    if (footer_button(0, "Close", "primary") || key_escape) quit = true;
+}
+
+fn page_confirm_uninstall() {
+    page_title("Uninstall Eyescire", "Remove Eyescire Engine " + VERSION + " from this computer.");
+    ui.panel(CX, 108, CW, 120, "This will remove");
+    textc(CX + 20, 160, "• The editor, players, and engine DLLs", 14, C_TEXT);
+    textc(CX + 20, 184, "• The eyescire package under ~/.nexa/packages", 14, C_TEXT);
+    textc(CX + 20, 208, "• Shortcuts and Apps & features entry", 14, C_TEXT);
+    opt_remove_settings = ui.checkbox(CX, 250, "Also delete saved editor settings", opt_remove_settings);
+    if (footer_button(0, "Cancel", "secondary")) quit = true;
+    if (footer_button(1, "Uninstall", "danger")) {
+        if (preflight()) {
+            plan_uninstall();
+            page = P_PROGRESS;
+        }
+    }
+}
+
+fn parse_args(args: []string) {
+    let i = 1;
+    while (i < len(args)) {
+        let a = args[i];
+        let v = "";
+        if (i + 1 < len(args)) v = args[i + 1];
+        if (a == "--uninstall") uninstall_mode = true;
+        else if (a == "--silent") silent = true;
+        else if (a == "--elevated") elevated = true;
+        else if (a == "--scope") { scope = v; if (v == "Machine") scope_i = 1; i++; }
+        else if (a == "--dir") { install_dir = clean_dir(v); dir_edited = true; i++; }
+        else if (a == "--desktop") { opt_desktop = (v == "1"); i++; }
+        else if (a == "--startmenu") { opt_startmenu = (v == "1"); i++; }
+        else if (a == "--path") { opt_path = (v == "1"); i++; }
+        else if (a == "--nexa") { opt_nexa = (v == "1"); i++; }
+        else if (a == "--nexium") { opt_nexium = (v == "1"); i++; }
+        i++;
+    }
+}
+
+fn nexa_flag_given(args: []string): bool {
+    for (a in args) if (a == "--nexa") return true;
+    return false;
+}
+
+fn nexium_flag_given(args: []string): bool {
+    for (a in args) if (a == "--nexium") return true;
+    return false;
+}
+
+fn run_all_steps() {
+    while (step_i < len(steps) && page != P_ERROR) {
+        run_step(steps[step_i]);
+        if (page == P_ERROR) return;
+        if (steps[step_i] == "files" && !uninstall_mode) write_uninstaller();
+        step_i = step_i + 1;
+    }
+    if (page != P_ERROR) page = P_FINISH;
+}
+
+fn main(args: []string) {
+    if (!load_payload()) {
+        os.messagebox("This setup file is damaged or incomplete. Rebuild EyescireSetup.exe with installer.cmd.", "Eyescire Setup");
+        os.exit(1);
+    }
+    helper_ps = join(os.getenv("TEMP"), "eyescire-setup-helper.ps1");
+    helper_out = join(os.getenv("TEMP"), "eyescire-setup-out.txt");
+    file.write(helper_ps, HELPER_SCRIPT);
+
+    parse_args(args);
+    if (install_dir == "") install_dir = default_dir();
+    nexa_path = os.which("NexaC");
+    if (nexa_path == "") nexa_path = os.which("NexaC.exe");
+    nexium_path = os.which("Nexium");
+    if (nexium_path == "") {
+        let cand = join(join(os.getenv("LOCALAPPDATA"), "Programs"), "Nexium\\Nexium.exe");
+        if (file.exists(cand) == 1) nexium_path = cand;
+    }
+    if (nexa_path != "" && !nexa_flag_given(args)) opt_nexa = false;
+    if (nexium_path != "" && !nexium_flag_given(args)) opt_nexium = false;
+    detect_installed();
+
+    if (silent) {
+        if (uninstall_mode) plan_uninstall();
+        else plan_install();
+        if (!preflight()) os.exit(1);
+        run_all_steps();
+        if (page == P_ERROR) {
+            io.println(error_msg);
+            os.exit(1);
+        }
+        os.exit(0);
+    }
+
+    if (ui.open("Eyescire Setup", W, H) == 0) {
+        io.println("could not open a window");
+        os.exit(1);
+    }
+    ui.theme("dark");
+    ui.style("modern");
+    if (uninstall_mode) page = P_WELCOME;
+
+    while (!gfx.closed() && !quit) {
+        gfx.poll();
+        key_enter = (gfx.pressed("enter") == 1);
+        key_escape = (gfx.pressed("escape") == 1);
+        ui.background();
+        draw_sidebar();
+        draw_footer();
+        if (uninstall_mode && page == P_WELCOME) page_confirm_uninstall();
+        else if (page == P_WELCOME) page_welcome();
+        else if (page == P_OPTIONS) page_options();
+        else if (page == P_PROGRESS) page_progress();
+        else if (page == P_FINISH) page_finish();
+        else if (page == P_ERROR) page_error();
+        gfx.present();
+    }
+    os.exit(exit_code);
+}

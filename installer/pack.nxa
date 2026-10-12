@@ -1,0 +1,76 @@
+// Packs EyescireSetup.exe: appends every file under a payload folder to the
+// compiled setup stub so the result is one self-extracting installer.
+//
+//   pack <output.exe> <setup-stub.exe> <payload-dir>
+//
+// Layout: <stub><file>...<manifest><12-char manifest length>NXPK1
+// Each manifest line is "name|offset|size". Names keep the relative path from
+// the payload folder (forward slashes), so icons/ and package/ stay distinct.
+#include <std/io>
+#include <std/os>
+#include <std/file>
+
+fn pad12(n: int): string {
+    let s = (string)n;
+    while (len(s) < 12) s = " " + s;
+    return s;
+}
+
+fn collect(root: string, rel: string, names: []string): []string {
+    let dir = root;
+    if (rel != "") dir = file.join(root, rel.replace("/", "\\"));
+    let entries = file.list(dir);
+    for (name in entries) {
+        if (name == "." || name == "..") continue;
+        let child_rel = name;
+        if (rel != "") child_rel = rel + "/" + name;
+        let full = file.join(dir, name);
+        if (file.isdir(full) == 1) {
+            names = collect(root, child_rel, names);
+        } else {
+            names.push(child_rel);
+        }
+    }
+    return names;
+}
+
+fn main(args: []string) {
+    if (len(args) < 4) {
+        io.println("usage: pack <output.exe> <setup-stub.exe> <payload-dir>");
+        os.exit(2);
+    }
+    let out = args[1];
+    let data = os.load(args[2]);
+    if (len(data) == 0) {
+        io.println("pack: cannot read setup stub " + args[2]);
+        os.exit(1);
+    }
+    let payload = args[3];
+    if (file.isdir(payload) == 0) {
+        io.println("pack: payload folder missing: " + payload);
+        os.exit(1);
+    }
+    let files: []string;
+    files = collect(payload, "", files);
+    if (len(files) == 0) {
+        io.println("pack: payload folder is empty");
+        os.exit(1);
+    }
+    let manifest = "stub|0|" + (string)len(data) + "\n";
+    for (rel in files) {
+        let full = file.join(payload, rel.replace("/", "\\"));
+        let bytes = os.load(full);
+        if (len(bytes) == 0 && file.exists(full) == 0) {
+            io.println("pack: cannot read " + full);
+            os.exit(1);
+        }
+        manifest = manifest + rel + "|" + (string)len(data) + "|" + (string)len(bytes) + "\n";
+        data = data + bytes;
+    }
+    data = data + manifest + pad12(len(manifest)) + "NXPK1";
+    if (os.save(out, data) == 0) {
+        io.println("pack: cannot write " + out);
+        os.exit(1);
+    }
+    io.println("pack: wrote " + out + " (" + (string)len(data) + " bytes)");
+}
