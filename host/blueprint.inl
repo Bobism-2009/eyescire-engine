@@ -1849,15 +1849,8 @@ std::string generate_nxa(const BpDoc& src) {
     o << "extern \"C\" void engine_entity_set_look(int, float, float);\n";
     o << "extern \"C\" float engine_entity_look_yaw(int);\n";
     o << "extern \"C\" float engine_entity_look_pitch(int);\n";
-    o << "extern \"C\" void engine_tween_pose(int, float, float, float, float, float);\n";
-    o << "extern \"C\" void engine_tween_fade(int, float, float);\n";
     o << "}\n";
-    o << "fn eng_tween_pose(slot: int, x: float, y: float, z: float, rot: float, sec: float) {\n";
-    o << "    inline_cpp! { engine_tween_pose(slot, x, y, z, rot, sec); }\n";
-    o << "}\n";
-    o << "fn eng_tween_fade(slot: int, alpha: float, sec: float) {\n";
-    o << "    inline_cpp! { engine_tween_fade(slot, alpha, sec); }\n";
-    o << "}\n";
+    /* eng_tween_pose / eng_tween_fade come from <eyescire/script> (api.nxa). */
     o << "fn bp_yaw(slot: int): float {\n";
     o << "    let r: float = 0.0;\n";
     o << "    inline_cpp! { r = engine_entity_look_yaw(slot); }\n";
