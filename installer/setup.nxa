@@ -391,14 +391,11 @@ fn para(x: int, y: int, s: string, max_w: int, size: int, c: int): int {
     return cy - y;
 }
 
+/* Buttons sit right-aligned in the footer; index 0 is the rightmost (primary). */
 fn footer_button(index: int, label: string, style: string): bool {
-    let bw = 110;
-    let gap = 12;
-    let x = W - 32 - bw;
-    if (index == 0) x = W - 32 - bw;
-    if (index == 1) x = W - 32 - bw * 2 - gap;
-    if (index == 2) x = W - 32 - bw * 3 - gap * 2;
-    return ui.button(x, FOOT + 14, bw, 36, label, style);
+    let bw = 116;
+    let x = W - 28 - bw - index * (bw + 10);
+    return ui.button(x, FOOT + 18, bw, 36, label, style);
 }
 
 fn draw_sidebar() {
@@ -688,37 +685,39 @@ fn page_welcome() {
     page_title("Welcome to Eyescire", "Setup will install Eyescire Engine " + VERSION + ".");
     let y = 108;
     y += para(CX, y, "The editor, the 3D player, and the eyescire Nexa package are always installed so #include <eyescire/engine> keeps working.", CW, 15, C_TEXT);
-    y += 16;
-    ui.panel(CX, y, CW, 150, "What you get");
+    y += 18;
+
+    let list_h = 148;
+    ui.panel(CX, y, CW, list_h, "What you get");
     let bullets = ["Eyescire editor and engine runtime",
                    "Eyescire Nexa package under ~/.nexa/packages/eyescire",
                    "Optional NexaC compiler if it is missing",
                    "Optional Nexium IDE from its latest release"];
-    let by = y + 54;
+    let by = y + 52;
     for (bl in bullets) {
-        check_mark(CX + 20, by + 5, C_ACCENT);
+        check_mark(CX + 20, by + 4, C_ACCENT);
         textc(CX + 42, by, bl, 15, C_TEXT);
-        by += 22;
+        by += 24;
     }
 
-    let status_y = y + 166;
+    let status_y = y + list_h + 16;
     if (update_needed) {
-        ui.panel(CX, status_y, CW, 70, "Update available");
-        textc(CX + 20, status_y + 40, "Eyescire " + installed_version + " is installed. This setup updates it to " + VERSION + ".", 14, C_INFO);
+        ui.panel(CX, status_y, CW, 72, "Update available");
+        textc(CX + 20, status_y + 42, fit("Eyescire " + installed_version + " is installed. This setup updates it to " + VERSION + ".", CW - 40, 14), 14, C_INFO);
     } else if (installed_version != "") {
-        ui.panel(CX, status_y, CW, 70, "Already installed");
-        textc(CX + 20, status_y + 40, "Eyescire " + installed_version + " is here. Setup can repair or reinstall it.", 14, C_MUTED);
+        ui.panel(CX, status_y, CW, 72, "Already installed");
+        textc(CX + 20, status_y + 42, fit("Eyescire " + installed_version + " is here. Setup can repair or reinstall it.", CW - 40, 14), 14, C_MUTED);
     } else {
-        ui.panel(CX, status_y, CW, 70, "Nexa compiler");
+        ui.panel(CX, status_y, CW, 72, "Nexa compiler");
         if (nexa_path != "") {
-            textc(CX + 20, status_y + 40, "NexaC found: " + fit(nexa_path, CW - 40, 14), 14, C_OK);
+            textc(CX + 20, status_y + 42, "NexaC found: " + fit(nexa_path, CW - 120, 14), 14, C_OK);
         } else {
-            textc(CX + 20, status_y + 40, "NexaC was not found. You can install it on the next page.", 14, C_WARN);
+            textc(CX + 20, status_y + 42, "NexaC was not found. You can install it on the next page.", 14, C_WARN);
         }
     }
 
-    if (footer_button(0, "Cancel", "secondary") || key_escape) quit = true;
-    if (footer_button(1, "Next", "primary") || key_enter) {
+    if (footer_button(1, "Cancel", "secondary") || key_escape) quit = true;
+    if (footer_button(0, "Next", "primary") || key_enter) {
         if (update_needed && !silent) {
             let a = ui.dialog("Update Eyescire?",
                               "Eyescire " + installed_version + " is installed.\nUpdate to " + VERSION + "?",
@@ -733,22 +732,24 @@ fn page_welcome() {
 fn page_options() {
     page_title("Install options", "The engine is always installed. Choose the extras.");
 
-    ui.panel(CX, 96, CW, 132, "Install for");
+    /* Install-for card: radios with room under them, then the folder row. */
+    ui.panel(CX, 96, CW, 156, "Install for");
     let prev = scope_i;
-    scope_i = ui.radio(CX + 20, 148, "Just me", scope_i, 0);
-    ui.caption(CX + 140, 150, "No administrator rights needed");
-    scope_i = ui.radio(CX + 20, 178, "All users", scope_i, 1);
-    ui.caption(CX + 140, 180, "Asks for administrator permission");
+    scope_i = ui.radio(CX + 20, 142, "Just me", scope_i, 0);
+    ui.caption(CX + 168, 144, "No administrator rights needed");
+    scope_i = ui.radio(CX + 20, 172, "All users", scope_i, 1);
+    ui.caption(CX + 168, 174, "Asks for administrator permission");
     if (scope_i != prev) {
         scope = "User";
         if (scope_i == 1) scope = "Machine";
         if (!dir_edited) install_dir = default_dir();
         detect_installed();
     }
+    let browse_h = ui.text_height() + 16;
     let before = install_dir;
-    install_dir = ui.textbox(CX + 20, 200, CW - 40 - 110, install_dir, "Install folder");
+    install_dir = ui.textbox(CX + 20, 208, CW - 48 - 108, install_dir, "Install folder");
     if (install_dir != before) dir_edited = true;
-    if (ui.button(CX + CW - 20 - 100, 198, 100, ui.text_height() + 16, "Browse", "secondary")) {
+    if (ui.button(CX + CW - 20 - 100, 206, 100, browse_h, "Browse", "secondary")) {
         if (helper("browse") == 0) {
             let picked = clean_dir(file.read(helper_out));
             if (picked != "") {
@@ -760,38 +761,47 @@ fn page_options() {
         }
     }
 
-    ui.panel(CX, 246, CW, 188, "Components");
-    ui.caption(CX + 20, 292, "Eyescire Engine + eyescire package  (always)");
-    opt_startmenu = ui.checkbox(CX + 20, 318, "Add to the Start menu", opt_startmenu);
-    opt_desktop = ui.checkbox(CX + 20, 344, "Create a desktop shortcut", opt_desktop);
-    opt_path = ui.checkbox(CX + 20, 370, "Add Eyescire to PATH", opt_path);
+    /* Components card: 26px rows so checkbox labels do not sit on each other. */
+    let cy = 268;
+    let ch = 190;
+    ui.panel(CX, cy, CW, ch, "Components");
+    ui.caption(CX + 20, cy + 42, "Eyescire Engine + eyescire package  (always)");
+    let row = cy + 66;
+    opt_startmenu = ui.checkbox(CX + 20, row, "Add to the Start menu", opt_startmenu);
+    row += 26;
+    opt_desktop = ui.checkbox(CX + 20, row, "Create a desktop shortcut", opt_desktop);
+    row += 26;
+    opt_path = ui.checkbox(CX + 20, row, "Add Eyescire to PATH", opt_path);
+    row += 26;
     if (nexa_path == "") {
-        opt_nexa = ui.checkbox(CX + 20, 396, "Install NexaC (compiler) if missing", opt_nexa);
+        opt_nexa = ui.checkbox(CX + 20, row, "Install NexaC (compiler) if missing", opt_nexa);
     } else {
-        textc(CX + 20, 396, "NexaC is already installed", 14, C_OK);
+        textc(CX + 20, row + 2, "NexaC is already installed", 14, C_OK);
         opt_nexa = false;
     }
+    row += 26;
     if (nexium_path == "") {
-        opt_nexium = ui.checkbox(CX + 20, 422, "Install Nexium (Nexa IDE)", opt_nexium);
+        opt_nexium = ui.checkbox(CX + 20, row, "Install Nexium (Nexa IDE)", opt_nexium);
     } else {
-        textc(CX + 20, 422, "Nexium is already installed", 14, C_OK);
+        textc(CX + 20, row + 2, "Nexium is already installed", 14, C_OK);
         opt_nexium = false;
     }
 
+    let note_y = cy + ch + 12;
     if (notice != "") {
-        textc(CX, 450, fit(notice, CW, 14), 14, C_ERROR);
+        textc(CX, note_y, fit(notice, CW, 14), 14, C_ERROR);
     } else if (update_needed) {
-        textc(CX, 450, "Installed " + installed_version + " will be updated to " + VERSION + ".", 14, C_INFO);
+        textc(CX, note_y, fit("Installed " + installed_version + " will be updated to " + VERSION + ".", CW, 14), 14, C_INFO);
     } else if (installed_version != "") {
-        textc(CX, 450, "Existing install will be replaced with " + VERSION + ".", 14, C_INFO);
+        textc(CX, note_y, fit("Existing install will be replaced with " + VERSION + ".", CW, 14), 14, C_INFO);
     }
 
-    if (footer_button(0, "Cancel", "secondary")) quit = true;
-    let install = footer_button(1, "Install", "primary");
     if (footer_button(2, "Back", "ghost")) {
         notice = "";
         page = P_WELCOME;
     }
+    if (footer_button(1, "Cancel", "secondary")) quit = true;
+    let install = footer_button(0, "Install", "primary");
     if (install) {
         if (install_dir.trim() == "") {
             notice = "Choose a folder to install into.";
@@ -814,8 +824,8 @@ fn page_progress() {
     if (total > 0) frac = (float)step_i / (float)total;
     ui.progress(CX, 138, CW, frac);
     for (i, step_i) {
-        let y = 170 + i * 26;
-        if (y > FOOT - 40) break;
+        let y = 170 + i * 24;
+        if (y > FOOT - 48) break;
         check_mark(CX + 2, y + 4, C_OK);
         textc(CX + 24, y, step_label(steps[i]), 14, C_MUTED);
     }
@@ -846,11 +856,11 @@ fn page_finish() {
     page_title("Eyescire is ready", "Setup finished installing Eyescire Engine " + VERSION + ".");
     let y = 108;
     y += para(CX, y, "Installed to " + install_dir, CW, 15, C_TEXT);
-    y += 8;
+    y += 10;
     y += para(CX, y, "Nexa package: " + package_dir(), CW, 14, C_MUTED);
-    y += 16;
+    y += 20;
     opt_launch = ui.checkbox(CX, y, "Open Eyescire now", opt_launch);
-    y += 36;
+    y += 40;
     y = draw_warnings(y);
     if (footer_button(0, "Finish", "primary") || key_enter) {
         if (opt_launch) os.spawn(join(install_dir, "editor.exe"));
@@ -867,13 +877,13 @@ fn page_error() {
 
 fn page_confirm_uninstall() {
     page_title("Uninstall Eyescire", "Remove Eyescire Engine " + VERSION + " from this computer.");
-    ui.panel(CX, 108, CW, 120, "This will remove");
+    ui.panel(CX, 108, CW, 128, "This will remove");
     textc(CX + 20, 160, "• The editor, players, and engine DLLs", 14, C_TEXT);
-    textc(CX + 20, 184, "• The eyescire package under ~/.nexa/packages", 14, C_TEXT);
-    textc(CX + 20, 208, "• Shortcuts and Apps & features entry", 14, C_TEXT);
-    opt_remove_settings = ui.checkbox(CX, 250, "Also delete saved editor settings", opt_remove_settings);
-    if (footer_button(0, "Cancel", "secondary")) quit = true;
-    if (footer_button(1, "Uninstall", "danger")) {
+    textc(CX + 20, 186, "• The eyescire package under ~/.nexa/packages", 14, C_TEXT);
+    textc(CX + 20, 212, "• Shortcuts and Apps & features entry", 14, C_TEXT);
+    opt_remove_settings = ui.checkbox(CX, 260, "Also delete saved editor settings", opt_remove_settings);
+    if (footer_button(1, "Cancel", "secondary")) quit = true;
+    if (footer_button(0, "Uninstall", "danger")) {
         if (preflight()) {
             plan_uninstall();
             page = P_PROGRESS;
