@@ -489,7 +489,13 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
     nexa_vk14::set_vsync(g_vsync);
     int samples = aa_samples();
     if (samples < 2 && g_aa) samples = 8;
-    if (!nexa_vk14::scene_begin(w, h, rw, rh, samples, br / 255.f, bg / 255.f, bb / 255.f)) return 0;
+    if (!nexa_vk14::scene_begin(w, h, rw, rh, samples, br / 255.f, bg / 255.f, bb / 255.f)) {
+        if (rw == w && rh == h) return 0;
+        rw = w; rh = h;
+        g_vkRW = rw; g_vkRH = rh;
+        S.w = rw; S.h = rh;
+        if (!nexa_vk14::scene_begin(w, h, rw, rh, samples, br / 255.f, bg / 255.f, bb / 255.f)) return 0;
+    }
 
     const double zn = kNear, zf = 4000.0;
     const double top = zn * std::tan(fov_deg * 0.5 * 3.14159265358979 / 180.0);
