@@ -10579,34 +10579,17 @@ fn export_close() {
     if (edit_target.len() >= 4 && edit_target.substring(0, 4) == "exp_") edit_target = "";
 }
 
-fn export_panel(): Rect {
-    let w: int = 1040;
-    let h: int = 640;
-    if (w > WIN_W - 48) w = WIN_W - 48;
-    if (h > WIN_H - 48) h = WIN_H - 48;
-    return rect((WIN_W - w) / 2, (WIN_H - h) / 2, w, h);
-}
-
-/* GL/VK present keys the game view to the scene clear color. After a dim
-   pass, put that key back so the live scene shows around the modal. */
-fn modal_restore_scene_key() {
-    if (view3d_active() == 0) return;
-    if (viewport_mode == "script" || viewport_mode == "ui" || viewport_mode == "play") return;
-    let gv: Rect = game_view_rect();
-    eng_fill_rect(gv.x, gv.y, gv.w, gv.h, scene_clear_r(), scene_clear_g(), scene_clear_b());
-}
-
 fn export_preset_row(x: int, y: int, w: int, id: int, title: string, subtitle: string) {
-    let r: Rect = rect(x, y, w, 44);
+    let r: Rect = rect(x, y, w, 52);
     let on: int = 0;
     if (export_preset == id) on = 1;
     let hover: int = 0;
     if (mouse_hover_held(r) >= 1) hover = 1;
     th_row(r, on, hover);
-    th_font_semi(12);
-    draw_text(r.x + 14, r.y + 8, title, col_text_main());
+    th_font_semi(13);
+    draw_text(r.x + 16, r.y + 10, title, col_text_main());
     th_font(11);
-    draw_text(r.x + 14, r.y + 25, subtitle, col_text_dim());
+    draw_text(r.x + 16, r.y + 30, subtitle, col_text_dim());
     th_font(14);
     if (hover == 1 && mouse_pressed(MOUSE_LEFT) && on == 0) {
         export_preset = id;
@@ -10656,83 +10639,80 @@ fn export_run() {
     else build_game_begin();
 }
 
+/* Full-screen export page — replaces the editor chrome while open. */
 fn export_draw() {
     if (export_open == 0) return;
-    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 140);
-    modal_restore_scene_key();
-    let p: Rect = export_panel();
-    th_popup(p);
+    draw_fill_rect(rect(0, 0, WIN_W, WIN_H), col_panel_dark());
 
-    let foot_h: int = 56;
-    let nav_w: int = 240;
-    let nav: Rect = rect(p.x, p.y, nav_w, p.h - foot_h);
-    let body: Rect = rect(p.x + nav_w, p.y, p.w - nav_w, p.h - foot_h);
-    let foot: Rect = rect(p.x, p.y + p.h - foot_h, p.w, foot_h);
+    let foot_h: int = 64;
+    let nav_w: int = 280;
+    if (nav_w > WIN_W / 3) nav_w = WIN_W / 3;
+    let nav: Rect = rect(0, 0, nav_w, WIN_H - foot_h);
+    let body: Rect = rect(nav_w, 0, WIN_W - nav_w, WIN_H - foot_h);
+    let foot: Rect = rect(0, WIN_H - foot_h, WIN_W, foot_h);
 
     draw_fill_rect(nav, col_bg_deep());
     draw_fill_rect(rect(nav.x + nav.w - 1, nav.y, 1, nav.h), col_border_soft());
+    draw_fill_rect(foot, col_bg_deep());
     draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
 
-    th_font_semi(16);
-    draw_text(nav.x + 18, nav.y + 18, "Export", col_text_main());
+    th_font_semi(20);
+    draw_text(nav.x + 24, nav.y + 28, "Export", col_text_main());
     th_font(11);
-    draw_text(nav.x + 18, nav.y + 44, "PRESETS", col_text_dim());
+    draw_text(nav.x + 24, nav.y + 58, "PRESETS", col_text_dim());
     th_font(14);
-    export_preset_row(nav.x + 10, nav.y + 68, nav.w - 20, 0, "Windows Desktop", "Standalone .exe");
-    export_preset_row(nav.x + 10, nav.y + 120, nav.w - 20, 1, "Web (HTML)", "Browser player");
+    export_preset_row(nav.x + 12, nav.y + 84, nav.w - 24, 0, "Windows Desktop", "Standalone .exe");
+    export_preset_row(nav.x + 12, nav.y + 144, nav.w - 24, 1, "Web (HTML)", "Browser player");
 
-    let x: int = body.x + 28;
-    let y: int = body.y + 24;
-    let w: int = body.w - 56;
+    let x: int = body.x + 48;
+    let y: int = body.y + 36;
+    let w: int = body.w - 96;
+    if (w > 720) w = 720;
 
-    th_font_semi(14);
+    th_font_semi(18);
     if (export_preset == 1) draw_text(x, y, "Web (HTML)", col_text_main());
     else draw_text(x, y, "Windows Desktop", col_text_main());
     th_font(14);
-    y = y + 28;
+    y = y + 36;
 
     y = chrome_section(x, y, w, "OUTPUT");
     chrome_field_label(x, y, "Export path");
     y = y + 14;
     let gap: int = 8;
-    let browse_w: int = 84;
-    let path_r: Rect = rect(x, y, w - browse_w - gap, 28);
+    let browse_w: int = 96;
+    let path_r: Rect = rect(x, y, w - browse_w - gap, 32);
     let shown: string = export_path_label(export_dest, path_r.w - 18);
     ui_field_draw(path_r, shown, 0);
-    if (ui_button(rect(x + w - browse_w, y, browse_w, 28), "Browse") == 1) {
+    if (ui_button(rect(x + w - browse_w, y, browse_w, 32), "Browse") == 1) {
         let initial: string = export_dest;
         if (initial.len() == 0) initial = proj_root();
         let picked: string = eng_open_folder_dialog("Choose export folder", initial);
         if (picked.len() > 0) export_dest = picked;
     }
-    y = y + 36;
-    th_font(11);
+    y = y + 44;
+    th_font(12);
     if (export_preset == 1) draw_text(x, y, "Writes index.html and game files into this folder.", col_text_dim());
     else draw_text(x, y, "Writes the game .exe and bundled files into this folder.", col_text_dim());
     th_font(14);
-    y = y + 28;
+    y = y + 36;
 
     y = chrome_section(x, y, w, "OPTIONS");
     export_onoff(x, y, w, "Export used files only", "export_used", 1);
-    y = y + 34;
-    th_font(11);
+    y = y + 36;
+    th_font(12);
     draw_text(x, y, "On: launch scene and referenced files. Off: whole project.", col_text_dim());
     th_font(14);
-    y = y + 26;
+    y = y + 32;
     export_onoff(x, y, w, "Open folder when done", "export_open_folder", 1);
-    y = y + 34;
+    y = y + 40;
     if (export_preset == 1 && scene_render3d() == 1) {
-        th_font(11);
+        th_font(12);
         draw_text(x, y, "Web player is 2D; this 3D scene exports flat.", col_text_dim());
         th_font(14);
     }
 
-    if (ui_button(rect(foot.x + foot.w - 268, foot.y + 12, 100, 28), "Close") == 1) export_close();
-    if (ui_button_primary(rect(foot.x + foot.w - 156, foot.y + 12, 140, 28), "Export Project") == 1) export_run();
-
-    if (export_guard == 0 && mouse_pressed(MOUSE_LEFT) && point_in_rect(eng_mouse_x(), eng_mouse_y(), p) == false) {
-        export_close();
-    }
+    if (ui_button(rect(foot.x + 24, foot.y + 16, 120, 32), "Back") == 1) export_close();
+    if (ui_button_primary(rect(foot.x + foot.w - 168, foot.y + 16, 144, 32), "Export Project") == 1) export_run();
     export_guard = 0;
     th_font(14);
 }
@@ -12040,8 +12020,7 @@ fn settings_page_audio(x: int, y: int, w: int) {
 fn settings_draw() {
     if (settings_open == 0) return;
     settings_sync();
-    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 140);
-    modal_restore_scene_key();
+    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 150);
     let p: Rect = settings_panel();
     draw_fill_rect(p, col_panel_dark());
     draw_outline_rect(p, 1, col_border_soft());
@@ -12138,42 +12117,45 @@ fn edit_frame() {
         console_input();
     }
 
-    let modal_open: int = 0;
-    if (settings_open == 1 || export_open == 1) modal_open = 1;
-
-    if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
-    else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
-
-    if (modal_open == 1) settings_block_ui = 1;
-    menubar_draw();
-    toolbar_draw();
-    left_draw();
-    viewport_tabs_draw();
-    if (viewport_mode == "script") script_editor_draw();
-    else if (viewport_mode == "ui") ui_viewport_draw();
-    else if (viewport_mode == "play") play_viewport_draw();
-    else if (view3d_active() == 1) {
-        /* Overlay wipes the chroma key. Keep the key under modals so the
-           live scene shows behind the dimmed export/settings panel. */
-        if (modal_open == 0) viewport3d_overlay();
+    if (export_open == 1) {
+        /* Full-screen export page — no editor chrome or 3D under it. */
+        settings_block_ui = 1;
+        export_draw();
+        settings_block_ui = 0;
+        tooltip_draw();
     } else {
-        viewport_draw();
-    }
-    inspector_draw();
-    dock_draw();
-    settings_block_ui = 0;
-    statusbar_draw();
+        if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
+        else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
 
-    /* overlays drawn last so they sit above everything */
-    settings_draw();
-    export_draw();
-    if (context_menu_active == 1) context_menu_draw();
-    menu_draw_dropdown_overlay();
-    scene_picker_draw();
-    scene_picker_dismiss_outside();
-    drag_preview_draw();
-    hier_drag_preview_draw();
-    tooltip_draw();
+        if (settings_open == 1) settings_block_ui = 1;
+        menubar_draw();
+        toolbar_draw();
+        if (settings_open == 0) {
+            left_draw();
+            viewport_tabs_draw();
+        }
+        if (viewport_mode == "script") script_editor_draw();
+        else if (viewport_mode == "ui") ui_viewport_draw();
+        else if (viewport_mode == "play") play_viewport_draw();
+        else if (view3d_active() == 1) viewport3d_overlay();
+        else                           viewport_draw();
+        if (settings_open == 0) {
+            inspector_draw();
+            dock_draw();
+        }
+        settings_block_ui = 0;
+        statusbar_draw();
+
+        /* overlays drawn last so they sit above everything */
+        settings_draw();
+        if (context_menu_active == 1) context_menu_draw();
+        menu_draw_dropdown_overlay();
+        scene_picker_draw();
+        scene_picker_dismiss_outside();
+        drag_preview_draw();
+        hier_drag_preview_draw();
+        tooltip_draw();
+    }
 
     if (app_state != "play" && pref_int("autosave", 1) == 1 && proj_loaded() == 1 && proj_scene_count() > 0) {
         autosave_acc = autosave_acc + eng_dt_seconds();
