@@ -11370,6 +11370,7 @@ fn play_viewport_draw() {
 fn settings_show() {
     if (app_state != "edit") return;
     if (proj_loaded() == 0) return;
+    if (export_open == 1) export_close();
     settings_open = 1;
     settings_ready = 0;
     settings_guard = 1;
@@ -11418,18 +11419,10 @@ fn settings_save_scene() {
     gravity_buf_ready = 0;
 }
 
-fn settings_panel(): Rect {
-    let w: int = 960;
-    let h: int = 700;
-    if (w > WIN_W - 40) w = WIN_W - 40;
-    if (h > WIN_H - 40) h = WIN_H - 40;
-    return rect((WIN_W - w) / 2, (WIN_H - h) / 2, w, h);
-}
-
 fn settings_nav(p: Rect, id: int, label: string) {
     let on: int = 0;
     if (settings_page == id) on = 1;
-    if (ui_pill(rect(p.x + 12, p.y, p.w - 24, 32), label, on) == 1) {
+    if (ui_pill(rect(p.x + 12, p.y, p.w - 24, 36), label, on) == 1) {
         settings_page = id;
         settings_scroll = 0;
         if (edit_target.len() >= 6) {
@@ -12017,41 +12010,51 @@ fn settings_page_audio(x: int, y: int, w: int) {
     if (ui_button(rect(x + 204, y, 64, 28), "Full") == 1) { pref_set_int("sfx", 100); settings_sfx = "100"; if (edit_target == "set_sfx") edit_target = ""; }
 }
 
+/* Full-screen settings page — replaces the editor chrome while open. */
 fn settings_draw() {
     if (settings_open == 0) return;
     settings_sync();
-    eng_fill_rect_a(0, 0, WIN_W, WIN_H, 0, 0, 0, 150);
-    let p: Rect = settings_panel();
-    draw_fill_rect(p, col_panel_dark());
-    draw_outline_rect(p, 1, col_border_soft());
-    let nav: Rect = rect(p.x, p.y, 196, p.h);
+    draw_fill_rect(rect(0, 0, WIN_W, WIN_H), col_panel_dark());
+
+    let foot_h: int = 64;
+    let nav_w: int = 280;
+    if (nav_w > WIN_W / 3) nav_w = WIN_W / 3;
+    let nav: Rect = rect(0, 0, nav_w, WIN_H - foot_h);
+    let body: Rect = rect(nav_w, 0, WIN_W - nav_w, WIN_H - foot_h);
+    let foot: Rect = rect(0, WIN_H - foot_h, WIN_W, foot_h);
+
     draw_fill_rect(nav, col_bg_deep());
     draw_fill_rect(rect(nav.x + nav.w - 1, nav.y, 1, nav.h), col_border_soft());
-    th_font(16);
-    draw_text(nav.x + 16, nav.y + 18, "Settings", col_text_main());
-    th_font(14);
-    let ny: int = nav.y + 52;
-    settings_nav(rect(nav.x, ny, nav.w, 30), 0, "Project");
-    ny = ny + 34;
-    settings_nav(rect(nav.x, ny, nav.w, 30), 1, "Scene");
-    ny = ny + 34;
-    settings_nav(rect(nav.x, ny, nav.w, 30), 2, "Physics");
-    ny = ny + 34;
-    settings_nav(rect(nav.x, ny, nav.w, 30), 3, "Editor");
-    ny = ny + 34;
-    settings_nav(rect(nav.x, ny, nav.w, 30), 4, "Graphics");
-    ny = ny + 34;
-    settings_nav(rect(nav.x, ny, nav.w, 30), 5, "Audio");
-    ny = ny + 34;
-    settings_nav(rect(nav.x, ny, nav.w, 30), 6, "Build");
-    if (ui_button(rect(nav.x + 12, nav.y + nav.h - 44, nav.w - 24, 28), "Close") == 1) settings_close();
+    draw_fill_rect(foot, col_bg_deep());
+    draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
 
-    let x: int = p.x + nav.w + 22;
-    let y: int = p.y + 22 - settings_scroll;
-    let w: int = p.w - nav.w - 44;
-    settings_clip_y0 = p.y + 22;
-    settings_clip_y1 = p.y + p.h - 36;
-    eng_set_clip(x, settings_clip_y0, w, p.h - 58);
+    th_font_semi(20);
+    draw_text(nav.x + 24, nav.y + 28, "Settings", col_text_main());
+    th_font(11);
+    draw_text(nav.x + 24, nav.y + 58, "PAGES", col_text_dim());
+    th_font(14);
+    let ny: int = nav.y + 84;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 0, "Project");
+    ny = ny + 42;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 1, "Scene");
+    ny = ny + 42;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 2, "Physics");
+    ny = ny + 42;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 3, "Editor");
+    ny = ny + 42;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 4, "Graphics");
+    ny = ny + 42;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 5, "Audio");
+    ny = ny + 42;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 6, "Build");
+
+    let x: int = body.x + 48;
+    let y: int = body.y + 36 - settings_scroll;
+    let w: int = body.w - 96;
+    if (w > 720) w = 720;
+    settings_clip_y0 = body.y + 24;
+    settings_clip_y1 = body.y + body.h - 24;
+    eng_set_clip(body.x + 24, settings_clip_y0, body.w - 48, body.h - 48);
     if (settings_page == 0) settings_page_project(x, y, w);
     else if (settings_page == 1) settings_page_player(x, y, w);
     else if (settings_page == 2) settings_page_physics(x, y, w);
@@ -12060,15 +12063,16 @@ fn settings_draw() {
     else if (settings_page == 5) settings_page_audio(x, y, w);
     else settings_page_build(x, y, w);
     eng_clear_clip();
+
     let max_scroll: int = 0;
     if (settings_page == 0 || settings_page == 1 || settings_page == 4) {
-        let content_h: int = settings_bottom + settings_scroll - (p.y + 22);
-        max_scroll = content_h - (p.h - 80);
+        let content_h: int = settings_bottom + settings_scroll - (body.y + 36);
+        max_scroll = content_h - (body.h - 72);
         if (max_scroll < 0) max_scroll = 0;
     } else {
         settings_scroll = 0;
     }
-    let content: Rect = rect(x, p.y + 22, w, p.h - 58);
+    let content: Rect = rect(body.x + 24, body.y + 24, body.w - 48, body.h - 48);
     if (point_in_rect(eng_mouse_x(), eng_mouse_y(), content)) {
         let wh: int = eng_mouse_wheel();
         if (wh > 0) settings_scroll = settings_scroll - 56;
@@ -12077,9 +12081,7 @@ fn settings_draw() {
     if (settings_scroll < 0) settings_scroll = 0;
     if (settings_scroll > max_scroll) settings_scroll = max_scroll;
 
-    if (settings_guard == 0 && mouse_pressed(MOUSE_LEFT) && point_in_rect(eng_mouse_x(), eng_mouse_y(), p) == false) {
-        settings_close();
-    }
+    if (ui_button(rect(foot.x + 24, foot.y + 16, 120, 32), "Back") == 1) settings_close();
     settings_guard = 0;
     th_font(14);
 }
@@ -12118,34 +12120,28 @@ fn edit_frame() {
     }
 
     if (export_open == 1) {
-        /* Full-screen export page — no editor chrome or 3D under it. */
         export_draw();
+        tooltip_draw();
+    } else if (settings_open == 1) {
+        settings_draw();
         tooltip_draw();
     } else {
         if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
         else if (view3d_active() == 1 && viewport_mode != "script" && viewport_mode != "ui") viewport3d_submit();
 
-        if (settings_open == 1) settings_block_ui = 1;
         menubar_draw();
         toolbar_draw();
-        if (settings_open == 0) {
-            left_draw();
-            viewport_tabs_draw();
-        }
+        left_draw();
+        viewport_tabs_draw();
         if (viewport_mode == "script") script_editor_draw();
         else if (viewport_mode == "ui") ui_viewport_draw();
         else if (viewport_mode == "play") play_viewport_draw();
         else if (view3d_active() == 1) viewport3d_overlay();
         else                           viewport_draw();
-        if (settings_open == 0) {
-            inspector_draw();
-            dock_draw();
-        }
-        settings_block_ui = 0;
+        inspector_draw();
+        dock_draw();
         statusbar_draw();
 
-        /* overlays drawn last so they sit above everything */
-        settings_draw();
         if (context_menu_active == 1) context_menu_draw();
         menu_draw_dropdown_overlay();
         scene_picker_draw();
