@@ -619,6 +619,12 @@ std::string nxa_for(const std::string& ebp) {
     return ebp + ".nxa";
 }
 
+bool path_is_extension_ebp(const std::string& p) {
+    std::string n = norm_path(p);
+    for (char& c : n) if (c == '\\') c = '/';
+    return n.find("/extensions/") != std::string::npos;
+}
+
 std::string read_bin(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
     if (!f) return "";
@@ -1934,11 +1940,13 @@ void emit_locals(const BpDoc& d, std::ostringstream& o) {
     }
 }
 
-void emit_fn(const BpDoc& d, int event_kind, std::ostringstream& o, bool update) {
-    o << (update ? "fn script_update() {\n" : "fn script_init() {\n");
-    o << "    let me: int = eng_self();\n";
+void emit_fn(const BpDoc& d, int event_kind, std::ostringstream& o, bool update, bool as_ext) {
+    if (as_ext) o << (update ? "fn ext_update() {\n" : "fn ext_init() {\n");
+    else o << (update ? "fn script_update() {\n" : "fn script_init() {\n");
+    if (as_ext) o << "    let me: int = -1;\n";
+    else o << "    let me: int = eng_self();\n";
     emit_locals(d, o);
-    if (update) o << "    if (me < 0) return;\n";
+    if (update && !as_ext) o << "    if (me < 0) return;\n";
     Emit e;
     e.d = &d;
     e.o = &o;
@@ -2146,18 +2154,26 @@ std::string generate_nxa(const BpDoc& src) {
     BpDoc ev = d;
     ev.nodes = d.event.nodes;
     ev.links = d.event.links;
-    emit_fn(ev, BP_INIT, o, false);
+    bool as_ext = path_is_extension_ebp(d.path);
+    emit_fn(ev, BP_INIT, o, false, as_ext);
     o << "\n";
-    emit_fn(ev, BP_UPDATE, o, true);
+    emit_fn(ev, BP_UPDATE, o, true, as_ext);
+    if (as_ext) {
+        o << "\n";
+        o << "fn ext_editor() {\n";
+        o << "}\n\n";
+        o << "fn ext_shutdown() {\n";
+        o << "}\n";
+    }
     return o.str();
 }
 
-int translate_doc(const BpDoc& d) {
+int translate_doc(const BpDoc& d, bool force = false) {
     if (d.path.empty()) return 0;
     std::string nxa = nxa_for(d.path);
     std::string fresh = generate_nxa(d);
     std::string old = read_all(nxa);
-    if (!old.empty() && !text_is_generated(old)) {
+    if (!force && !old.empty() && !text_is_generated(old)) {
         std::string msg = "[blueprint] refused to overwrite " + file_name_of(nxa) + " (not a generated script)";
         engine_log(msg.c_str());
         return 0;
@@ -2210,6 +2226,53 @@ extern "C" const char* engine_project_blueprint_script(int i) {
     if (i < 0 || i >= (int)g.projBlueprints.size()) return "";
     g.projTmp = rel_with_ext(g.projBlueprints[i], ".nxa");
     return g.projTmp.c_str();
+}
+
+extern "C" int engine_bp_create_extension(const char* folder) {
+    if (!folder || !folder[0]) return 0;
+    std::error_code ec;
+    if (!fs::is_directory(folder, ec)) {
+        fs::create_directories(folder, ec);
+        if (ec) return 0;
+    }
+    std::string ebp = (fs::path(folder) / "ext.ebp").string();
+    if (fs::exists(ebp, ec)) {
+        engine_log("[blueprint] extension already has ext.ebp");
+        return 0;
+    }
+    BpDoc d;
+    d.open = true;
+    d.path = ebp;
+    default_nodes(d);
+    d.dirty = true;
+    if (!save_doc(d)) {
+        engine_log("[blueprint] could not write extension ext.ebp");
+        return 0;
+    }
+    if (!translate_doc(d, true)) {
+        engine_log("[blueprint] could not write extension ext.nxa");
+        return 0;
+    }
+    g_bp = std::move(d);
+    engine_log("[blueprint] created extension ext.ebp");
+    return 1;
+}
+
+extern "C" int engine_bp_translate_file(const char* ebp_path, int force) {
+    if (!ebp_path || !ebp_path[0]) return 0;
+    if (g_bp.open && same_path(g_bp.path, ebp_path)) {
+        if (g_bp.dirty) {
+            if (!save_doc(g_bp)) return 0;
+        }
+        return translate_doc(g_bp, force != 0) ? 1 : 0;
+    }
+    BpDoc d;
+    if (!load_into(d, ebp_path)) {
+        std::string msg = std::string("[blueprint] could not read ") + ebp_path;
+        engine_log(msg.c_str());
+        return 0;
+    }
+    return translate_doc(d, force != 0) ? 1 : 0;
 }
 
 extern "C" int engine_bp_create(const char* name) {

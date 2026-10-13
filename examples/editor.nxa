@@ -48,6 +48,29 @@ let export_open: int = 0;
 let export_preset: int = 0;   /* 0 = Windows Desktop, 1 = Web (HTML) */
 let export_guard: int = 0;
 let export_dest: string = ""; /* empty = default dist/<ProjectName>[/web] */
+/* Full-screen Extension Builder: language on the left, metadata on the right. */
+let extbuild_open: int = 0;
+let extbuild_lang: int = 0;   /* 0 = Nexa, 1 = C++ */
+let extbuild_guard: int = 0;
+let extbuild_id: string = "";
+let extbuild_name: string = "";
+let extbuild_ver: string = "1.0";
+let extbuild_desc: string = "";
+let extbuild_status: string = "";
+let extbuild_id_manual: int = 0; /* 1 = user edited id; stop auto-fill from name */
+/* Extension rebuild popup (same pattern as compile_active for scripts). */
+let ext_rebuild_active: int = 0;
+let ext_rebuild_index: int = -1;
+let ext_rebuild_name: string = "";
+let ext_rebuild_reload: int = 1;
+/* Full-screen Extension Develop: Blocks (blueprint) first, optional Code. */
+let extdev_open: int = 0;
+let extdev_guard: int = 0;
+let extdev_id: string = "";
+let extdev_status: string = "";
+let extdev_nav_scroll: int = 0;
+let extdev_view: int = 0;      /* 0 = Blocks, 1 = Code */
+let extdev_detached: int = 0;  /* 1 = Code edits are hand-owned until Reset from Blocks */
 let settings_name: string = "";
 let settings_gx: string = "";
 let settings_gy: string = "";
@@ -71,6 +94,7 @@ let settings_fog_g: string = "";
 let settings_fog_b: string = "";
 let settings_fog_d: string = "";
 let settings_scroll: int = 0;
+let settings_nav_scroll: int = 0;
 let settings_bottom: int = 0;
 let settings_clip_y0: int = 0;
 let settings_clip_y1: int = 100000;
@@ -9202,7 +9226,7 @@ fn menu_dropdown_view(rx: int, ry: int) {
 
 fn menu_dropdown_project(rx: int, ry: int) {
     let dw: int = 240;
-    let dh: int = 8 + 22 * 8 + 8 * 2;          /* 8 items, 2 separators */
+    let dh: int = 8 + 22 * 9 + 8 * 2;          /* 9 items, 2 separators */
     chrome_popup(rect(rx, ry, dw, dh));
     let yy: int = ry + 4;
     if (menu_item(rx + 2, yy, dw - 4, "Settings",         "")             == 1) { settings_show(); }
@@ -9215,6 +9239,8 @@ fn menu_dropdown_project(rx: int, ry: int) {
     yy = yy + 22;
     menu_separator(rx, yy + 4, dw); yy = yy + 8;
     if (menu_item(rx + 2, yy, dw - 4, "Export...", "Ctrl+E") == 1) { menu_open = ""; export_show(0); }
+    yy = yy + 22;
+    if (menu_item(rx + 2, yy, dw - 4, "New Extension...", "") == 1) { menu_open = ""; extbuild_show(); }
     yy = yy + 22;
     menu_separator(rx, yy + 4, dw); yy = yy + 8;
     if (menu_item(rx + 2, yy, dw - 4, "Rescan Scripts",   "")             == 1) { menu_open = ""; proj_rescan_scripts(); }
@@ -9262,7 +9288,7 @@ fn menubar_draw() {
         th_font(12);
         draw_text_centered(mr.x, mr.y, mr.w, mr.h, lab, tc);
         th_font(14);
-        if (hover && mouse_pressed(MOUSE_LEFT) && settings_open == 0 && export_open == 0) {
+        if (hover && mouse_pressed(MOUSE_LEFT) && settings_open == 0 && export_open == 0 && extbuild_open == 0 && extdev_open == 0) {
             if (menu_open == id) menu_open = "";
             else                 { menu_open = id; menu_just_opened = 1; }
         }
@@ -10565,6 +10591,8 @@ fn export_show(preset: int) {
         return;
     }
     if (settings_open == 1) settings_close();
+    if (extbuild_open == 1) extbuild_close();
+    if (extdev_open == 1) extdev_close();
     export_open = 1;
     export_preset = preset;
     if (export_preset < 0) export_preset = 0;
@@ -10705,6 +10733,30 @@ fn export_draw() {
     draw_text(x, y, "On: launch scene and referenced files. Off: whole project.", col_text_dim());
     th_font(14);
     y = y + 32;
+    if (export_preset == 0) {
+        draw_text(x, th_text_y(y, 28), "Content protection", col_text_main());
+        let prot: int = pref_int("export_protect", 1);
+        let k0: string = "secondary";
+        let k1: string = "secondary";
+        let k2: string = "secondary";
+        let k3: string = "secondary";
+        if (prot == 0) k0 = "primary";
+        if (prot == 1) k1 = "primary";
+        if (prot == 2) k2 = "primary";
+        if (prot == 3) k3 = "primary";
+        if (ui_button_kind(rect(x + w - 288, y, 66, 28), "Off", k0) == 1) pref_set_int("export_protect", 0);
+        if (ui_button_kind(rect(x + w - 216, y, 66, 28), "Std", k1) == 1) pref_set_int("export_protect", 1);
+        if (ui_button_kind(rect(x + w - 144, y, 66, 28), "Strong", k2) == 1) pref_set_int("export_protect", 2);
+        if (ui_button_kind(rect(x + w - 72, y, 66, 28), "Secure", k3) == 1) pref_set_int("export_protect", 3);
+        y = y + 36;
+        th_font(12);
+        if (prot == 0) draw_text(x, y, "Plain files — easiest to inspect and copy.", col_text_dim());
+        if (prot == 1) draw_text(x, y, "Encrypted; key hidden in the .exe.", col_text_dim());
+        if (prot == 2) draw_text(x, y, "Encrypted + integrity; key split across .exe and engine.dll.", col_text_dim());
+        if (prot == 3) draw_text(x, y, "Studio: dual ChaCha, triple split, keyed tamper seal.", col_text_dim());
+        th_font(14);
+        y = y + 32;
+    }
     export_onoff(x, y, w, "Open folder when done", "export_open_folder", 1);
     y = y + 40;
     if (export_preset == 1 && scene_render3d() == 1) {
@@ -10716,6 +10768,875 @@ fn export_draw() {
     if (ui_button(rect(foot.x + 24, foot.y + 16, 120, 32), "Back") == 1) export_close();
     if (ui_button_primary(rect(foot.x + foot.w - 168, foot.y + 16, 144, 32), "Export Project") == 1) export_run();
     export_guard = 0;
+    th_font(14);
+}
+
+fn extbuild_slug(s: string): string {
+    let out: string = "";
+    let i: int = 0;
+    while (i < s.len() && out.len() < 48) {
+        let c: string = s.substring(i, 1);
+        let ok: int = 0;
+        if (c >= "a" && c <= "z") ok = 1;
+        if (c >= "A" && c <= "Z") ok = 1;
+        if (c >= "0" && c <= "9") ok = 1;
+        if (c == "_" || c == "-") ok = 1;
+        if (c == " ") { ok = 1; c = "_"; }
+        if (ok == 1) out = out + c;
+        i = i + 1;
+    }
+    return out;
+}
+
+fn extbuild_show() {
+    if (app_state != "edit") return;
+    if (proj_loaded() == 0) {
+        eng_log("[ext] no project open");
+        return;
+    }
+    if (settings_open == 1) settings_close();
+    if (export_open == 1) export_close();
+    if (extdev_open == 1) extdev_close();
+    extbuild_open = 1;
+    extbuild_guard = 1;
+    extbuild_lang = 0;
+    extbuild_id = "";
+    extbuild_name = "";
+    extbuild_ver = "1.0";
+    extbuild_desc = "";
+    extbuild_status = "";
+    extbuild_id_manual = 0;
+    menu_open = "";
+    if (edit_target.len() >= 4 && edit_target.substring(0, 4) == "exb_") edit_target = "";
+}
+
+fn extbuild_close() {
+    extbuild_open = 0;
+    extbuild_guard = 0;
+    if (edit_target.len() >= 4 && edit_target.substring(0, 4) == "exb_") edit_target = "";
+}
+
+fn extbuild_lang_row(x: int, y: int, w: int, id: int, title: string, subtitle: string) {
+    let r: Rect = rect(x, y, w, 52);
+    let on: int = 0;
+    if (extbuild_lang == id) on = 1;
+    let hover: int = 0;
+    if (mouse_hover_held(r) >= 1) hover = 1;
+    th_row(r, on, hover);
+    th_font_semi(13);
+    draw_text(r.x + 16, r.y + 10, title, col_text_main());
+    th_font(11);
+    draw_text(r.x + 16, r.y + 30, subtitle, col_text_dim());
+    th_font(14);
+    if (hover == 1 && mouse_pressed(MOUSE_LEFT) && on == 0) {
+        extbuild_lang = id;
+        extbuild_status = "";
+    }
+}
+
+fn extbuild_compile_index(i: int): int {
+    if (i < 0 || i >= eng_ext_count()) return 0;
+    let src: string = eng_ext_source(i);
+    let folder: string = eng_ext_folder(i);
+    let id: string = eng_ext_id(i);
+    let dll: string = proj_path_join(folder, id + ".dll");
+    /* Build to a temp name so the linker never has to overwrite a still-mapped DLL. */
+    let tmp: string = proj_path_join(folder, id + ".build.dll");
+    let lib: string = eng_engine_lib();
+    if (src.len() == 0) {
+        eng_log("[ext] no source for " + id);
+        return 0;
+    }
+    if (eng_fs_exists(lib) == 0) {
+        eng_log("[ext] engine.lib missing: " + lib);
+        return 0;
+    }
+    eng_ext_prepare_rebuild(dll);
+    if (eng_fs_exists(tmp) == 1) eng_fs_remove_file(tmp);
+    let lang: int = eng_ext_lang(i);
+    let cmd: string = "";
+    if (lang == 1) {
+        cmd = "cmd /c clang++ -std=c++17 -O2 -shared \"" + src + "\" \"" + lib + "\" -o \"" + tmp + "\"";
+    } else {
+        cmd = "cmd /c NexaC \"" + src + "\" --dll --link \"" + lib + "\" -p -o \"" + tmp + "\"";
+    }
+    eng_log("[ext] building " + id);
+    let code: int = eng_run_command(cmd);
+    let out: string = eng_last_command_output();
+    if (code != 0) {
+        eng_log("[ext] build FAILED " + id);
+        let lines = out.split("\n");
+        let nlines: int = len(lines);
+        let shown: int = 0;
+        let k: int = 0;
+        while (k < nlines && shown < 12) {
+            let ln: string = lines[k];
+            if (match_substr(ln, "error") == 1 || match_substr(ln, "Error") == 1
+                || match_substr(ln, "not recognized") == 1
+                || match_substr(ln, "Permission") == 1) {
+                eng_log("    " + ln);
+                shown = shown + 1;
+            }
+            k = k + 1;
+        }
+        if (shown == 0) {
+            k = 0;
+            while (k < nlines && k < 8) {
+                let ln2: string = lines[k];
+                if (ln2.len() > 0) eng_log("    " + ln2);
+                k = k + 1;
+            }
+        }
+        if (eng_fs_exists(tmp) == 1) eng_fs_remove_file(tmp);
+        return 0;
+    }
+    eng_ext_prepare_rebuild(dll);
+    if (eng_fs_replace_file(tmp, dll) == 0) {
+        eng_log("[ext] build ok, but could not replace " + dll + " (still in use?)");
+        if (eng_fs_exists(tmp) == 1) eng_fs_remove_file(tmp);
+        return 0;
+    }
+    /* Drop the import lib NexaC may leave next to the temp output. */
+    let tmp_lib: string = proj_path_join(folder, id + ".build.lib");
+    if (eng_fs_exists(tmp_lib) == 1) eng_fs_remove_file(tmp_lib);
+    eng_log("[ext] build ok " + id);
+    return 1;
+}
+
+/* Queue a rebuild; main() draws the popup, presents, then runs the sync compile. */
+fn ext_rebuild_begin(i: int) {
+    if (i < 0 || i >= eng_ext_count()) return;
+    if (compile_active == 1) return;
+    if (ext_rebuild_active == 1) return;
+    ext_rebuild_active = 1;
+    ext_rebuild_index = i;
+    ext_rebuild_name = eng_ext_name(i);
+    if (ext_rebuild_name.len() == 0) ext_rebuild_name = eng_ext_id(i);
+    ext_rebuild_reload = 1;
+    if (extdev_open == 1) extdev_status = "Rebuilding " + ext_rebuild_name + "...";
+}
+
+fn ext_rebuild_overlay_draw() {
+    let pw: int = 520;
+    let ph: int = 180;
+    let px: int = (WIN_W - pw) / 2;
+    let py: int = (WIN_H - ph) / 2;
+
+    draw_fill_rect(rect(0, 0, WIN_W, WIN_H), col_ui_bg());
+    let card: Rect = rect(px, py, pw, ph);
+    th_popup(card);
+
+    th_font_semi(18);
+    draw_text(px + 28, py + 28, "Rebuilding extension", col_text_main());
+    th_font(13);
+    let label: string = ext_rebuild_name;
+    if (label.len() == 0) label = "extension";
+    draw_text(px + 28, py + 68, label, col_text_dim());
+    th_font(12);
+    draw_text(px + 28, py + 108, "Compiling the DLL. The editor will respond when it finishes.", col_text_dim());
+    th_font(14);
+    th_progress(px + 28, py + 136, pw - 56, 1, 2);
+}
+
+fn ext_rebuild_step() {
+    if (ext_rebuild_active == 0) return;
+    let i: int = ext_rebuild_index;
+    let name: string = ext_rebuild_name;
+    let do_reload: int = ext_rebuild_reload;
+    ext_rebuild_active = 0;
+    ext_rebuild_index = -1;
+    let ok: int = extbuild_compile_index(i);
+    if (do_reload == 1) eng_ext_load_enabled(1);
+    if (ok == 1) {
+        if (extdev_open == 1) extdev_status = "Saved and rebuilt " + name + ".";
+    } else {
+        if (extdev_open == 1) extdev_status = "Rebuild failed for " + name + ". Check the console.";
+        dock_tab = "console";
+    }
+}
+
+fn extbuild_find_id(id: string): int {
+    let i: int = 0;
+    let n: int = eng_ext_count();
+    while (i < n) {
+        if (eng_ext_id(i) == id) return i;
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn extbuild_run() {
+    if (proj_loaded() == 0) return;
+    let id: string = extbuild_slug(extbuild_id);
+    if (id.len() == 0) id = extbuild_slug(extbuild_name);
+    if (id.len() == 0) {
+        extbuild_status = "Enter an id or name first.";
+        return;
+    }
+    let name: string = extbuild_name;
+    if (name.len() == 0) name = id;
+    let ver: string = extbuild_ver;
+    if (ver.len() == 0) ver = "1.0";
+    if (eng_ext_create(id, name, ver, extbuild_desc, extbuild_lang, 1) == 0) {
+        extbuild_status = "Create failed. See the console (id taken or write error).";
+        return;
+    }
+    eng_ext_rescan();
+    let idx: int = extbuild_find_id(id);
+    if (idx < 0) {
+        extbuild_status = "Created folder, but it did not show up in the registry.";
+        return;
+    }
+    eng_log("[ext] Extension Builder finished scaffold: " + id);
+    extbuild_close();
+    extdev_show_id(id);
+    extdev_status = "Created " + id + ". Building DLL...";
+    ext_rebuild_begin(idx);
+}
+
+fn extbuild_rebuild_index(i: int) {
+    if (i < 0 || i >= eng_ext_count()) return;
+    ext_rebuild_begin(i);
+}
+
+/* Full-screen Extension Builder — replaces the editor chrome while open. */
+fn extbuild_draw() {
+    if (extbuild_open == 0) return;
+    draw_fill_rect(rect(0, 0, WIN_W, WIN_H), col_panel_dark());
+
+    let foot_h: int = 64;
+    let nav_w: int = 280;
+    if (nav_w > WIN_W / 3) nav_w = WIN_W / 3;
+    let nav: Rect = rect(0, 0, nav_w, WIN_H - foot_h);
+    let body: Rect = rect(nav_w, 0, WIN_W - nav_w, WIN_H - foot_h);
+    let foot: Rect = rect(0, WIN_H - foot_h, WIN_W, foot_h);
+
+    draw_fill_rect(nav, col_bg_deep());
+    draw_fill_rect(rect(nav.x + nav.w - 1, nav.y, 1, nav.h), col_border_soft());
+    draw_fill_rect(foot, col_bg_deep());
+    draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
+
+    th_font_semi(20);
+    draw_text(nav.x + 24, nav.y + 28, "Extension", col_text_main());
+    th_font(11);
+    draw_text(nav.x + 24, nav.y + 58, "LANGUAGE", col_text_dim());
+    th_font(14);
+    extbuild_lang_row(nav.x + 12, nav.y + 84, nav.w - 24, 0, "Nexa", "Visual Blueprints + Code");
+    extbuild_lang_row(nav.x + 12, nav.y + 144, nav.w - 24, 1, "C++", "Native clang++ DLL");
+
+    let x: int = body.x + 48;
+    let y: int = body.y + 36;
+    let w: int = body.w - 96;
+    if (w > 720) w = 720;
+
+    th_font_semi(18);
+    if (extbuild_lang == 1) draw_text(x, y, "New C++ Extension", col_text_main());
+    else draw_text(x, y, "New Nexa Extension", col_text_main());
+    th_font(14);
+    y = y + 30;
+    th_font(12);
+    draw_text(x, y, "Creates extensions/<id>/ with a starter, builds the DLL, and loads it with Full permission.", col_text_dim());
+    th_font(14);
+    y = y + 36;
+
+    y = chrome_section(x, y, w, "DETAILS");
+    chrome_field_label(x, y, "Name");
+    y = y + 14;
+    let nm: string = ui_field("exb_name", rect(x, y, w, 32), extbuild_name);
+    if (nm != extbuild_name) {
+        extbuild_name = nm;
+        if (extbuild_id_manual == 0) extbuild_id = extbuild_slug(extbuild_name);
+    }
+    y = y + 44;
+    chrome_field_label(x, y, "Id");
+    y = y + 14;
+    let idv: string = ui_field("exb_id", rect(x, y, w, 32), extbuild_id);
+    if (idv != extbuild_id) {
+        extbuild_id = idv;
+        extbuild_id_manual = 1;
+    }
+    y = y + 40;
+    th_font(12);
+    draw_text(x, y, "Folder and DLL name. Letters, numbers, _ and - only.", col_text_dim());
+    th_font(14);
+    y = y + 28;
+    chrome_field_label(x, y, "Version");
+    y = y + 14;
+    extbuild_ver = ui_field("exb_ver", rect(x, y, 160, 32), extbuild_ver);
+    y = y + 44;
+    chrome_field_label(x, y, "Description");
+    y = y + 14;
+    extbuild_desc = ui_field("exb_desc", rect(x, y, w, 32), extbuild_desc);
+    y = y + 48;
+
+    y = chrome_section(x, y, w, "PERMISSION");
+    th_font(12);
+    draw_text(x, y, "Local extensions created here start with Full permission (entire engine API).", col_text_dim());
+    th_font(14);
+    y = y + 22;
+    th_font(12);
+    draw_text(x, y, "You can switch back to Sandbox later in Settings -> Extensions.", col_text_dim());
+    th_font(14);
+    y = y + 36;
+
+    if (extbuild_status.len() > 0) {
+        th_font(12);
+        draw_text(x, y, extbuild_status, col_text_main());
+        th_font(14);
+    }
+
+    if (ui_button(rect(foot.x + 24, foot.y + 16, 120, 32), "Back") == 1) extbuild_close();
+    if (ui_button_primary(rect(foot.x + foot.w - 200, foot.y + 16, 176, 32), "Create Extension") == 1) extbuild_run();
+    extbuild_guard = 0;
+    th_font(14);
+}
+
+fn extdev_index(): int {
+    return extbuild_find_id(extdev_id);
+}
+
+fn extdev_has_blocks(): int {
+    let idx: int = extdev_index();
+    if (idx < 0) return 0;
+    if (eng_ext_lang(idx) == 1) return 0;
+    if (eng_ext_blueprint(idx).len() > 0) return 1;
+    return 0;
+}
+
+fn extdev_close() {
+    if (extdev_open == 0) return;
+    if (extdev_view == 1 && te_path().len() > 0 && te_dirty() == 1) te_save();
+    if (bp_is_open() == 1) {
+        if (bp_dirty() == 1) bp_save();
+        bp_close();
+        bp_ui_reset();
+    }
+    bp_clear_host();
+    bp_host_want_save = 0;
+    extdev_open = 0;
+    extdev_guard = 0;
+    extdev_status = "";
+    extdev_view = 0;
+    extdev_detached = 0;
+}
+
+fn extdev_open_blocks() {
+    let idx: int = extdev_index();
+    if (idx < 0) return;
+    let ebp: string = eng_ext_blueprint(idx);
+    if (ebp.len() == 0) return;
+    if (te_dirty() == 1 && te_path().len() > 0) te_save();
+    te_clear();
+    if (bp_is_open() == 1 && bp_path() != ebp) {
+        if (bp_dirty() == 1) bp_save();
+        bp_close();
+        bp_ui_reset();
+    }
+    if (bp_is_open() == 0 || bp_path() != ebp) {
+        if (bp_open(ebp) == 0) {
+            extdev_status = "Could not open blueprint.";
+            return;
+        }
+        bp_ui_reset();
+    }
+    extdev_view = 0;
+    extdev_detached = 0;
+}
+
+fn extdev_open_code(detach: int) {
+    let idx: int = extdev_index();
+    if (idx < 0) return;
+    let src: string = eng_ext_source(idx);
+    if (src.len() == 0) {
+        extdev_status = "No source file.";
+        return;
+    }
+    if (bp_is_open() == 1) {
+        if (bp_dirty() == 1) bp_save();
+        /* keep ebp on disk; close graph while editing code */
+        bp_close();
+        bp_ui_reset();
+    }
+    bp_clear_host();
+    te_load(src);
+    extdev_view = 1;
+    if (detach == 1) extdev_detached = 1;
+}
+
+fn extdev_reset_from_blocks() {
+    let idx: int = extdev_index();
+    if (idx < 0) return;
+    let ebp: string = eng_ext_blueprint(idx);
+    if (ebp.len() == 0) {
+        extdev_status = "No blueprint to reset from.";
+        return;
+    }
+    if (te_dirty() == 1) te_save();
+    if (bp_translate_file(ebp, 1) == 0) {
+        extdev_status = "Reset failed. Check the console.";
+        return;
+    }
+    extdev_detached = 0;
+    eng_ext_rescan();
+    extdev_open_blocks();
+    extdev_status = "Reset from Blocks. Building DLL...";
+    ext_rebuild_begin(extdev_index());
+}
+
+fn extdev_create_blocks() {
+    let idx: int = extdev_index();
+    if (idx < 0) return;
+    if (eng_ext_lang(idx) == 1) {
+        extdev_status = "C++ extensions use Code only.";
+        return;
+    }
+    if (eng_ext_blueprint(idx).len() > 0) {
+        extdev_open_blocks();
+        return;
+    }
+    let folder: string = eng_ext_folder(idx);
+    if (bp_create_extension(folder) == 0) {
+        extdev_status = "Could not create blueprint. Check the console.";
+        return;
+    }
+    eng_ext_rescan();
+    extdev_detached = 0;
+    extdev_open_blocks();
+    extdev_status = "Blocks graph created. Building DLL...";
+    ext_rebuild_begin(extdev_index());
+}
+
+fn extdev_show_id(id: string) {
+    if (app_state != "edit") return;
+    if (proj_loaded() == 0) return;
+    eng_ext_rescan();
+    let idx: int = extbuild_find_id(id);
+    if (idx < 0) {
+        eng_log("[ext] develop: unknown id " + id);
+        return;
+    }
+    let src: string = eng_ext_source(idx);
+    let ebp: string = eng_ext_blueprint(idx);
+    if (src.len() == 0 && ebp.len() == 0) {
+        eng_log("[ext] develop: no source for " + id);
+        return;
+    }
+    if (settings_open == 1) settings_close();
+    if (export_open == 1) export_close();
+    if (extbuild_open == 1) extbuild_close();
+    if (extdev_open == 1) {
+        if (te_dirty() == 1 && te_path().len() > 0) te_save();
+        if (bp_is_open() == 1 && bp_dirty() == 1) bp_save();
+    } else if (bp_is_open() == 1) {
+        if (bp_dirty() == 1) bp_save();
+        bp_close();
+        bp_ui_reset();
+    }
+    extdev_id = id;
+    extdev_open = 1;
+    extdev_guard = 1;
+    extdev_nav_scroll = 0;
+    extdev_detached = 0;
+    edit_target = "";
+    menu_open = "";
+    bp_host_want_save = 0;
+    if (eng_ext_lang(idx) != 1 && ebp.len() > 0) {
+        extdev_open_blocks();
+        extdev_status = "Blocks view. Save rebuilds the DLL. Code detaches from Blocks.";
+    } else {
+        extdev_open_code(0);
+        extdev_detached = 1;
+        if (eng_ext_lang(idx) == 1) extdev_status = "C++ Code view. Save rebuilds the DLL.";
+        else extdev_status = "Code view (no Blocks yet). Use Create Blocks to add a graph.";
+    }
+    eng_log("[ext] develop " + id);
+}
+
+fn extdev_show_index(i: int) {
+    if (i < 0 || i >= eng_ext_count()) return;
+    extdev_show_id(eng_ext_id(i));
+}
+
+fn extdev_save_and_rebuild() {
+    if (extdev_open == 0) return;
+    let idx: int = extdev_index();
+    if (idx < 0) {
+        extdev_status = "Extension missing.";
+        return;
+    }
+    if (extdev_view == 0 && extdev_has_blocks() == 1 && extdev_detached == 0) {
+        if (bp_is_open() == 1 && bp_dirty() == 1) {
+            if (bp_save() == 0) {
+                extdev_status = "Blueprint save failed.";
+                return;
+            }
+        }
+        let ebp: string = eng_ext_blueprint(idx);
+        if (bp_translate_file(ebp, 0) == 0) {
+            extdev_status = "Could not generate Code from Blocks.";
+            return;
+        }
+        eng_log("[ext] translated " + ebp);
+    } else {
+        if (te_path().len() == 0) {
+            let src: string = eng_ext_source(idx);
+            if (src.len() > 0) te_load(src);
+        }
+        if (te_path().len() == 0) {
+            extdev_status = "No source file open.";
+            return;
+        }
+        if (te_dirty() == 1 || extdev_view == 1) {
+            if (te_save() == 0) {
+                extdev_status = "Save failed.";
+                return;
+            }
+        }
+        eng_log("[ext] saved " + te_path());
+    }
+    eng_ext_rescan();
+    idx = extdev_index();
+    if (idx < 0) {
+        extdev_status = "Extension missing after save.";
+        return;
+    }
+    ext_rebuild_begin(idx);
+}
+
+fn extdev_editor_input(r: Rect) {
+    let strip_h: int = 28;
+    let body_y: int = r.y + strip_h;
+    let body_h: int = r.h - strip_h;
+    if (body_h < 40) return;
+    let visible: int = body_h / SCRIPT_LINE_H;
+
+    let cursor_before_line: int = te_cursor_line();
+    let cursor_before_col: int = te_cursor_col();
+
+    if (edit_target.len() == 0) {
+        let c: int = typed_pop();
+        while (c != 0) {
+            if (c == 8) te_backspace();
+            else if (c == 13) te_newline();
+            else if (c == 9) te_insert_text("    ");
+            else if (c >= 32 && c < 127) te_insert_char(c);
+            c = typed_pop();
+        }
+        if (key_pressed(VK_LEFT))  te_move_cursor(0, -1);
+        if (key_pressed(VK_RIGHT)) te_move_cursor(0, 1);
+        if (key_pressed(VK_UP))    te_move_cursor(-1, 0);
+        if (key_pressed(VK_DOWN))  te_move_cursor(1, 0);
+        if (key_pressed(VK_HOME))  te_home();
+        if (key_pressed(VK_END))   te_end();
+        if (key_pressed(VK_PAGEUP))   te_page(-visible + 1);
+        if (key_pressed(VK_PAGEDOWN)) te_page(visible - 1);
+        if (key_pressed(VK_DELETE) && ctrl_held() == false) te_delete();
+    }
+
+    if (ctrl_held() && key_pressed(VK_S)) extdev_save_and_rebuild();
+
+    if (point_in_rect(eng_mouse_x(), eng_mouse_y(), r) && mouse_pressed(MOUSE_LEFT)) {
+        edit_target = "";
+        let mx: int = eng_mouse_x();
+        let my: int = eng_mouse_y();
+        th_font_mono(13);
+        if (my > r.y + strip_h && my < r.y + r.h) {
+            let line_idx: int = (my - body_y) / SCRIPT_LINE_H + te_scroll_y();
+            if (line_idx < 0) line_idx = 0;
+            if (line_idx >= te_line_count()) line_idx = te_line_count() - 1;
+            let line_text: string = te_line(line_idx);
+            let cur_x: int = r.x + SCRIPT_GUTTER;
+            let n: int = line_text.len();
+            let i: int = 0;
+            while (i < n) {
+                let ch: string = line_text.substring(i, 1);
+                let cw: int = eng_text_width(ch);
+                if (mx < cur_x + cw / 2) break;
+                cur_x = cur_x + cw;
+                i = i + 1;
+            }
+            te_set_cursor(line_idx, i);
+        }
+        th_font(14);
+    }
+
+    let cursor_moved: int = 0;
+    if (te_cursor_line() != cursor_before_line) cursor_moved = 1;
+    if (te_cursor_col() != cursor_before_col) cursor_moved = 1;
+    if (cursor_moved == 1) {
+        let cl: int = te_cursor_line();
+        let sy: int = te_scroll_y();
+        if (cl < sy) te_set_scroll_y(cl);
+        if (cl >= sy + visible) te_set_scroll_y(cl - visible + 1);
+    }
+
+    if (point_in_rect(eng_mouse_x(), eng_mouse_y(), r)) {
+        let w: int = eng_mouse_wheel();
+        if (w != 0) {
+            let total: int = te_line_count();
+            let new_sy: int = te_scroll_y() - w * 3;
+            if (new_sy < 0) new_sy = 0;
+            let max_sy: int = total - visible;
+            if (max_sy < 0) max_sy = 0;
+            if (new_sy > max_sy) new_sy = max_sy;
+            te_set_scroll_y(new_sy);
+        }
+    }
+}
+
+fn extdev_editor_draw(r: Rect) {
+    draw_fill_rect(r, col_ui_input());
+    let strip: Rect = rect(r.x, r.y, r.w, 28);
+    draw_fill_rect(strip, col_panel_dark());
+    draw_fill_rect(rect(strip.x, strip.y + strip.h - 1, strip.w, 1), col_border_soft());
+
+    let title: string = path_basename(te_path());
+    if (title.len() == 0) title = "(no source)";
+    th_font_semi(12);
+    draw_text(r.x + 12, th_text_y(strip.y, strip.h), title, col_text_main());
+    if (te_dirty() == 1) {
+        let dx: int = r.x + 12 + eng_text_width(title) + 10;
+        th_chip(rect(dx, strip.y + 5, 64, strip.h - 10), "UNSAVED", col_warn());
+    }
+    th_font(14);
+
+    let bx: int = r.x + r.w - 200;
+    if (ui_pill(rect(bx, r.y + 3, 88, strip.h - 6), "Save", 0) == 1) extdev_save_and_rebuild();
+    if (ui_pill(rect(bx + 96, r.y + 3, 96, strip.h - 6), "Rebuild", 1) == 1) {
+        if (te_dirty() == 1) te_save();
+        eng_ext_rescan();
+        let idx: int = extdev_index();
+        if (idx >= 0) ext_rebuild_begin(idx);
+    }
+
+    if (te_line_count() == 0) return;
+
+    let body_y: int = r.y + 30;
+    let body_h: int = r.h - 30;
+    eng_set_clip(r.x, body_y, r.w, body_h);
+
+    th_font_mono(13);
+    let visible: int = body_h / SCRIPT_LINE_H;
+    let total: int = te_line_count();
+    let sy: int = te_scroll_y();
+    if (sy + visible > total) sy = total - visible;
+    if (sy < 0) sy = 0;
+    if (sy != te_scroll_y()) te_set_scroll_y(sy);
+
+    eng_fill_rect(r.x, body_y, SCRIPT_GUTTER - 4, body_h, 24, 25, 29);
+    draw_fill_rect(rect(r.x + SCRIPT_GUTTER - 4, body_y, 1, body_h), col_border_soft());
+
+    let cl_hl: int = te_cursor_line();
+    if (cl_hl >= sy && cl_hl < sy + visible) {
+        let hy: int = body_y + 2 + (cl_hl - sy) * SCRIPT_LINE_H;
+        eng_fill_rect(r.x + SCRIPT_GUTTER - 4, hy - 2, r.w - SCRIPT_GUTTER + 4, SCRIPT_LINE_H, 37, 39, 46);
+    }
+
+    let i: int = sy;
+    let yy: int = body_y + 2;
+    while (i < total && i - sy < visible) {
+        let lnum: string = "" + (i + 1);
+        let lw: int = eng_text_width(lnum);
+        let lnum_color_r: int = 90;
+        let lnum_color_g: int = 100;
+        let lnum_color_b: int = 120;
+        if (i == te_cursor_line()) { lnum_color_r = 200; lnum_color_g = 210; lnum_color_b = 230; }
+        eng_text(r.x + SCRIPT_GUTTER - 12 - lw, yy, lnum, lnum_color_r, lnum_color_g, lnum_color_b);
+        let line_text: string = te_line(i);
+        draw_script_line(r.x + SCRIPT_GUTTER, yy, line_text, r.w - SCRIPT_GUTTER - 8);
+        i = i + 1;
+        yy = yy + SCRIPT_LINE_H;
+    }
+
+    let cl: int = te_cursor_line();
+    let cc: int = te_cursor_col();
+    if (cl >= sy && cl < sy + visible) {
+        let line_text: string = te_line(cl);
+        let prefix: string = "";
+        if (cc <= line_text.len()) prefix = line_text.substring(0, cc);
+        let cx: int = r.x + SCRIPT_GUTTER + eng_text_width(prefix);
+        let cy: int = body_y + 2 + (cl - sy) * SCRIPT_LINE_H;
+        cursor_blink_ms = cursor_blink_ms + frame_dt_ms();
+        let phase: int = cursor_blink_ms;
+        phase = phase % 1000;
+        if (phase < 600) {
+            eng_fill_rect(cx, cy - 1, 2, SCRIPT_LINE_H, 220, 230, 250);
+        }
+    }
+
+    eng_clear_clip();
+    th_font(14);
+}
+
+fn extdev_nav_row(x: int, y: int, w: int, i: int) {
+    let id: string = eng_ext_id(i);
+    let name: string = eng_ext_name(i);
+    let r: Rect = rect(x, y, w, 52);
+    let on: int = 0;
+    if (id == extdev_id) on = 1;
+    let hover: int = 0;
+    if (mouse_hover_held(r) >= 1) hover = 1;
+    th_row(r, on, hover);
+    th_font_semi(13);
+    draw_text(r.x + 14, r.y + 10, name, col_text_main());
+    th_font(11);
+    let sub: string = id;
+    let lg: int = eng_ext_lang(i);
+    if (lg == 0) sub = id + "  -  Nexa";
+    else if (lg == 1) sub = id + "  -  C++";
+    draw_text(r.x + 14, r.y + 30, sub, col_text_dim());
+    th_font(14);
+    if (hover == 1 && mouse_pressed(MOUSE_LEFT) && on == 0) {
+        if (te_dirty() == 1) te_save();
+        if (bp_is_open() == 1 && bp_dirty() == 1) bp_save();
+        extdev_show_id(id);
+    }
+}
+
+fn extdev_draw() {
+    if (extdev_open == 0) return;
+    draw_fill_rect(rect(0, 0, WIN_W, WIN_H), col_panel_dark());
+
+    let foot_h: int = 64;
+    let nav_w: int = 280;
+    if (nav_w > WIN_W / 3) nav_w = WIN_W / 3;
+    let nav: Rect = rect(0, 0, nav_w, WIN_H - foot_h);
+    let body: Rect = rect(nav_w, 0, WIN_W - nav_w, WIN_H - foot_h);
+    let foot: Rect = rect(0, WIN_H - foot_h, WIN_W, foot_h);
+
+    draw_fill_rect(nav, col_bg_deep());
+    draw_fill_rect(rect(nav.x + nav.w - 1, nav.y, 1, nav.h), col_border_soft());
+    draw_fill_rect(foot, col_bg_deep());
+    draw_fill_rect(rect(foot.x, foot.y, foot.w, 1), col_border_soft());
+
+    th_font_semi(20);
+    draw_text(nav.x + 24, nav.y + 28, "Develop", col_text_main());
+    th_font(11);
+    draw_text(nav.x + 24, nav.y + 58, "EXTENSIONS", col_text_dim());
+    th_font(14);
+
+    let nav_top: int = nav.y + 84;
+    let nav_bot: int = nav.y + nav.h - 56;
+    let nav_vis: int = nav_bot - nav_top;
+    eng_set_clip(nav.x, nav_top, nav.w, nav_vis);
+    let ny: int = nav_top - extdev_nav_scroll;
+    let n: int = eng_ext_count();
+    let listed: int = 0;
+    let i: int = 0;
+    while (i < n) {
+        if (eng_ext_source(i).len() > 0) {
+            extdev_nav_row(nav.x + 12, ny, nav.w - 24, i);
+            ny = ny + 60;
+            listed = listed + 1;
+        }
+        i = i + 1;
+    }
+    eng_clear_clip();
+    let nav_total: int = listed * 60;
+    let max_nav: int = nav_total - nav_vis;
+    if (max_nav < 0) max_nav = 0;
+    if (point_in_rect(eng_mouse_x(), eng_mouse_y(), rect(nav.x, nav_top, nav.w, nav_vis))) {
+        let wh: int = eng_mouse_wheel();
+        if (wh > 0) extdev_nav_scroll = extdev_nav_scroll - 60;
+        if (wh < 0) extdev_nav_scroll = extdev_nav_scroll + 60;
+    }
+    if (extdev_nav_scroll < 0) extdev_nav_scroll = 0;
+    if (extdev_nav_scroll > max_nav) extdev_nav_scroll = max_nav;
+
+    if (ui_button(rect(nav.x + 16, nav.y + nav.h - 44, nav.w - 32, 32), "New...") == 1) {
+        if (te_dirty() == 1) te_save();
+        extdev_close();
+        extbuild_show();
+    }
+
+    let idx: int = extdev_index();
+    let head_h: int = 96;
+    let x: int = body.x + 24;
+    let y: int = body.y + 16;
+    let w: int = body.w - 48;
+    if (idx >= 0) {
+        th_font_semi(18);
+        draw_text(x, y, eng_ext_name(idx), col_text_main());
+        th_font(12);
+        let meta: string = eng_ext_id(idx) + "  v" + eng_ext_version(idx);
+        if (eng_ext_full(idx) == 1) meta = meta + "  |  Full";
+        else meta = meta + "  |  Sandbox";
+        if (eng_ext_enabled(idx) == 0) meta = meta + "  |  Disabled";
+        if (extdev_detached == 1) meta = meta + "  |  Code detached";
+        draw_text(x, y + 26, meta, col_text_dim());
+        th_font(14);
+        if (ui_button(rect(x + w - 140, y, 140, 32), "Open folder") == 1) {
+            eng_run_command("explorer \"" + eng_ext_folder(idx) + "\"");
+        }
+        y = y + 52;
+        let is_cpp: int = 0;
+        if (eng_ext_lang(idx) == 1) is_cpp = 1;
+        let has_bp: int = extdev_has_blocks();
+        if (is_cpp == 0) {
+            let b_on: int = 0;
+            let c_on: int = 0;
+            if (extdev_view == 0) b_on = 1;
+            else c_on = 1;
+            if (ui_pill(rect(x, y, 100, 28), "Blocks", b_on) == 1) {
+                if (extdev_detached == 1) {
+                    extdev_status = "Code is detached. Use Reset from Blocks to return.";
+                } else if (has_bp == 1) {
+                    extdev_open_blocks();
+                } else {
+                    extdev_create_blocks();
+                }
+            }
+            if (ui_pill(rect(x + 108, y, 100, 28), "Code", c_on) == 1) {
+                if (extdev_view != 1) {
+                    extdev_open_code(1);
+                    extdev_status = "Code detached from Blocks. Reset from Blocks to sync again.";
+                }
+            }
+            if (has_bp == 1 && extdev_detached == 1) {
+                if (ui_button(rect(x + 220, y, 160, 28), "Reset from Blocks") == 1) {
+                    extdev_reset_from_blocks();
+                }
+            } else if (has_bp == 0 && is_cpp == 0) {
+                if (ui_button(rect(x + 220, y, 140, 28), "Create Blocks") == 1) {
+                    extdev_create_blocks();
+                }
+            }
+        } else {
+            th_font(12);
+            draw_text(x, y + 6, "C++ extensions use the Code editor only.", col_text_dim());
+            th_font(14);
+        }
+    } else {
+        th_font_semi(18);
+        draw_text(x, y, "No extension selected", col_text_main());
+        th_font(14);
+    }
+
+    let editor: Rect = rect(body.x + 16, body.y + head_h, body.w - 32, body.h - head_h - 8);
+    if (editor.h > 80) {
+        if (extdev_view == 0 && extdev_has_blocks() == 1 && extdev_detached == 0) {
+            bp_set_host(editor.x, editor.y, editor.w, editor.h);
+            bp_editor_input();
+            bp_editor_draw();
+            if (bp_host_want_save == 1) {
+                bp_host_want_save = 0;
+                extdev_save_and_rebuild();
+            }
+        } else {
+            bp_clear_host();
+            extdev_editor_input(editor);
+            extdev_editor_draw(editor);
+        }
+    }
+
+    if (ui_button(rect(foot.x + 24, foot.y + 16, 120, 32), "Back") == 1) extdev_close();
+    if (ui_button(rect(foot.x + 156, foot.y + 16, 140, 32), "Save + Rebuild") == 1) extdev_save_and_rebuild();
+    if (extdev_status.len() > 0) {
+        th_font(12);
+        draw_text(foot.x + 316, th_text_y(foot.y, foot.h), extdev_status, col_text_dim());
+        th_font(14);
+    }
+    extdev_guard = 0;
     th_font(14);
 }
 
@@ -10794,11 +11715,26 @@ fn do_export() {
         eng_log("[export] FAILED to copy engine.dll"); return;
     }
 
-    /* project manifest stays complete so scene and prefab numbers do not shift */
     let root: string = proj_root();
+    let prot: int = pref_int("export_protect", 1);
+    if (prot < 0) prot = 0;
+    if (prot > 3) prot = 3;
+    let enc: int = 0;
+    if (prot > 0) enc = 1;
+    if (enc == 1) {
+        if (eng_content_key_generate() == 0) {
+            eng_log("[export] FAILED to generate content key"); return;
+        }
+        eng_content_set_protect(prot);
+        if (prot == 3) eng_log("[export] Secure protection: dual ChaCha + per-file keys + triple split");
+        if (prot == 2) eng_log("[export] Strong protection: encrypt + integrity + split key");
+        if (prot == 1) eng_log("[export] Standard protection: encrypt; key embedded in the .exe");
+    }
+
+    /* project.eye is encrypted with the rest when protection is on */
     let manifest_src: string = proj_path_join(root, "project.eye");
     let manifest_dst: string = proj_path_join(dist_dir, "project.eye");
-    if (eng_fs_copy_file(manifest_src, manifest_dst) == 0) {
+    if (eng_content_ship_file(manifest_src, manifest_dst, enc) == 0) {
         eng_log("[export] FAILED to copy project.eye"); return;
     }
 
@@ -10808,36 +11744,51 @@ fn do_export() {
         let i: int = 0;
         while (i < n) {
             let rel: string = export_used_rel(i);
+            /* Skip editor-only / source paths; player gets game.cfg instead of editor.cfg. */
+            if (rel == "editor.cfg") { i = i + 1; continue; }
             if (export_is_source(rel) == 0) {
                 let src: string = proj_path_join(root, rel);
                 let dst: string = proj_path_join(dist_dir, rel);
-                if (eng_fs_copy_file(src, dst) == 0) eng_log("[export] FAILED to copy " + rel);
+                if (eng_content_ship_file(src, dst, enc) == 0) eng_log("[export] FAILED to copy " + rel);
             }
             i = i + 1;
         }
     } else {
         let scenes_src: string = proj_path_join(root, "scenes");
-        if (eng_fs_exists(scenes_src) == 1) eng_fs_copy_tree(scenes_src, proj_path_join(dist_dir, "scenes"));
+        if (eng_fs_exists(scenes_src) == 1) eng_content_ship_tree(scenes_src, proj_path_join(dist_dir, "scenes"), enc);
 
         let bin_src: string = proj_path_join(root, "bin");
-        if (eng_fs_exists(bin_src) == 1) eng_fs_copy_tree(bin_src, proj_path_join(dist_dir, "bin"));
+        if (eng_fs_exists(bin_src) == 1) eng_content_ship_tree(bin_src, proj_path_join(dist_dir, "bin"), enc);
 
         let assets_src: string = proj_path_join(root, "assets");
-        if (eng_fs_exists(assets_src) == 1) eng_fs_copy_tree(assets_src, proj_path_join(dist_dir, "assets"));
+        if (eng_fs_exists(assets_src) == 1) eng_content_ship_tree(assets_src, proj_path_join(dist_dir, "assets"), enc);
 
         let prefabs_src: string = proj_path_join(root, "prefabs");
-        if (eng_fs_exists(prefabs_src) == 1) eng_fs_copy_tree(prefabs_src, proj_path_join(dist_dir, "prefabs"));
-
-        let cfg_src: string = proj_path_join(root, "editor.cfg");
-        if (eng_fs_exists(cfg_src) == 1) eng_fs_copy_file(cfg_src, proj_path_join(dist_dir, "editor.cfg"));
+        if (eng_fs_exists(prefabs_src) == 1) eng_content_ship_tree(prefabs_src, proj_path_join(dist_dir, "prefabs"), enc);
 
         let splash_src: string = proj_path_join(root, "splash.cfg");
-        if (eng_fs_exists(splash_src) == 1) eng_fs_copy_file(splash_src, proj_path_join(dist_dir, "splash.cfg"));
+        if (eng_fs_exists(splash_src) == 1) eng_content_ship_file(splash_src, proj_path_join(dist_dir, "splash.cfg"), enc);
     }
+    /* Runtime prefs only — never ship editor.cfg (grid/export options/etc.). */
+    if (eng_content_ship_game_cfg(proj_path_join(dist_dir, "game.cfg"), enc) == 0)
+        eng_log("[export] FAILED to write game.cfg");
+    /* Extensions: compiled DLL only (no .json / source / blueprints / .lib). */
     let ext_src: string = proj_path_join(root, "extensions");
-    if (eng_fs_exists(ext_src) == 1) eng_fs_copy_tree(ext_src, proj_path_join(dist_dir, "extensions"));
+    if (eng_fs_exists(ext_src) == 1) {
+        if (eng_content_ship_extensions(ext_src, proj_path_join(dist_dir, "extensions"), enc) == 0)
+            eng_log("[export] FAILED to ship extensions");
+    }
     let ext_cfg: string = proj_path_join(root, "extensions.cfg");
-    if (eng_fs_exists(ext_cfg) == 1) eng_fs_copy_file(ext_cfg, proj_path_join(dist_dir, "extensions.cfg"));
+    if (eng_fs_exists(ext_cfg) == 1) eng_content_ship_file(ext_cfg, proj_path_join(dist_dir, "extensions.cfg"), enc);
+    if (enc == 1) {
+        let emb: int = 0;
+        if (prot >= 2) emb = eng_content_embed_key_ex(runtime_dst, engine_dst);
+        else emb = eng_content_embed_key(runtime_dst);
+        if (emb == 0) {
+            eng_log("[export] FAILED to embed content key in " + runtime_dst); return;
+        }
+        eng_content_key_clear();
+    }
     let icons_dst: string = proj_path_join(dist_dir, "icons");
     eng_fs_make_dir(icons_dst);
     let logo_src: string = eng_exe_dir() + "\\icons\\eyescire.png";
@@ -11066,6 +12017,14 @@ fn toolbar_draw() {
 // =============================================================================
 
 fn edit_hotkeys() {
+    if (extdev_open == 1) {
+        if (edit_target.len() == 0 && key_pressed(VK_ESCAPE)) extdev_close();
+        return;
+    }
+    if (extbuild_open == 1) {
+        if (edit_target.len() == 0 && key_pressed(VK_ESCAPE)) extbuild_close();
+        return;
+    }
     if (export_open == 1) {
         if (edit_target.len() == 0 && key_pressed(VK_ESCAPE)) export_close();
         return;
@@ -11377,10 +12336,13 @@ fn settings_show() {
     if (app_state != "edit") return;
     if (proj_loaded() == 0) return;
     if (export_open == 1) export_close();
+    if (extbuild_open == 1) extbuild_close();
+    if (extdev_open == 1) extdev_close();
     settings_open = 1;
     settings_ready = 0;
     settings_guard = 1;
     settings_scroll = 0;
+    settings_nav_scroll = 0;
     menu_open = "";
     if (edit_target.len() < 4 || edit_target.substring(0, 4) != "set_") edit_target = "";
 }
@@ -11425,16 +12387,72 @@ fn settings_save_scene() {
     gravity_buf_ready = 0;
 }
 
-fn settings_nav(p: Rect, id: int, label: string) {
+fn settings_page_header(x: int, y: int, title: string, subtitle: string): int {
+    th_font_semi(18);
+    draw_text(x, y, title, col_text_main());
+    th_font(14);
+    y = y + 30;
+    if (subtitle.len() > 0) {
+        th_font(12);
+        draw_text(x, y, subtitle, col_text_dim());
+        th_font(14);
+        y = y + 26;
+    }
+    return y;
+}
+
+fn settings_hint(x: int, y: int, w: int, text: string): int {
+    th_font(12);
+    draw_text(x, y, text, col_text_dim());
+    th_font(14);
+    return y + 22;
+}
+
+fn settings_nav_row(x: int, y: int, w: int, id: int, label: string) {
+    let r: Rect = rect(x, y, w, 44);
     let on: int = 0;
     if (settings_page == id) on = 1;
-    if (ui_pill(rect(p.x + 12, p.y, p.w - 24, 36), label, on) == 1) {
-        settings_page = id;
-        settings_scroll = 0;
-        if (edit_target.len() >= 6) {
-            let head: string = edit_target.substring(0, 6);
-            if (head == "set_sh" || head == "set_sf") edit_target = "";
+    let hover: int = 0;
+    if (mouse_hover_held(r) >= 1) hover = 1;
+    th_row(r, on, hover);
+    th_font_semi(13);
+    draw_text(r.x + 14, th_text_y(r.y, r.h), label, col_text_main());
+    th_font(14);
+    if (hover == 1 && mouse_pressed(MOUSE_LEFT)) {
+        if (settings_page != id) {
+            settings_page = id;
+            settings_scroll = 0;
+            if (edit_target.len() >= 6) {
+                let head: string = edit_target.substring(0, 6);
+                if (head == "set_sh" || head == "set_sf") edit_target = "";
+            }
         }
+    }
+}
+
+fn settings_onoff(x: int, y: int, w: int, label: string, key: string, def: int) {
+    draw_text(x, th_text_y(y, 28), label, col_text_main());
+    let on: int = pref_int(key, def);
+    let k0: string = "secondary";
+    let k1: string = "secondary";
+    if (on == 1) k1 = "primary";
+    else k0 = "primary";
+    if (ui_button_kind(rect(x + w - 168, y, 76, 28), "Off", k0) == 1 && on == 1) pref_set_int(key, 0);
+    if (ui_button_kind(rect(x + w - 84, y, 76, 28), "On", k1) == 1 && on == 0) pref_set_int(key, 1);
+}
+
+fn settings_launch_row(x: int, y: int, w: int, si: int, rel: string, selected: int) {
+    let r: Rect = rect(x, y, w, 36);
+    let hover: int = 0;
+    if (mouse_hover_held(r) >= 1) hover = 1;
+    th_row(r, selected, hover);
+    th_font(13);
+    draw_text(r.x + 14, th_text_y(r.y, r.h), rel, col_text_main());
+    th_font(14);
+    if (hover == 1 && mouse_pressed(MOUSE_LEFT)) {
+        proj_set_start(rel);
+        switch_active_scene(si);
+        settings_ready = 0;
     }
 }
 
@@ -11463,27 +12481,27 @@ fn settings_splash_section(x: int, y: int, w: int): int {
     draw_text(x, y, "Each screen fades out, then the next one fades in.", col_text_dim());
     y = y + 28;
     if (splash_row_visible(y, 28) == 1) {
-        draw_text(x, y + 6, "Made with Eyescire", col_text_main());
+        draw_text(x, th_text_y(y, 28), "Made with Eyescire", col_text_main());
         let on: int = splash_brand();
         let k0: string = "secondary";
         let k1: string = "secondary";
         if (on == 1) k1 = "primary";
         else k0 = "primary";
-        if (ui_button_kind(rect(x + w - 176, y, 80, 28), "Off", k0) == 1 && on == 1) splash_set_brand(0);
-        if (ui_button_kind(rect(x + w - 88, y, 80, 28), "On", k1) == 1 && on == 0) splash_set_brand(1);
+        if (ui_button_kind(rect(x + w - 168, y, 76, 28), "Off", k0) == 1 && on == 1) splash_set_brand(0);
+        if (ui_button_kind(rect(x + w - 84, y, 76, 28), "On", k1) == 1 && on == 0) splash_set_brand(1);
     }
     y = y + 34;
     draw_text(x, y, "The words and the logo play first. Turn this off to start on your own images.", col_text_dim());
     y = y + 28;
     if (splash_row_visible(y, 28) == 1) {
-        draw_text(x, y + 6, "Skip", col_text_main());
+        draw_text(x, th_text_y(y, 28), "Skip", col_text_main());
         let kon: int = splash_keys();
         let kk0: string = "secondary";
         let kk1: string = "secondary";
         if (kon == 1) kk1 = "primary";
         else kk0 = "primary";
-        if (ui_button_kind(rect(x + w - 176, y, 80, 28), "Off", kk0) == 1 && kon == 1) splash_set_keys(0);
-        if (ui_button_kind(rect(x + w - 88, y, 80, 28), "On", kk1) == 1 && kon == 0) splash_set_keys(1);
+        if (ui_button_kind(rect(x + w - 168, y, 76, 28), "Off", kk0) == 1 && kon == 1) splash_set_keys(0);
+        if (ui_button_kind(rect(x + w - 84, y, 76, 28), "On", kk1) == 1 && kon == 0) splash_set_keys(1);
     }
     y = y + 34;
     draw_text(x, y, "Off waits out each screen. On, a click or a key skips.", col_text_dim());
@@ -11529,6 +12547,7 @@ fn settings_splash_section(x: int, y: int, w: int): int {
 }
 
 fn settings_page_project(x: int, y: int, w: int) {
+    y = settings_page_header(x, y, "Project", "Name, startup scene, and splash screens");
     y = chrome_section(x, y, w, "PROJECT");
     chrome_field_label(x, y, "Name");
     y = y + 18;
@@ -11548,8 +12567,7 @@ fn settings_page_project(x: int, y: int, w: int) {
     }
     y = y + 44;
     y = chrome_section(x, y, w, "OPENS ON LAUNCH");
-    draw_text(x, y, "This scene loads when the project opens.", col_text_dim());
-    y = y + 22;
+    y = settings_hint(x, y, w, "This scene loads when the project opens.");
     let start: string = proj_start();
     let si: int = 0;
     let shown: int = 0;
@@ -11557,12 +12575,8 @@ fn settings_page_project(x: int, y: int, w: int) {
         let rel: string = proj_scene_rel(si);
         let mark: int = 0;
         if (rel == start) mark = 1;
-        if (ui_pill(rect(x, y, w, 26), rel, mark) == 1) {
-            proj_set_start(rel);
-            switch_active_scene(si);
-            settings_ready = 0;
-        }
-        y = y + 30;
+        settings_launch_row(x, y, w, si, rel, mark);
+        y = y + 40;
         shown = shown + 1;
         si = si + 1;
     }
@@ -11595,6 +12609,7 @@ fn settings_page_project(x: int, y: int, w: int) {
 }
 
 fn settings_page_player(x: int, y: int, w: int) {
+    y = settings_page_header(x, y, "Scene", "2D/3D mode, sky, and field of view");
     y = chrome_section(x, y, w, "HOW THIS SCENE PLAYS");
     let half: int = (w - 8) / 2;
     let is3d: int = scene_render3d();
@@ -11771,6 +12786,7 @@ fn settings_apply_gravity(gx: float, gy: float) {
 }
 
 fn settings_page_physics(x: int, y: int, w: int) {
+    y = settings_page_header(x, y, "Physics", "Gravity and collision scale");
     y = chrome_section(x, y, w, "GRAVITY");
     draw_text(x, y, "Pixels per second, squared. Positive Y pulls down the screen.", col_text_dim());
     y = y + 24;
@@ -11810,50 +12826,53 @@ fn settings_page_physics(x: int, y: int, w: int) {
         settings_ppm = pp;
     }
     y = y + 40;
-    draw_text(x, y, "50 is the default. Bodies use the new scale the next time you press Play.", col_text_dim());
+    y = settings_hint(x, y, w, "50 is the default. Bodies use the new scale the next time you press Play.");
+    settings_bottom = y;
 }
 
 fn settings_page_build(x: int, y: int, w: int) {
+    y = settings_page_header(x, y, "Build", "Compile scripts and open export");
     y = chrome_section(x, y, w, "SCRIPTS");
-    if (ui_button(rect(x, y, 200, 28), "Build") == 1) {
+    if (ui_button(rect(x, y, 200, 32), "Build") == 1) {
         settings_close();
         compile_begin("idle");
     }
-    if (ui_button(rect(x + 208, y, 200, 28), "Rebuild all") == 1) {
+    if (ui_button(rect(x + 208, y, 200, 32), "Rebuild all") == 1) {
         settings_close();
         force_rebuild = 1;
         compile_begin("idle");
     }
-    y = y + 40;
-    draw_text(x, y, "Build compiles scripts that changed. Rebuild all compiles every script.", col_text_dim());
-    y = y + 36;
+    y = y + 44;
+    y = settings_hint(x, y, w, "Build compiles scripts that changed. Rebuild all compiles every script.");
+    y = y + 12;
     y = chrome_section(x, y, w, "EXPORT");
-    if (ui_button(rect(x, y, 200, 28), "Export...") == 1) {
+    if (ui_button(rect(x, y, 200, 32), "Export...") == 1) {
         settings_close();
         export_show(0);
     }
-    y = y + 40;
-    draw_text(x, y, "Opens the export picker (Windows or Web presets, path, and options).", col_text_dim());
+    y = y + 44;
+    y = settings_hint(x, y, w, "Opens the export picker (Windows or Web presets, path, and options).");
+    y = y + 12;
+    settings_onoff(x, y, w, "Export used files", "export_used", 1);
     y = y + 36;
-    settings_onoff(x, y, "Export used files", "export_used", 1);
-    y = y + 36;
-    draw_text(x, y, "On ships the launch scene, scenes a script opens, and files those scripts name.", col_text_dim());
-    y = y + 20;
-    draw_text(x, y, "Off copies every scene, script, prefab, and asset.", col_text_dim());
+    y = settings_hint(x, y, w, "On ships the launch scene, scenes a script opens, and files those scripts name.");
+    y = settings_hint(x, y, w, "Off copies every scene, script, prefab, and asset.");
+    settings_bottom = y;
 }
 
 fn settings_page_extensions(x: int, y: int, w: int) {
-    th_font_semi(18);
-    draw_text(x, y, "Extensions", col_text_main());
-    th_font(14);
-    y = y + 36;
+    y = settings_page_header(x, y, "Extensions", "Install DLL plugins for editor and game");
 
     y = chrome_section(x, y, w, "INSTALL");
     th_font(12);
-    draw_text(x, y, "DLL extensions load with the project. Sandboxed by default until you grant Full.", col_text_dim());
+    draw_text(x, y, "Installed DLLs start sandboxed. New Extension creates a local plugin with Full permission.", col_text_dim());
     th_font(14);
     y = y + 28;
-    if (ui_button(rect(x, y, 200, 32), "Install DLL...") == 1) {
+    if (ui_button_primary(rect(x, y, 200, 32), "New Extension...") == 1) {
+        settings_close();
+        extbuild_show();
+    }
+    if (ui_button(rect(x + 208, y, 160, 32), "Install DLL...") == 1) {
         let chosen: string = eng_open_file_dialog("Install Extension DLL", "Extension DLL (*.dll)|*.dll|All files|*.*", proj_root());
         if (chosen.len() > 0) {
             if (eng_ext_install_dll(chosen) == 1) {
@@ -11864,7 +12883,7 @@ fn settings_page_extensions(x: int, y: int, w: int) {
             }
         }
     }
-    if (ui_button(rect(x + 208, y, 120, 32), "Rescan") == 1) {
+    if (ui_button(rect(x + 376, y, 120, 32), "Rescan") == 1) {
         eng_ext_rescan();
         eng_ext_load_enabled(1);
     }
@@ -11888,6 +12907,14 @@ fn settings_page_extensions(x: int, y: int, w: int) {
         th_font_semi(14);
         draw_text(x, y, name + "  v" + ver, col_text_main());
         th_font(14);
+        let has_src: int = 0;
+        if (eng_ext_source(i).len() > 0) has_src = 1;
+        if (has_src == 1 && ui_button(rect(x + w - 232, y, 108, 28), "Develop") == 1) {
+            settings_close();
+            extdev_show_index(i);
+            extdev_status = "Editing " + eng_ext_id(i) + ". Save rebuilds automatically.";
+            return;
+        }
         if (ui_button_danger(rect(x + w - 112, y, 112, 28), "Uninstall") == 1) {
             if (eng_ext_uninstall(i) == 1) {
                 n = eng_ext_count();
@@ -11896,7 +12923,11 @@ fn settings_page_extensions(x: int, y: int, w: int) {
         }
         y = y + 24;
         th_font(12);
-        draw_text(x, y, id, col_text_dim());
+        let lang_tag: string = "";
+        let lg: int = eng_ext_lang(i);
+        if (lg == 0) lang_tag = "  -  Nexa";
+        else if (lg == 1) lang_tag = "  -  C++";
+        draw_text(x, y, id + lang_tag, col_text_dim());
         th_font(14);
         y = y + 28;
 
@@ -11946,26 +12977,19 @@ fn settings_page_extensions(x: int, y: int, w: int) {
             th_font(14);
             y = y + 22;
         }
-        y = y + 20;
+        if (i + 1 < n) {
+            draw_fill_rect(rect(x, y, w, 1), col_border_soft());
+            y = y + 16;
+        }
         i = i + 1;
     }
     settings_bottom = y;
 }
 
-fn settings_onoff(x: int, y: int, label: string, key: string, def: int) {
-    draw_text(x, y + 6, label, col_text_main());
-    let on: int = pref_int(key, def);
-    let k0: string = "secondary";
-    let k1: string = "secondary";
-    if (on == 1) k1 = "primary";
-    else k0 = "primary";
-    if (ui_button_kind(rect(x + 320, y, 80, 28), "Off", k0) == 1 && on == 1) pref_set_int(key, 0);
-    if (ui_button_kind(rect(x + 408, y, 80, 28), "On", k1) == 1 && on == 0) pref_set_int(key, 1);
-}
-
 fn settings_page_editor(x: int, y: int, w: int) {
+    y = settings_page_header(x, y, "Editor", "Grid, snapping, and autosave");
     y = chrome_section(x, y, w, "GRID");
-    settings_onoff(x, y, "Show grid", "show_grid", 1);
+    settings_onoff(x, y, w, "Show grid", "show_grid", 1);
     y = y + 40;
     draw_text(x, y, "Spacing, in pixels. The 2D view and the 3D floor use it.", col_text_dim());
     y = y + 24;
@@ -11988,14 +13012,15 @@ fn settings_page_editor(x: int, y: int, w: int) {
     if (ui_button_kind(rect(x + (bw + 8) * 4, y, bw, 28), "128", s128) == 1) pref_set_int("grid", 128);
     y = y + 48;
     y = chrome_section(x, y, w, "MOVING");
-    settings_onoff(x, y, "Snap to grid", "snap", 0);
+    settings_onoff(x, y, w, "Snap to grid", "snap", 0);
     y = y + 36;
-    draw_text(x, y, "Move tools land on the grid. Typed numbers stay exact.", col_text_dim());
-    y = y + 40;
+    y = settings_hint(x, y, w, "Move tools land on the grid. Typed numbers stay exact.");
+    y = y + 12;
     y = chrome_section(x, y, w, "SAVING");
-    settings_onoff(x, y, "Autosave", "autosave", 1);
+    settings_onoff(x, y, w, "Autosave", "autosave", 1);
     y = y + 36;
-    draw_text(x, y, "Writes the open scene every 20 seconds while you edit.", col_text_dim());
+    y = settings_hint(x, y, w, "Writes the open scene every 20 seconds while you edit.");
+    settings_bottom = y;
 }
 
 fn settings_apply_play_size(pw: int, ph: int) {
@@ -12007,6 +13032,7 @@ fn settings_apply_play_size(pw: int, ph: int) {
 }
 
 fn settings_page_graphics(x: int, y: int, w: int) {
+    y = settings_page_header(x, y, "Graphics", "Renderer, play resolution, and 3D options");
     y = chrome_section(x, y, w, "RENDERER");
     let which: int = pref_int("renderer", 33);
     let k11: string = "secondary";
@@ -12052,33 +13078,30 @@ fn settings_page_graphics(x: int, y: int, w: int) {
         settings_ph = phb;
     }
     y = y + 44;
-    settings_onoff(x, y, "Fullscreen", "fullscreen", 0);
+    settings_onoff(x, y, w, "Fullscreen", "fullscreen", 0);
     y = y + 36;
-    draw_text(x, y, "The editor stays in its own window. Fullscreen is for the game.", col_text_dim());
+    y = settings_hint(x, y, w, "The editor stays in its own window. Fullscreen is for the game.");
+    y = y + 12;
+    settings_onoff(x, y, w, "VSync", "vsync", 1);
     y = y + 36;
-    settings_onoff(x, y, "VSync", "vsync", 1);
+    y = settings_hint(x, y, w, "On waits for the monitor. The editor and the game both use it.");
+    y = y + 12;
+    settings_onoff(x, y, w, "High definition", "hd", 0);
     y = y + 36;
-    draw_text(x, y, "On waits for the monitor. The editor and the game both use it.", col_text_dim());
+    y = settings_hint(x, y, w, "On draws the 3D picture at twice the resolution. Sharper, and slower.");
+    y = settings_hint(x, y, w, "The editor view, Play, and an exported 3D game all use it.");
+    y = y + 12;
+    settings_onoff(x, y, w, "Anti-aliasing", "aa", 1);
     y = y + 36;
-    settings_onoff(x, y, "High definition", "hd", 0);
+    y = settings_hint(x, y, w, "On smooths the edges of the 3D picture. Off leaves them jagged.");
+    y = settings_hint(x, y, w, "An object can follow this, or force its own edges on or off.");
+    y = y + 12;
+    settings_onoff(x, y, w, "Shadows", "shadows", 1);
     y = y + 36;
-    draw_text(x, y, "On draws the 3D picture at twice the resolution. Sharper, and slower.", col_text_dim());
-    y = y + 20;
-    draw_text(x, y, "The editor view, Play, and an exported 3D game all use it.", col_text_dim());
-    y = y + 36;
-    settings_onoff(x, y, "Anti-aliasing", "aa", 1);
-    y = y + 36;
-    draw_text(x, y, "On smooths the edges of the 3D picture. Off leaves them jagged.", col_text_dim());
-    y = y + 20;
-    draw_text(x, y, "An object can follow this, or force its own edges on or off.", col_text_dim());
-    y = y + 36;
-    settings_onoff(x, y, "Shadows", "shadows", 1);
-    y = y + 36;
-    draw_text(x, y, "On casts one soft shadow from the directional light.", col_text_dim());
-    y = y + 20;
-    draw_text(x, y, "It falls on the ground and on other objects. Spot and point lights stay plain.", col_text_dim());
-    y = y + 36;
-    settings_onoff(x, y, "Fog", "fog", 0);
+    y = settings_hint(x, y, w, "On casts one soft shadow from the directional light.");
+    y = settings_hint(x, y, w, "It falls on the ground and on other objects. Spot and point lights stay plain.");
+    y = y + 12;
+    settings_onoff(x, y, w, "Fog", "fog", 0);
     y = y + 36;
     draw_text(x, y, "On fades far objects into a color. Off leaves the picture clear.", col_text_dim());
     y = y + 20;
@@ -12103,6 +13126,7 @@ fn settings_page_graphics(x: int, y: int, w: int) {
 }
 
 fn settings_page_audio(x: int, y: int, w: int) {
+    y = settings_page_header(x, y, "Audio", "Default music and SFX levels");
     y = chrome_section(x, y, w, "MUSIC");
     draw_text(x, y, "0 to 100. Applies to music the game plays.", col_text_dim());
     y = y + 24;
@@ -12124,6 +13148,7 @@ fn settings_page_audio(x: int, y: int, w: int) {
     }
     if (ui_button(rect(x + 132, y, 64, 28), "Mute") == 1) { pref_set_int("sfx", 0); settings_sfx = "0"; if (edit_target == "set_sfx") edit_target = ""; }
     if (ui_button(rect(x + 204, y, 64, 28), "Full") == 1) { pref_set_int("sfx", 100); settings_sfx = "100"; if (edit_target == "set_sfx") edit_target = ""; }
+    settings_bottom = y + 40;
 }
 
 /* Full-screen settings page — replaces the editor chrome while open. */
@@ -12149,22 +13174,39 @@ fn settings_draw() {
     th_font(11);
     draw_text(nav.x + 24, nav.y + 58, "PAGES", col_text_dim());
     th_font(14);
-    let ny: int = nav.y + 84;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 0, "Project");
-    ny = ny + 42;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 1, "Scene");
-    ny = ny + 42;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 2, "Physics");
-    ny = ny + 42;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 3, "Editor");
-    ny = ny + 42;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 4, "Graphics");
-    ny = ny + 42;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 5, "Audio");
-    ny = ny + 42;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 6, "Build");
-    ny = ny + 42;
-    settings_nav(rect(nav.x, ny, nav.w, 36), 7, "Extensions");
+    let nav_ix: int = nav.x + 12;
+    let nav_iw: int = nav.w - 24;
+    let nav_top: int = nav.y + 84;
+    let nav_vis_h: int = nav.h - 84;
+    let nav_step: int = 48;
+    let nav_total: int = 8 * nav_step;
+    let max_nav_scroll: int = nav_total - nav_vis_h;
+    if (max_nav_scroll < 0) max_nav_scroll = 0;
+    eng_set_clip(nav.x, nav_top, nav.w, nav_vis_h);
+    let ny: int = nav_top - settings_nav_scroll;
+    settings_nav_row(nav_ix, ny, nav_iw, 0, "Project");
+    ny = ny + nav_step;
+    settings_nav_row(nav_ix, ny, nav_iw, 1, "Scene");
+    ny = ny + nav_step;
+    settings_nav_row(nav_ix, ny, nav_iw, 2, "Physics");
+    ny = ny + nav_step;
+    settings_nav_row(nav_ix, ny, nav_iw, 3, "Editor");
+    ny = ny + nav_step;
+    settings_nav_row(nav_ix, ny, nav_iw, 4, "Graphics");
+    ny = ny + nav_step;
+    settings_nav_row(nav_ix, ny, nav_iw, 5, "Audio");
+    ny = ny + nav_step;
+    settings_nav_row(nav_ix, ny, nav_iw, 6, "Build");
+    ny = ny + nav_step;
+    settings_nav_row(nav_ix, ny, nav_iw, 7, "Extensions");
+    eng_clear_clip();
+    if (point_in_rect(eng_mouse_x(), eng_mouse_y(), nav)) {
+        let nwh: int = eng_mouse_wheel();
+        if (nwh > 0) settings_nav_scroll = settings_nav_scroll - nav_step;
+        if (nwh < 0) settings_nav_scroll = settings_nav_scroll + nav_step;
+    }
+    if (settings_nav_scroll < 0) settings_nav_scroll = 0;
+    if (settings_nav_scroll > max_nav_scroll) settings_nav_scroll = max_nav_scroll;
 
     let x: int = body.x + 48;
     let y: int = body.y + 36 - settings_scroll;
@@ -12184,15 +13226,11 @@ fn settings_draw() {
     eng_clear_clip();
 
     let max_scroll: int = 0;
-    if (settings_page == 0 || settings_page == 1 || settings_page == 4 || settings_page == 7) {
-        let content_h: int = settings_bottom + settings_scroll - (body.y + 36);
-        max_scroll = content_h - (body.h - 72);
-        if (max_scroll < 0) max_scroll = 0;
-    } else {
-        settings_scroll = 0;
-    }
+    let content_h: int = settings_bottom + settings_scroll - (body.y + 36);
+    max_scroll = content_h - (body.h - 72);
+    if (max_scroll < 0) max_scroll = 0;
     let content: Rect = rect(body.x + 24, body.y + 24, body.w - 48, body.h - 48);
-    if (point_in_rect(eng_mouse_x(), eng_mouse_y(), content)) {
+    if (point_in_rect(eng_mouse_x(), eng_mouse_y(), content) && eng_mouse_x() >= nav_w) {
         let wh: int = eng_mouse_wheel();
         if (wh > 0) settings_scroll = settings_scroll - 56;
         if (wh < 0) settings_scroll = settings_scroll + 56;
@@ -12227,6 +13265,8 @@ fn edit_frame() {
     if (hier_drag_active == 1)       menu_capturing = 1;
     if (settings_open == 1)          menu_capturing = 1;
     if (export_open == 1)            menu_capturing = 1;
+    if (extbuild_open == 1)          menu_capturing = 1;
+    if (extdev_open == 1)            menu_capturing = 1;
 
     if (menu_capturing == 0) {
         toolbar_input();
@@ -12239,7 +13279,13 @@ fn edit_frame() {
         console_input();
     }
 
-    if (export_open == 1) {
+    if (extdev_open == 1) {
+        extdev_draw();
+        tooltip_draw();
+    } else if (extbuild_open == 1) {
+        extbuild_draw();
+        tooltip_draw();
+    } else if (export_open == 1) {
         export_draw();
         tooltip_draw();
     } else if (settings_open == 1) {
@@ -12311,6 +13357,7 @@ fn typed_discard() {
 fn typed_keep_for_script(): int {
     if (app_state != "edit" && app_state != "play") return 0;
     if (compile_active == 1) return 0;
+    if (ext_rebuild_active == 1) return 0;
     if (viewport_mode != "script") return 0;
     if (bp_is_open() == 1) return 0;
     if (edit_target.len() > 0) return 0;
@@ -12365,11 +13412,14 @@ fn main() {
         }
 
         let was_compiling: int = compile_active;
+        let was_ext_rebuild: int = ext_rebuild_active;
 
         if (edit_target.len() == 0 && typed_keep_for_script() == 0) typed_discard();
 
         if (compile_active == 1) {
             compile_frame();
+        } else if (ext_rebuild_active == 1) {
+            ext_rebuild_overlay_draw();
         } else if (app_state == "welcome") {
             welcome_frame();
         } else if (app_state == "edit" || app_state == "play") {
@@ -12382,12 +13432,16 @@ fn main() {
         if (was_compiling == 0 && compile_active == 1) {
             compile_frame();
         }
+        if (was_ext_rebuild == 0 && ext_rebuild_active == 1) {
+            ext_rebuild_overlay_draw();
+        }
 
         eng_present();
         frame_end();
 
         /* synchronous: blocks the main thread while NexaC compiles each script. */
         if (compile_active == 1) compile_step();
+        if (ext_rebuild_active == 1) ext_rebuild_step();
 
         if (play_pending == 1 && play_in_window == 1) {
             play_pending = 0;

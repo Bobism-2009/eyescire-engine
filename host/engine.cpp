@@ -394,6 +394,9 @@ struct EngineState {
         std::string version;
         std::string desc;
         std::string dllName;   /* filename inside extensions/<id>/ */
+        std::string source;    /* relative source filename, if known */
+        std::string blueprint; /* relative .ebp filename, if known */
+        int lang = -1;         /* 0 = nexa, 1 = cpp, -1 unknown */
         int enabled = 1;
         int full = 0;
         int handle = 0;        /* loaded dll handle, or 0 */
@@ -965,6 +968,23 @@ extern "C" void engine_input_wheel(int notches) { g.mouseWheelAccum += notches; 
    2 = full-permission extension */
 static thread_local int g_ext_tls_trust = 0;
 extern "C" void engine_log(const char* msg);
+
+/* Key-split slots inside engine.dll (magic + 16 payload bytes each).
+   Strong uses ksplit; Secure uses both (triple split with the .exe trailer). */
+extern "C" uint8_t g_eyescire_ksplit[32] = {
+    0xE5, 0xC1, 0x7E, 0x5B, 0xA1, 0x70, 0xD3, 0x29,
+    0x4F, 0x8C, 0x12, 0x6E, 0xB0, 0x3D, 0x9A, 0x55,
+    0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5,
+    0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5
+};
+extern "C" uint8_t g_eyescire_ksplit2[32] = {
+    0x3C, 0x9E, 0xA1, 0x7D, 0x52, 0xF0, 0x18, 0xB6,
+    0x84, 0x2D, 0x67, 0xE1, 0x0B, 0xC5, 0x49, 0x7A,
+    0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A,
+    0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A
+};
+
+#include "content_crypt.inl"
 
 static int ext_sandboxed_active() {
     return g_ext_tls_trust == 1 ? 1 : 0;
@@ -1677,14 +1697,31 @@ static std::string proj_relativise(const std::string& s);
 extern "C" int engine_image_load(const char* path) {
     if (!path) return 0;
     std::string resolved = asset_resolve(path);
-
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, resolved.c_str(), -1, nullptr, 0);
-    if (wlen <= 0) return 0;
-    std::wstring wpath((size_t)wlen, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, resolved.c_str(), -1, wpath.data(), wlen);
-
-    auto* bmp = new Gdiplus::Bitmap(wpath.c_str());
-    if (bmp->GetLastStatus() != Gdiplus::Ok) {
+    auto raw = content_crypt::read_raw(resolved);
+    Gdiplus::Bitmap* bmp = nullptr;
+    if (content_crypt::looks_encrypted(raw)) {
+        auto bytes = content_read_bytes(resolved);
+        if (bytes.empty() && !raw.empty()) return 0;
+        HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes.empty() ? 1 : bytes.size());
+        if (!h) return 0;
+        void* p = GlobalLock(h);
+        if (p && !bytes.empty()) std::memcpy(p, bytes.data(), bytes.size());
+        if (p) GlobalUnlock(h);
+        IStream* stream = nullptr;
+        if (CreateStreamOnHGlobal(h, TRUE, &stream) != S_OK) {
+            GlobalFree(h);
+            return 0;
+        }
+        bmp = Gdiplus::Bitmap::FromStream(stream);
+        stream->Release();
+    } else {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, resolved.c_str(), -1, nullptr, 0);
+        if (wlen <= 0) return 0;
+        std::wstring wpath((size_t)wlen, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, resolved.c_str(), -1, wpath.data(), wlen);
+        bmp = new Gdiplus::Bitmap(wpath.c_str());
+    }
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) {
         delete bmp;
         return 0;
     }
@@ -2753,10 +2790,9 @@ static bool path_is_font_file(const std::string& p) {
 }
 
 static std::string ttf_family_name(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return {};
-    std::vector<unsigned char> b((std::istreambuf_iterator<char>(f)), {});
-    if (b.size() < 12) return {};
+    auto raw = content_read_bytes(path);
+    if (raw.size() < 12) return {};
+    std::vector<unsigned char> b(raw.begin(), raw.end());
     auto ru16 = [&](size_t o) -> int {
         if (o + 2 > b.size()) return 0;
         return ((int)b[o] << 8) | (int)b[o + 1];
@@ -2814,10 +2850,15 @@ static std::string font_family_for(const std::string& rel) {
         g_fontFamilies[full] = "";
         return {};
     }
-    int n = MultiByteToWideChar(CP_ACP, 0, full.c_str(), -1, nullptr, 0);
+    std::string loadPath = content_resolve_path(full);
+    if (loadPath.empty()) {
+        g_fontFamilies[full] = "";
+        return {};
+    }
+    int n = MultiByteToWideChar(CP_ACP, 0, loadPath.c_str(), -1, nullptr, 0);
     if (n <= 0) return {};
     std::wstring w((size_t)n, L'\0');
-    MultiByteToWideChar(CP_ACP, 0, full.c_str(), -1, w.data(), n);
+    MultiByteToWideChar(CP_ACP, 0, loadPath.c_str(), -1, w.data(), n);
     if (AddFontResourceExW(w.c_str(), 0x10 /* FR_PRIVATE */, nullptr) == 0) {
         g_fontFamilies[full] = "";
         return {};
@@ -2912,6 +2953,8 @@ extern "C" int engine_music_play(const char* path, int loop) {
             return 0;
         }
     }
+    resolved = content_resolve_path(resolved);
+    if (resolved.empty()) return 0;
 
     music_apply_volume();
 
@@ -3930,8 +3973,9 @@ int hitbox_cells(int acc) {
 /* Vertices in the same centered unit space the 3D view uses for a model. */
 bool model_local(const Entity& e, std::vector<float>& xyz, std::vector<int>& tris) {
     if (e.model.empty()) return false;
-    std::ifstream f(asset_resolve(e.model));
-    if (!f) return false;
+    auto bytes = content_read_bytes(asset_resolve(e.model));
+    if (bytes.empty()) return false;
+    std::istringstream f(std::string(bytes.begin(), bytes.end()));
     std::vector<float> raw;
     std::string line;
     while (std::getline(f, line)) {
@@ -5237,8 +5281,15 @@ extern "C" int engine_scene_save(const char* path) {
 
 extern "C" int engine_scene_load(const char* path) {
     if (!path) return 0;
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return 0;
+    std::error_code ec;
+    if (!fs::exists(path, ec)) return 0;
+    auto bytes = content_read_bytes(path);
+    if (bytes.empty()) {
+        auto raw = content_crypt::read_raw(path);
+        if (content_crypt::looks_encrypted(raw)) return 0;
+    }
+    std::string text(bytes.begin(), bytes.end());
+    std::istringstream f(text);
     engine_tilemap_destroy();
     engine_entity_clear_all();
     /* reset scene gravity to the default; a GRAVITY line overrides it */
@@ -6167,7 +6218,9 @@ extern "C" int engine_dll_load(const char* path) {
            to force a fresh LoadLibraryA. */
         return it->second;
     }
-    HMODULE m = LoadLibraryA(path);
+    std::string loadPath = content_resolve_path(path);
+    if (loadPath.empty()) return 0;
+    HMODULE m = LoadLibraryA(loadPath.c_str());
     if (!m) return 0;
     int handle = g.nextDllHandle++;
     g.dlls[handle] = m;
@@ -6197,6 +6250,15 @@ extern "C" void engine_dll_unload(int handle) {
         if (p->second == handle) p = g.dllByPath.erase(p);
         else                     ++p;
     }
+}
+
+extern "C" int engine_dll_unload_path(const char* path) {
+    if (!path || !path[0]) return 0;
+    std::string norm = normalize_path(path);
+    auto it = g.dllByPath.find(norm);
+    if (it == g.dllByPath.end()) return 0;
+    engine_dll_unload(it->second);
+    return 1;
 }
 
 extern "C" void engine_dll_unload_all() {
@@ -6347,11 +6409,55 @@ static std::string ext_sanitize_id(const std::string& s) {
     return out;
 }
 
+static std::string ext_json_escape(const std::string& s) {
+    std::string o;
+    o.reserve(s.size() + 8);
+    for (unsigned char ch : s) {
+        if (ch == '"' || ch == '\\') { o.push_back('\\'); o.push_back((char)ch); }
+        else if (ch == '\n') o += "\\n";
+        else if (ch == '\r') o += "\\r";
+        else if (ch == '\t') o += "\\t";
+        else if (ch < 0x20) continue;
+        else o.push_back((char)ch);
+    }
+    return o;
+}
+
+static int ext_detect_lang(const std::string& dir, std::string& sourceOut) {
+    std::error_code ec;
+    if (fs::exists(ext_join(dir, "ext.nxa"), ec)) { sourceOut = "ext.nxa"; return 0; }
+    if (fs::exists(ext_join(dir, "ext.cpp"), ec)) { sourceOut = "ext.cpp"; return 1; }
+    for (auto& fent : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!fent.is_regular_file()) continue;
+        auto ext = fent.path().extension().string();
+        for (char& c : ext) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (ext == ".nxa") { sourceOut = fent.path().filename().string(); return 0; }
+        if (ext == ".cpp") { sourceOut = fent.path().filename().string(); return 1; }
+    }
+    sourceOut.clear();
+    return -1;
+}
+
+static std::string ext_detect_blueprint(const std::string& dir) {
+    std::error_code ec;
+    if (fs::exists(ext_join(dir, "ext.ebp"), ec)) return "ext.ebp";
+    for (auto& fent : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!fent.is_regular_file()) continue;
+        auto ext = fent.path().extension().string();
+        for (char& c : ext) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (ext == ".ebp") return fent.path().filename().string();
+    }
+    return "";
+}
+
 static void ext_load_cfg_into(std::unordered_map<std::string, std::pair<int, int>>& cfg) {
     cfg.clear();
     if (!g.projLoaded) return;
-    std::ifstream f(ext_join(g.projRoot, "extensions.cfg"), std::ios::binary);
-    if (!f) return;
+    auto bytes = content_read_bytes(ext_join(g.projRoot, "extensions.cfg"));
+    if (bytes.empty()) return;
+    std::istringstream f(std::string(bytes.begin(), bytes.end()));
     std::string line;
     while (std::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -6401,11 +6507,18 @@ extern "C" void engine_ext_rescan() {
             std::string jv = ext_json_str(body, "version");
             std::string jd = ext_json_str(body, "dll");
             std::string jdesc = ext_json_str(body, "description");
+            std::string jlang = ext_json_str(body, "language");
+            std::string jsrc = ext_json_str(body, "source");
+            std::string jbp = ext_json_str(body, "blueprint");
             if (!jid.empty()) info.id = ext_sanitize_id(jid);
             if (!jn.empty()) info.name = jn;
             if (!jv.empty()) info.version = jv;
             if (!jd.empty()) info.dllName = jd;
             if (!jdesc.empty()) info.desc = jdesc;
+            if (!jsrc.empty()) info.source = jsrc;
+            if (!jbp.empty()) info.blueprint = jbp;
+            if (jlang == "nexa" || jlang == "nxa") info.lang = 0;
+            else if (jlang == "cpp" || jlang == "c++" || jlang == "cxx") info.lang = 1;
         }
         auto cit = cfg.find(info.id);
         if (cit != cfg.end()) {
@@ -6426,6 +6539,13 @@ extern "C" void engine_ext_rescan() {
                 }
             }
         }
+        if (info.lang < 0 || info.source.empty()) {
+            std::string detectedSrc;
+            int detected = ext_detect_lang(dir, detectedSrc);
+            if (info.lang < 0) info.lang = detected;
+            if (info.source.empty()) info.source = detectedSrc;
+        }
+        if (info.blueprint.empty()) info.blueprint = ext_detect_blueprint(dir);
         g.exts.push_back(info);
     }
 }
@@ -6504,6 +6624,165 @@ extern "C" int engine_ext_install_dll(const char* dll_path) {
     return 1;
 }
 
+extern "C" int engine_ext_create(const char* id_in, const char* name_in, const char* version_in,
+                                 const char* description_in, int lang, int full_permission) {
+    if (!g.projLoaded) {
+        engine_log("[ext] create failed: no project open");
+        return 0;
+    }
+    std::string id;
+    if (id_in) {
+        for (char ch : std::string(id_in)) {
+            if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')
+                id.push_back(ch);
+            if (id.size() >= 48) break;
+        }
+    }
+    if (id.empty()) {
+        engine_log("[ext] create failed: id is empty");
+        return 0;
+    }
+    std::string name = (name_in && *name_in) ? name_in : id;
+    std::string version = (version_in && *version_in) ? version_in : "1.0";
+    std::string desc = description_in ? description_in : "";
+    if (lang != 0 && lang != 1) lang = 0;
+
+    std::string dir = ext_join(ext_join(g.projRoot, "extensions"), id);
+    std::error_code ec;
+    if (fs::exists(dir, ec)) {
+        engine_log(("[ext] create failed: folder already exists: " + dir).c_str());
+        return 0;
+    }
+    fs::create_directories(dir, ec);
+    if (ec) {
+        engine_log(("[ext] create failed: could not make " + dir).c_str());
+        return 0;
+    }
+
+    std::string dllName = id + ".dll";
+    std::string sourceName = (lang == 1) ? "ext.cpp" : "ext.nxa";
+    std::string langName = (lang == 1) ? "cpp" : "nexa";
+
+    {
+        std::ofstream mf(ext_join(dir, "extension.json"), std::ios::binary | std::ios::trunc);
+        if (!mf) {
+            engine_log("[ext] create failed: could not write extension.json");
+            fs::remove_all(dir, ec);
+            return 0;
+        }
+        mf << "{\n";
+        mf << "  \"id\": \"" << ext_json_escape(id) << "\",\n";
+        mf << "  \"name\": \"" << ext_json_escape(name) << "\",\n";
+        mf << "  \"version\": \"" << ext_json_escape(version) << "\",\n";
+        mf << "  \"dll\": \"" << ext_json_escape(dllName) << "\",\n";
+        mf << "  \"description\": \"" << ext_json_escape(desc) << "\",\n";
+        mf << "  \"language\": \"" << langName << "\",\n";
+        mf << "  \"source\": \"" << sourceName << "\"";
+        if (lang == 0) mf << ",\n  \"blueprint\": \"ext.ebp\"\n";
+        else mf << "\n";
+        mf << "}\n";
+    }
+
+    if (lang == 1) {
+        {
+            std::ofstream hf(ext_join(dir, "eyescire_ext.h"), std::ios::binary | std::ios::trunc);
+            if (!hf) {
+                engine_log("[ext] create failed: could not write eyescire_ext.h");
+                fs::remove_all(dir, ec);
+                return 0;
+            }
+            hf << "/* Minimal Eyescire host API for native extensions. */\n";
+            hf << "#pragma once\n";
+            hf << "#ifdef _WIN32\n";
+            hf << "#  define EYESCIRE_API __declspec(dllimport)\n";
+            hf << "#  define EXT_EXPORT extern \"C\" __declspec(dllexport)\n";
+            hf << "#else\n";
+            hf << "#  define EYESCIRE_API\n";
+            hf << "#  define EXT_EXPORT extern \"C\"\n";
+            hf << "#endif\n";
+            hf << "extern \"C\" {\n";
+            hf << "EYESCIRE_API void engine_log(const char* msg);\n";
+            hf << "}\n";
+        }
+        {
+            std::ofstream sf(ext_join(dir, sourceName), std::ios::binary | std::ios::trunc);
+            if (!sf) {
+                engine_log("[ext] create failed: could not write ext.cpp");
+                fs::remove_all(dir, ec);
+                return 0;
+            }
+            sf << "/* Eyescire extension - created by Extension Builder */\n";
+            sf << "#include \"eyescire_ext.h\"\n\n";
+            sf << "EXT_EXPORT void ext_init() {\n";
+            sf << "    engine_log(\"[" << id << "] ext_init\");\n";
+            sf << "}\n\n";
+            sf << "EXT_EXPORT void ext_editor() {\n";
+            sf << "    engine_log(\"[" << id << "] ext_editor\");\n";
+            sf << "}\n\n";
+            sf << "EXT_EXPORT void ext_update() {\n";
+            sf << "}\n\n";
+            sf << "EXT_EXPORT void ext_shutdown() {\n";
+            sf << "    engine_log(\"[" << id << "] ext_shutdown\");\n";
+            sf << "}\n";
+        }
+    } else {
+        /* Nexa extensions use a Visual Blueprint (ext.ebp) that generates ext.nxa. */
+        if (engine_bp_create_extension(dir.c_str()) == 0) {
+            engine_log("[ext] create failed: could not scaffold blueprint");
+            fs::remove_all(dir, ec);
+            return 0;
+        }
+    }
+
+    /* Seed cfg so rescan picks Full / enabled for local builds. */
+    {
+        std::unordered_map<std::string, std::pair<int, int>> cfg;
+        ext_load_cfg_into(cfg);
+        cfg[id] = { 1, full_permission ? 1 : 0 };
+        std::ofstream f(ext_join(g.projRoot, "extensions.cfg"), std::ios::binary | std::ios::trunc);
+        if (f) {
+            f << "# Eyescire extensions.cfg - EXT <id> <enabled 0/1> <full 0/1>\n";
+            for (const auto& kv : cfg) {
+                f << "EXT " << kv.first << " " << kv.second.first << " " << kv.second.second << "\n";
+            }
+        }
+    }
+
+    engine_ext_rescan();
+    engine_log(("[ext] created " + id + " (" + langName + ", " +
+                (full_permission ? "full" : "sandboxed") + ")").c_str());
+    return 1;
+}
+
+extern "C" const char* engine_ext_folder(int i) {
+    g.extTmp.clear();
+    if (i < 0 || i >= (int)g.exts.size() || !g.projLoaded) return "";
+    g.extTmp = ext_join(ext_join(g.projRoot, "extensions"), g.exts[i].id);
+    return g.extTmp.c_str();
+}
+
+extern "C" const char* engine_ext_source(int i) {
+    g.extTmp.clear();
+    if (i < 0 || i >= (int)g.exts.size() || !g.projLoaded) return "";
+    if (g.exts[i].source.empty()) return "";
+    g.extTmp = ext_join(ext_join(ext_join(g.projRoot, "extensions"), g.exts[i].id), g.exts[i].source);
+    return g.extTmp.c_str();
+}
+
+extern "C" const char* engine_ext_blueprint(int i) {
+    g.extTmp.clear();
+    if (i < 0 || i >= (int)g.exts.size() || !g.projLoaded) return "";
+    if (g.exts[i].blueprint.empty()) return "";
+    g.extTmp = ext_join(ext_join(ext_join(g.projRoot, "extensions"), g.exts[i].id), g.exts[i].blueprint);
+    return g.extTmp.c_str();
+}
+
+extern "C" int engine_ext_lang(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return -1;
+    return g.exts[i].lang;
+}
+
 extern "C" int engine_ext_uninstall(int i) {
     if (!g.projLoaded || i < 0 || i >= (int)g.exts.size()) return 0;
     EngineState::ExtInfo e = g.exts[i];
@@ -6530,6 +6809,36 @@ extern "C" void engine_ext_unload_all() {
         e.handle = 0;
         engine_dll_unload(h);
     }
+}
+
+extern "C" void engine_ext_prepare_rebuild(const char* dll_path) {
+    engine_ext_unload_all();
+    if (dll_path && dll_path[0]) engine_dll_unload_path(dll_path);
+    /* Give Windows a moment to release the file mapping before the linker overwrites it. */
+    Sleep(80);
+}
+
+extern "C" int engine_fs_replace_file(const char* src, const char* dst) {
+    if (!src || !dst || !src[0] || !dst[0]) return 0;
+    if (ext_sandboxed_active() && !ext_path_in_project(dst)) {
+        ext_block("engine_fs_replace_file outside project");
+        return 0;
+    }
+    std::error_code ec;
+    for (int attempt = 0; attempt < 12; ++attempt) {
+        ec.clear();
+        if (fs::exists(dst, ec)) fs::remove(dst, ec);
+        ec.clear();
+        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            ec.clear();
+            fs::remove(src, ec);
+            return 1;
+        }
+        Sleep(40);
+    }
+    engine_log(("[fs] replace failed: " + std::string(dst) + " (" + ec.message() + ")").c_str());
+    return 0;
 }
 
 extern "C" void engine_ext_load_enabled(int editor_host) {
@@ -6718,11 +7027,12 @@ extern "C" const char* engine_project_path_join(const char* a, const char* b) {
 
 static const char* kPrefKey[] = {
     "grid", "show_grid", "snap", "autosave", "renderer",
-    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "vsync", "hd", "aa", "shadows",
+    "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "export_open_folder", "export_protect",
+    "vsync", "hd", "aa", "shadows",
     "fog", "fog_r", "fog_g", "fog_b", "fog_dist"
 };
-static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 0, 1, 1, 0, 168, 186, 206, 4800 };
-static const int kPrefCount = 20;
+static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 1, 1, 0, 1, 1, 0, 168, 186, 206, 4800 };
+static const int kPrefCount = 22;
 
 static int pref_clamp_key(const std::string& key, int v) {
     if (key == "grid") {
@@ -6735,7 +7045,12 @@ static int pref_clamp_key(const std::string& key, int v) {
         }
         return best;
     }
-    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows" || key == "fog")
+    if (key == "export_protect") {
+        if (v < 0) return 0;
+        if (v > 3) return 3;
+        return v;
+    }
+    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "export_open_folder" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows" || key == "fog")
         return v != 0 ? 1 : 0;
     if (key == "fog_r" || key == "fog_g" || key == "fog_b") {
         if (v < 0) return 0;
@@ -6799,31 +7114,76 @@ static void pref_write() {
     }
 }
 
+static void pref_load_file(const std::string& path) {
+    auto bytes = content_read_bytes(path);
+    if (bytes.empty()) return;
+    std::istringstream f(std::string(bytes.begin(), bytes.end()));
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        auto eq = line.find('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        std::string key = line.substr(0, eq);
+        int known = 0;
+        for (int i = 0; i < kPrefCount; ++i) if (key == kPrefKey[i]) known = 1;
+        if (!known) continue;
+        int v = 0;
+        try { v = std::stoi(line.substr(eq + 1)); } catch (...) { continue; }
+        g.prefs[key] = pref_clamp_key(key, v);
+    }
+}
+
 static void pref_load() {
     g.prefs.clear();
     if (!g.projLoaded) return;
-    std::ifstream f(proj_join(g.projRoot, "editor.cfg"), std::ios::binary);
-    std::string line;
-    if (f) {
-        while (std::getline(f, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            auto eq = line.find('=');
-            if (eq == std::string::npos || eq == 0) continue;
-            std::string key = line.substr(0, eq);
-            int known = 0;
-            for (int i = 0; i < kPrefCount; ++i) if (key == kPrefKey[i]) known = 1;
-            if (!known) continue;
-            int v = 0;
-            try { v = std::stoi(line.substr(eq + 1)); } catch (...) { continue; }
-            g.prefs[key] = pref_clamp_key(key, v);
-        }
-    }
+    /* Exported games ship game.cfg (runtime prefs only). Editor projects use editor.cfg. */
+    std::string gameCfg = proj_join(g.projRoot, "game.cfg");
+    std::string editorCfg = proj_join(g.projRoot, "editor.cfg");
+    if (fs::exists(gameCfg)) pref_load_file(gameCfg);
+    else pref_load_file(editorCfg);
     for (int i = 0; i < kPrefCount; ++i) {
         int v = kPrefDef[i];
         auto it = g.prefs.find(kPrefKey[i]);
         if (it != g.prefs.end()) v = it->second;
         pref_apply_key(kPrefKey[i], v);
     }
+}
+
+/* Runtime-only prefs for player builds — no editor/export knobs. */
+static const char* kGamePrefKey[] = {
+    "music", "sfx", "play_w", "play_h", "fullscreen",
+    "vsync", "hd", "aa", "shadows", "renderer",
+    "fog", "fog_r", "fog_g", "fog_b", "fog_dist"
+};
+static const int kGamePrefCount = 15;
+
+extern "C" int engine_content_ship_game_cfg(const char* dst, int encrypt) {
+    if (!dst || !dst[0] || !g.projLoaded) return 0;
+    std::string body = "EYESCIRE_GAME 1\n";
+    for (int i = 0; i < kGamePrefCount; ++i) {
+        const char* key = kGamePrefKey[i];
+        int def = 0;
+        for (int j = 0; j < kPrefCount; ++j) {
+            if (std::strcmp(kPrefKey[j], key) == 0) { def = kPrefDef[j]; break; }
+        }
+        int v = def;
+        auto it = g.prefs.find(key);
+        if (it != g.prefs.end()) v = it->second;
+        body += std::string(key) + "=" + std::to_string(v) + "\n";
+    }
+    char tmpDir[MAX_PATH];
+    DWORD n = GetTempPathA(MAX_PATH, tmpDir);
+    if (n == 0 || n >= MAX_PATH) return 0;
+    char tmpName[MAX_PATH];
+    if (GetTempFileNameA(tmpDir, "cfg", 0, tmpName) == 0) return 0;
+    {
+        std::ofstream o(tmpName, std::ios::binary | std::ios::trunc);
+        if (!o) { DeleteFileA(tmpName); return 0; }
+        o.write(body.data(), (std::streamsize)body.size());
+    }
+    int ok = engine_content_ship_file(tmpName, dst, encrypt);
+    DeleteFileA(tmpName);
+    return ok;
 }
 
 extern "C" int engine_pref_int(const char* key, int def) {
@@ -6859,8 +7219,19 @@ extern "C" int engine_project_open(const char* path) {
     else    g.projRoot = abs.string();
     g.projManifest = proj_join(g.projRoot, "project.eye");
     if (!fs::exists(g.projManifest)) return 0;
-    std::ifstream f(g.projManifest);
-    if (!f) return 0;
+    /* Key lives in the running .exe for encrypted exports (no loose .key file).
+       Fall back to legacy content.key for older builds. */
+    if (engine_content_key_load_self() != 1) {
+        std::string keyPath = proj_join(g.projRoot, "content.key");
+        if (fs::exists(keyPath)) engine_content_key_load(keyPath.c_str());
+        else engine_content_key_clear();
+    }
+    auto manifestBytes = content_read_bytes(g.projManifest);
+    if (manifestBytes.empty()) {
+        auto raw = content_crypt::read_raw(g.projManifest);
+        if (content_crypt::looks_encrypted(raw)) return 0;
+    }
+    std::istringstream f(std::string(manifestBytes.begin(), manifestBytes.end()));
     g.projScenes.clear();
     g.projPrefabs.clear();
     g.projName = "Untitled";
@@ -6985,8 +7356,9 @@ static void splash_reset() {
 static void splash_load() {
     splash_reset();
     if (!g.projLoaded) return;
-    std::ifstream f(proj_join(g.projRoot, "splash.cfg"), std::ios::binary);
-    if (!f) return;
+    auto bytes = content_read_bytes(proj_join(g.projRoot, "splash.cfg"));
+    if (bytes.empty()) return;
+    std::istringstream f(std::string(bytes.begin(), bytes.end()));
     std::string line;
     bool header = false;
     while (std::getline(f, line)) {
@@ -7632,8 +8004,9 @@ extern "C" int engine_project_save_prefab(const char* name, int slot) {
 extern "C" int engine_project_spawn_prefab(int i, int x, int y) {
     if (i < 0 || i >= (int)g.projPrefabs.size()) return -1;
     std::string full = proj_join(proj_join(g.projRoot, "prefabs"), g.projPrefabs[i]);
-    std::ifstream f(full, std::ios::binary);
-    if (!f) return -1;
+    auto bytes = content_read_bytes(full);
+    if (bytes.empty()) return -1;
+    std::istringstream f(std::string(bytes.begin(), bytes.end()));
     std::string line;
     while (std::getline(f, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -8009,7 +8382,6 @@ extern "C" int engine_export_used_count() {
     export_add_tree(root / "assets", "assets/");
     export_add_tree(root / "prefabs", "prefabs/");
     export_add_tree(root / "bin", "bin/");
-    export_add_abs(root / "editor.cfg", "editor.cfg");
     export_add_abs(root / "splash.cfg", "splash.cfg");
 
     std::unordered_set<std::string> seenNeedle;
@@ -8063,7 +8435,6 @@ extern "C" int engine_export_used_count() {
         }
         break;
     }
-    export_enqueue_rel("editor.cfg");
 
     int kept[4] = { 0, 0, 0, 0 };
     int left[4] = { 0, 0, 0, 0 };
@@ -9166,32 +9537,40 @@ extern "C" int engine_tilemap_save(const char* path) {
 
 extern "C" int engine_tilemap_load(const char* path) {
     if (!path) return 0;
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return 0;
-    std::string line;
+    auto bytes = content_read_bytes(path);
+    if (bytes.empty()) return 0;
+    /* Header is text; cell payload after the DATA line is raw bytes. */
+    size_t dataOff = std::string::npos;
     int w = 0, h = 0, ts = 16;
     int header_ok = 0;
-    while (std::getline(f, line)) {
+    size_t lineStart = 0;
+    for (size_t i = 0; i <= bytes.size(); ++i) {
+        if (i < bytes.size() && bytes[i] != '\n') continue;
+        std::string line((const char*)bytes.data() + lineStart, i - lineStart);
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.rfind("EYESCIRE_TILEMAP", 0) == 0) { header_ok = 1; continue; }
+        size_t next = i + 1;
+        if (line.rfind("EYESCIRE_TILEMAP", 0) == 0) { header_ok = 1; lineStart = next; continue; }
         if (line.rfind("SIZE ", 0) == 0) {
             std::istringstream ss(line.substr(5));
             ss >> w >> h >> ts;
+            lineStart = next;
             continue;
         }
         if (line.rfind("SKY ", 0) == 0) {
             std::istringstream ss(line.substr(4));
             ss >> g_tiles.skyR >> g_tiles.skyG >> g_tiles.skyB;
+            lineStart = next;
             continue;
         }
-        if (line.rfind("DATA", 0) == 0) break;
+        if (line.rfind("DATA", 0) == 0) { dataOff = next; break; }
         break;
     }
-    if (!header_ok || w <= 0 || h <= 0) return 0;
+    if (!header_ok || w <= 0 || h <= 0 || dataOff == std::string::npos) return 0;
     engine_tilemap_create(w, h, ts);
-    f.read(reinterpret_cast<char*>(g_tiles.cells.data()),
-           (std::streamsize)g_tiles.cells.size());
-    return f ? 1 : 0;
+    size_t need = g_tiles.cells.size();
+    if (dataOff + need > bytes.size()) return 0;
+    std::memcpy(g_tiles.cells.data(), bytes.data() + dataOff, need);
+    return 1;
 }
 
 /* ============================================================ */

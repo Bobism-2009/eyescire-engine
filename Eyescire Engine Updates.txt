@@ -26,7 +26,7 @@ Debatable- but an option for something to scan your project and optimize it.
 
 ✔ Support to either make a custom textured skybox, or a pre-engine included skybox.
 
-When building you should have an option to encrypt the data that is being shipped (like the scene files)
+✔ When building you should have an option to encrypt the data that is being shipped (like the scene files)
 
 Add a way to allow AI models to connect to Eyescire Engine and use it like any normal user.
 
@@ -58,7 +58,7 @@ More shapes for 3D.
 
 More pre-made templates, like a full pre-built 3D character controller with a small game platformer, a shooter with a 3D player, a 2D game demo- Etc.
 
-An Eyescire Extension builder that allows you to easily create extensions.
+✔ An Eyescire Extension builder that allows you to easily create extensions.
 
 Option to either export your game builds with the .scene files (Un-encrypted or encrypted) Or without and all of that data is packed into DLL's loaded by the engine.
 

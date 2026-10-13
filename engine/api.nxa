@@ -420,6 +420,23 @@ extern "C" int        engine_fs_copy_file(const char*, const char*);
 extern "C" int        engine_fs_copy_tree(const char*, const char*);
 extern "C" int        engine_fs_remove_tree(const char*);
 extern "C" int        engine_fs_remove_file(const char*);
+extern "C" int        engine_fs_replace_file(const char*, const char*);
+
+extern "C" void       engine_content_key_clear();
+extern "C" int        engine_content_key_loaded();
+extern "C" int        engine_content_key_load(const char*);
+extern "C" int        engine_content_key_generate();
+extern "C" int        engine_content_key_create(const char*);
+extern "C" void       engine_content_set_protect(int);
+extern "C" int        engine_content_embed_key(const char*);
+extern "C" int        engine_content_embed_key_ex(const char*, const char*);
+extern "C" int        engine_content_key_load_self();
+extern "C" int        engine_content_should_encrypt(const char*);
+extern "C" int        engine_content_encrypt_file(const char*, const char*);
+extern "C" int        engine_content_ship_file(const char*, const char*, int);
+extern "C" int        engine_content_ship_tree(const char*, const char*, int);
+extern "C" int        engine_content_ship_extensions(const char*, const char*, int);
+extern "C" int        engine_content_ship_game_cfg(const char*, int);
 
 extern "C" int        engine_run_command(const char*);
 extern "C" const char* engine_last_command_output();
@@ -433,6 +450,7 @@ extern "C" int    engine_dll_load(const char*);
 extern "C" int    engine_dll_reload(const char*);
 extern "C" void   engine_dll_unload(int);
 extern "C" void   engine_dll_unload_all();
+extern "C" int    engine_dll_unload_path(const char*);
 extern "C" int    engine_dll_call(int, const char*);
 extern "C" int    engine_dll_call_sig(int, const char*, const char*);
 extern "C" void   engine_ext_mark(int, int);
@@ -453,9 +471,15 @@ extern "C" void   engine_ext_set_full(int, int);
 extern "C" void   engine_ext_save_cfg();
 extern "C" int    engine_ext_install_dll(const char*);
 extern "C" int    engine_ext_uninstall(int);
+extern "C" int    engine_ext_create(const char*, const char*, const char*, const char*, int, int);
+extern "C" const char* engine_ext_folder(int);
+extern "C" const char* engine_ext_source(int);
+extern "C" const char* engine_ext_blueprint(int);
+extern "C" int    engine_ext_lang(int);
 extern "C" void   engine_ext_load_enabled(int);
 extern "C" void   engine_ext_update_all();
 extern "C" void   engine_ext_unload_all();
+extern "C" void   engine_ext_prepare_rebuild(const char*);
 
 extern "C" int         engine_te_load(const char*);
 extern "C" int         engine_te_save();
@@ -531,6 +555,8 @@ extern "C" const char* engine_project_blueprint_name(int);
 extern "C" const char* engine_project_blueprint_path(int);
 extern "C" const char* engine_project_blueprint_script(int);
 extern "C" int         engine_bp_create(const char*);
+extern "C" int         engine_bp_create_extension(const char*);
+extern "C" int         engine_bp_translate_file(const char*, int);
 extern "C" int         engine_bp_open(const char*);
 extern "C" void        engine_bp_close();
 extern "C" int         engine_bp_is_open();
@@ -1625,6 +1651,57 @@ fn eng_fs_copy_tree(src: string, dst: string): int {
     inline_cpp! { r = engine_fs_copy_tree(src.c_str(), dst.c_str()); }
     return r;
 }
+fn eng_content_key_clear() {
+    inline_cpp! { engine_content_key_clear(); }
+}
+fn eng_content_key_loaded(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_key_loaded(); }
+    return r;
+}
+fn eng_content_key_load(path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_key_load(path.c_str()); }
+    return r;
+}
+fn eng_content_key_generate(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_key_generate(); }
+    return r;
+}
+fn eng_content_set_protect(level: int) {
+    inline_cpp! { engine_content_set_protect(level); }
+}
+fn eng_content_embed_key(exe_path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_embed_key(exe_path.c_str()); }
+    return r;
+}
+fn eng_content_embed_key_ex(exe_path: string, dll_path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_embed_key_ex(exe_path.c_str(), dll_path.c_str()); }
+    return r;
+}
+fn eng_content_ship_file(src: string, dst: string, encrypt: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_ship_file(src.c_str(), dst.c_str(), encrypt); }
+    return r;
+}
+fn eng_content_ship_tree(src: string, dst: string, encrypt: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_ship_tree(src.c_str(), dst.c_str(), encrypt); }
+    return r;
+}
+fn eng_content_ship_extensions(src: string, dst: string, encrypt: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_ship_extensions(src.c_str(), dst.c_str(), encrypt); }
+    return r;
+}
+fn eng_content_ship_game_cfg(dst: string, encrypt: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_content_ship_game_cfg(dst.c_str(), encrypt); }
+    return r;
+}
 fn eng_fs_remove_tree(path: string): int {
     let r: int = 0;
     inline_cpp! { r = engine_fs_remove_tree(path.c_str()); }
@@ -1633,6 +1710,11 @@ fn eng_fs_remove_tree(path: string): int {
 fn eng_fs_remove_file(path: string): int {
     let r: int = 0;
     inline_cpp! { r = engine_fs_remove_file(path.c_str()); }
+    return r;
+}
+fn eng_fs_replace_file(src: string, dst: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_fs_replace_file(src.c_str(), dst.c_str()); }
     return r;
 }
 
@@ -1650,6 +1732,11 @@ fn eng_dll_reload(path: string): int {
 }
 fn eng_dll_unload(handle: int) { inline_cpp! { engine_dll_unload(handle); } }
 fn eng_dll_unload_all() { inline_cpp! { engine_dll_unload_all(); } }
+fn eng_dll_unload_path(path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_dll_unload_path(path.c_str()); }
+    return r;
+}
 fn eng_dll_call(handle: int, sym: string): int {
     let r: int = 0;
     inline_cpp! { r = engine_dll_call(handle, sym.c_str()); }
@@ -1731,9 +1818,35 @@ fn eng_ext_uninstall(i: int): int {
     inline_cpp! { r = engine_ext_uninstall(i); }
     return r;
 }
+fn eng_ext_create(id: string, name: string, version: string, description: string, lang: int, full_permission: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_create(id.c_str(), name.c_str(), version.c_str(), description.c_str(), lang, full_permission); }
+    return r;
+}
+fn eng_ext_folder(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_ext_folder(i); }
+    return s;
+}
+fn eng_ext_source(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_ext_source(i); }
+    return s;
+}
+fn eng_ext_blueprint(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_ext_blueprint(i); }
+    return s;
+}
+fn eng_ext_lang(i: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_lang(i); }
+    return r;
+}
 fn eng_ext_load_enabled(editor_host: int) { inline_cpp! { engine_ext_load_enabled(editor_host); } }
 fn eng_ext_update_all() { inline_cpp! { engine_ext_update_all(); } }
 fn eng_ext_unload_all() { inline_cpp! { engine_ext_unload_all(); } }
+fn eng_ext_prepare_rebuild(dll_path: string) { inline_cpp! { engine_ext_prepare_rebuild(dll_path.c_str()); } }
 
 // ----- text editor ----------------------------------------------------------
 
@@ -1909,6 +2022,16 @@ fn proj_bp_script(i: int): string {
 fn bp_create(name: string): int {
     let r: int = 0;
     inline_cpp! { r = engine_bp_create(name.c_str()); }
+    return r;
+}
+fn bp_create_extension(folder: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_bp_create_extension(folder.c_str()); }
+    return r;
+}
+fn bp_translate_file(path: string, force: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_bp_translate_file(path.c_str(), force); }
     return r;
 }
 fn bp_open(path: string): int {

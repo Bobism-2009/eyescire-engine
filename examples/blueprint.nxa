@@ -38,6 +38,13 @@ let bp_menu_bw: int = 0;
 let bp_menu_bh: int = 0;
 let bp_tab_scroll: int = 0;
 let bp_var_edit: int = -1;
+/* When set, the graph draws inside a host rect (Extension Develop) instead of the viewport. */
+let bp_host_on: int = 0;
+let bp_host_x: int = 0;
+let bp_host_y: int = 0;
+let bp_host_w: int = 0;
+let bp_host_h: int = 0;
+let bp_host_want_save: int = 0; /* host (Extension Develop) should save+rebuild */
 
 let BP_NW: int = 220;
 let BP_HDR: int = 32;
@@ -172,25 +179,42 @@ fn bp_tab_close() {
     te_clear();
 }
 
+fn bp_set_host(x: int, y: int, w: int, h: int) {
+    bp_host_on = 1;
+    bp_host_x = x;
+    bp_host_y = y;
+    bp_host_w = w;
+    bp_host_h = h;
+}
+
+fn bp_clear_host() {
+    bp_host_on = 0;
+}
+
+fn bp_host_rect(): Rect {
+    if (bp_host_on == 1) return rect(bp_host_x, bp_host_y, bp_host_w, bp_host_h);
+    return viewport_rect();
+}
+
 fn bp_strip(): Rect {
-    let r: Rect = viewport_rect();
+    let r: Rect = bp_host_rect();
     return rect(r.x, r.y, r.w, 32);
 }
 
 fn bp_tabs(): Rect {
-    let r: Rect = viewport_rect();
+    let r: Rect = bp_host_rect();
     return rect(r.x, r.y + 32, r.w, 28);
 }
 
 fn bp_props(): Rect {
-    let r: Rect = viewport_rect();
+    let r: Rect = bp_host_rect();
     let h: int = r.h - 60;
     if (h < 20) h = 20;
     return rect(r.x + r.w - BP_PROP, r.y + 60, BP_PROP, h);
 }
 
 fn bp_canvas(): Rect {
-    let r: Rect = viewport_rect();
+    let r: Rect = bp_host_rect();
     let w: int = r.w;
     if (w < 20) w = 20;
     let h: int = r.h - 60;
@@ -674,8 +698,10 @@ fn bp_editor_input() {
     }
     if (edit_target.len() == 0 && (key_pressed(VK_DELETE) || key_pressed(VK_BACK))) bp_delete_selected();
     if (ctrl_held() && key_pressed(VK_S)) {
-        if (bp_save() == 1) eng_log("[blueprint] saved " + path_basename(bp_path()));
-        else eng_log("[blueprint] save failed");
+        if (bp_save() == 1) {
+            eng_log("[blueprint] saved " + path_basename(bp_path()));
+            if (bp_host_on == 1) bp_host_want_save = 1;
+        } else eng_log("[blueprint] save failed");
     }
 
     let tab_hit: int = 0;
@@ -2043,7 +2069,7 @@ fn bp_menu_list_count(): int {
 
 fn bp_draw_add_menu() {
     if (bp_menu_open == 0) return;
-    let view: Rect = viewport_rect();
+    let view: Rect = bp_host_rect();
     let mw: int = 240;
     let row_h: int = 28;
     th_font(14);
@@ -2133,7 +2159,7 @@ fn bp_draw_add_menu() {
 
 fn bp_editor_draw() {
     if (bp_is_open() == 0) return;
-    let r: Rect = viewport_rect();
+    let r: Rect = bp_host_rect();
     draw_fill_rect(r, col_bg_deep());
 
     let strip: Rect = bp_strip();
@@ -2148,11 +2174,16 @@ fn bp_editor_draw() {
     }
     th_font(14);
     let bx: int = r.x + r.w - 190;
+    if (bp_host_on == 1) bx = r.x + r.w - 96;
     if (ui_pill(rect(bx, r.y + 3, 80, strip.h - 6), "Save", 0) == 1) {
-        if (bp_save() == 1) eng_log("[blueprint] saved " + path_basename(bp_path()));
-        else eng_log("[blueprint] save failed");
+        if (bp_save() == 1) {
+            eng_log("[blueprint] saved " + path_basename(bp_path()));
+            if (bp_host_on == 1) bp_host_want_save = 1;
+        } else eng_log("[blueprint] save failed");
     }
-    if (ui_pill(rect(bx + 86, r.y + 3, 96, strip.h - 6), "Build", 1) == 1) compile_begin("idle");
+    if (bp_host_on == 0) {
+        if (ui_pill(rect(bx + 86, r.y + 3, 96, strip.h - 6), "Build", 1) == 1) compile_begin("idle");
+    }
     th_font(14);
     let zlabel: string = "" + bp_zoom + "%";
     draw_text(bx - eng_text_width(zlabel) - 16, th_text_y(strip.y, strip.h), zlabel, col_text_dim());

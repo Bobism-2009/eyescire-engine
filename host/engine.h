@@ -429,6 +429,29 @@ EYESCIRE_API int engine_fs_copy_file(const char* src, const char* dst);
 EYESCIRE_API int engine_fs_copy_tree(const char* src, const char* dst);
 EYESCIRE_API int engine_fs_remove_tree(const char* path);
 EYESCIRE_API int engine_fs_remove_file(const char* path);
+/* Copy src over dst with short retries (for replacing a just-unloaded DLL). */
+EYESCIRE_API int engine_fs_replace_file(const char* src, const char* dst);
+
+/* Shipped content encryption (ChaCha20). The random key is generated at export
+   and embedded in the game .exe (no loose .key file). ship_* encrypts
+   project.eye / scenes / prefabs / assets / script+extension DLLs when
+   encrypt!=0 and a key is loaded; otherwise plain copy. */
+EYESCIRE_API void engine_content_key_clear();
+EYESCIRE_API int  engine_content_key_loaded();
+EYESCIRE_API int  engine_content_key_load(const char* path);
+EYESCIRE_API int  engine_content_key_generate();
+EYESCIRE_API int  engine_content_key_create(const char* path); /* legacy file; prefer generate+embed */
+EYESCIRE_API void engine_content_set_protect(int level); /* 0 off, 1 standard, 2 strong, 3 secure */
+EYESCIRE_API int  engine_content_embed_key(const char* exe_path);
+EYESCIRE_API int  engine_content_embed_key_ex(const char* exe_path, const char* dll_path);
+EYESCIRE_API int  engine_content_key_load_self();
+EYESCIRE_API int  engine_content_should_encrypt(const char* path);
+EYESCIRE_API int  engine_content_encrypt_file(const char* src, const char* dst);
+EYESCIRE_API int  engine_content_ship_file(const char* src, const char* dst, int encrypt);
+EYESCIRE_API int  engine_content_ship_tree(const char* src, const char* dst, int encrypt);
+EYESCIRE_API int  engine_content_ship_extensions(const char* src, const char* dst, int encrypt);
+/* Player-only prefs (no editor/export keys). Written as game.cfg. */
+EYESCIRE_API int  engine_content_ship_game_cfg(const char* dst, int encrypt);
 
 /* ======================================================================== */
 /*  Subprocess (used to invoke NexaC --dll for hot reload)                  */
@@ -452,6 +475,7 @@ EYESCIRE_API int  engine_dll_load(const char* path);     /* idempotent: returns 
 EYESCIRE_API int  engine_dll_reload(const char* path);   /* force unload + reload for hot-reload */
 EYESCIRE_API void engine_dll_unload(int handle);
 EYESCIRE_API void engine_dll_unload_all();               /* releases every loaded script DLL */
+EYESCIRE_API int  engine_dll_unload_path(const char* path); /* unload one path if loaded; 1 if it was */
 EYESCIRE_API int  engine_dll_call(int handle, const char* sym);  /* 1 if symbol called, 0 otherwise */
 EYESCIRE_API int  engine_dll_call_sig(int handle, const char* sym, const char* sig);
 
@@ -478,9 +502,20 @@ EYESCIRE_API void        engine_ext_set_full(int i, int full_permission);
 EYESCIRE_API void        engine_ext_save_cfg();
 EYESCIRE_API int         engine_ext_install_dll(const char* dll_path); /* copy into extensions/<id>/ */
 EYESCIRE_API int         engine_ext_uninstall(int i);                 /* unload + delete extensions/<id>/ */
+/* Scaffold extensions/<id>/ with extension.json + starter source.
+   lang: 0 = Nexa (.nxa), 1 = native C++ (.cpp). full_permission: 1 = Full in extensions.cfg.
+   Returns 1 on success, 0 if no project / bad id / folder already exists. */
+EYESCIRE_API int         engine_ext_create(const char* id, const char* name, const char* version,
+                                          const char* description, int lang, int full_permission);
+EYESCIRE_API const char* engine_ext_folder(int i);   /* absolute path to extensions/<id>/ */
+EYESCIRE_API const char* engine_ext_source(int i); /* absolute path to starter source, or "" */
+EYESCIRE_API const char* engine_ext_blueprint(int i); /* absolute path to ext.ebp if present, or "" */
+EYESCIRE_API int         engine_ext_lang(int i);     /* 0 = nexa, 1 = cpp, -1 unknown */
 EYESCIRE_API void        engine_ext_load_enabled(int editor_host); /* 1 = also call ext_editor */
 EYESCIRE_API void        engine_ext_update_all();
 EYESCIRE_API void        engine_ext_unload_all();
+/* Unload extensions + any handle for dll_path, then brief sleep so the file can be replaced. */
+EYESCIRE_API void        engine_ext_prepare_rebuild(const char* dll_path);
 
 /* ======================================================================== */
 /*  Text editor (single-buffer, line oriented)                              */
@@ -584,6 +619,8 @@ EYESCIRE_API const char* engine_project_blueprint_path(int i);
 EYESCIRE_API const char* engine_project_blueprint_script(int i); /* "mover.nxa" */
 
 EYESCIRE_API int         engine_bp_create(const char* name);
+EYESCIRE_API int         engine_bp_create_extension(const char* folder); /* writes folder/ext.ebp + generated ext.nxa */
+EYESCIRE_API int         engine_bp_translate_file(const char* ebp_path, int force); /* 1 = overwrite even if .nxa was hand-edited */
 EYESCIRE_API int         engine_bp_open(const char* path);
 EYESCIRE_API void        engine_bp_close();
 EYESCIRE_API int         engine_bp_is_open();
