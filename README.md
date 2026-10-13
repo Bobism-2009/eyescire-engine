@@ -1,6 +1,6 @@
 # Eyescire Engine
 
-A Unity/Godot-flavored 2D scene editor + runtime, written in
+A Unity/Godot-flavored 2D and 3D scene editor + runtime, written in
 [Nexa](https://github.com/...). The engine is two layers:
 
 - **`host/host.cpp`** - a tiny Win32 + GDI runtime exposing a flat C ABI
@@ -74,7 +74,7 @@ Then:
 
 ## The editor
 
-A focused 2D scene editor:
+A focused 2D and 3D scene editor:
 
 - **Toolbar** (top): kind cycle (`<>`), `New <kind>`, `Delete`, `Save`,
   `Load`, plus the current scene path
@@ -140,7 +140,7 @@ through `engine.dll` (scene, scripts, physics, input).
 - Scripts can use `ent_z` / `ent_set_z` / `ent_depth` / `ent_set_depth`.
 - Scene files are v8 (`RENDER 3D` plus `|z|depth|model` and the four light
   fields on each entity);
-  older scenes load unchanged. The web export stays 2D.
+  older scenes load unchanged. Web export flattens 3D scenes for now.
 
 ### Hotkeys
 

@@ -1213,7 +1213,7 @@ fn welcome_hero() {
     th_font_semi(24);
     draw_text(lx + 60, ly + 1, "Eyescire", col_text_main());
     th_font(12);
-    draw_text(lx + 61, ly + 30, "2D game engine and editor, built with Nexa", col_text_dim());
+    draw_text(lx + 61, ly + 30, "2D / 3D game engine and editor, built with Nexa", col_text_dim());
 
     th_chip(rect(WIN_W - 28 - 56, ly + 11, 56, 22), "v" + EYESCIRE_VERSION, col_text_dim());
     chrome_hsep(0, 91, WIN_W);
@@ -1545,7 +1545,7 @@ fn welcome_draw_about_panel(cx: int, cy: int, cw: int, ch: int) {
     let yy: int = cy + 80;
     th_font(13);
     let c1: Color = col_text_main();
-    draw_text(cx, yy, "Eyescire is a Nexa-powered 2D game engine and editor.", c1); yy = yy + 22;
+    draw_text(cx, yy, "Eyescire is a Nexa-powered 2D and 3D game engine and editor.", c1); yy = yy + 22;
     yy = yy + 12;
     draw_text(cx, yy, "  - editor.exe is the only program. engine.dll holds all state.",         c1); yy = yy + 22;
     draw_text(cx, yy, "  - .nxa scripts live in scripts/ and compile to bin/<name>.dll on Play.",c1); yy = yy + 22;
@@ -9229,7 +9229,7 @@ fn menu_dropdown_help(rx: int, ry: int) {
     chrome_popup(rect(rx, ry, dw, dh));
     if (menu_item(rx + 2, ry + 4, dw - 4, "About Eyescire 0.1", "") == 1) {
         menu_open = "";
-        eng_log("[help] Eyescire Engine 0.1 - Nexa-powered 2D editor");
+        eng_log("[help] Eyescire Engine 0.1 - Nexa-powered 2D / 3D editor");
     }
 }
 
@@ -10449,7 +10449,7 @@ fn build_web_begin() {
         eng_log("[web] no project open");
         return;
     }
-    if (scene_render3d() == 1) eng_log("[web] note: the web player is 2D; this 3D scene exports flat");
+    if (scene_render3d() == 1) eng_log("[web] note: web export flattens 3D scenes for now");
     save_active_scene();
     bp_prepare_build();
     proj_rescan_scripts();
@@ -10707,7 +10707,7 @@ fn export_draw() {
     y = y + 40;
     if (export_preset == 1 && scene_render3d() == 1) {
         th_font(12);
-        draw_text(x, y, "Web player is 2D; this 3D scene exports flat.", col_text_dim());
+        draw_text(x, y, "Web export flattens 3D scenes for now.", col_text_dim());
         th_font(14);
     }
 
@@ -12119,9 +12119,7 @@ fn edit_frame() {
 
     if (export_open == 1) {
         /* Full-screen export page — no editor chrome or 3D under it. */
-        settings_block_ui = 1;
         export_draw();
-        settings_block_ui = 0;
         tooltip_draw();
     } else {
         if (viewport_mode == "play" && scene_render3d() == 1) play_draw3d();
