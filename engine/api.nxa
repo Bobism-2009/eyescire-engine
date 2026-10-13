@@ -452,6 +452,7 @@ extern "C" void   engine_ext_set_enabled(int, int);
 extern "C" void   engine_ext_set_full(int, int);
 extern "C" void   engine_ext_save_cfg();
 extern "C" int    engine_ext_install_dll(const char*);
+extern "C" int    engine_ext_uninstall(int);
 extern "C" void   engine_ext_load_enabled(int);
 extern "C" void   engine_ext_update_all();
 extern "C" void   engine_ext_unload_all();
@@ -1723,6 +1724,11 @@ fn eng_ext_save_cfg() { inline_cpp! { engine_ext_save_cfg(); } }
 fn eng_ext_install_dll(path: string): int {
     let r: int = 0;
     inline_cpp! { r = engine_ext_install_dll(path.c_str()); }
+    return r;
+}
+fn eng_ext_uninstall(i: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_uninstall(i); }
     return r;
 }
 fn eng_ext_load_enabled(editor_host: int) { inline_cpp! { engine_ext_load_enabled(editor_host); } }

@@ -11843,10 +11843,17 @@ fn settings_page_build(x: int, y: int, w: int) {
 }
 
 fn settings_page_extensions(x: int, y: int, w: int) {
+    th_font_semi(18);
+    draw_text(x, y, "Extensions", col_text_main());
+    th_font(14);
+    y = y + 36;
+
     y = chrome_section(x, y, w, "INSTALL");
+    th_font(12);
     draw_text(x, y, "DLL extensions load with the project. Sandboxed by default until you grant Full.", col_text_dim());
+    th_font(14);
     y = y + 28;
-    if (ui_button(rect(x, y, 200, 28), "Install DLL...") == 1) {
+    if (ui_button(rect(x, y, 200, 32), "Install DLL...") == 1) {
         let chosen: string = eng_open_file_dialog("Install Extension DLL", "Extension DLL (*.dll)|*.dll|All files|*.*", proj_root());
         if (chosen.len() > 0) {
             if (eng_ext_install_dll(chosen) == 1) {
@@ -11857,15 +11864,18 @@ fn settings_page_extensions(x: int, y: int, w: int) {
             }
         }
     }
-    if (ui_button(rect(x + 208, y, 120, 28), "Rescan") == 1) {
+    if (ui_button(rect(x + 208, y, 120, 32), "Rescan") == 1) {
         eng_ext_rescan();
         eng_ext_load_enabled(1);
     }
-    y = y + 44;
+    y = y + 48;
+
     y = chrome_section(x, y, w, "INSTALLED");
     let n: int = eng_ext_count();
     if (n == 0) {
+        th_font(12);
         draw_text(x, y, "No extensions in this project yet.", col_text_dim());
+        th_font(14);
         y = y + 28;
         settings_bottom = y;
         return;
@@ -11875,55 +11885,68 @@ fn settings_page_extensions(x: int, y: int, w: int) {
         let name: string = eng_ext_name(i);
         let ver: string = eng_ext_version(i);
         let id: string = eng_ext_id(i);
-        th_font_semi(13);
+        th_font_semi(14);
         draw_text(x, y, name + "  v" + ver, col_text_main());
-        th_font(11);
-        draw_text(x, y + 18, id, col_text_dim());
         th_font(14);
+        if (ui_button_danger(rect(x + w - 112, y, 112, 28), "Uninstall") == 1) {
+            if (eng_ext_uninstall(i) == 1) {
+                n = eng_ext_count();
+                continue;
+            }
+        }
+        y = y + 24;
+        th_font(12);
+        draw_text(x, y, id, col_text_dim());
+        th_font(14);
+        y = y + 28;
+
         let en: int = eng_ext_enabled(i);
-        let full: int = eng_ext_full(i);
+        draw_text(x, th_text_y(y, 28), "Enabled", col_text_main());
         let koff: string = "secondary";
         let kon: string = "secondary";
         if (en == 1) kon = "primary";
         else koff = "primary";
-        if (ui_button_kind(rect(x + w - 176, y, 80, 28), "Off", koff) == 1 && en == 1) {
+        if (ui_button_kind(rect(x + w - 168, y, 76, 28), "Off", koff) == 1 && en == 1) {
             eng_ext_set_enabled(i, 0);
             eng_ext_load_enabled(1);
         }
-        if (ui_button_kind(rect(x + w - 88, y, 80, 28), "On", kon) == 1 && en == 0) {
+        if (ui_button_kind(rect(x + w - 84, y, 76, 28), "On", kon) == 1 && en == 0) {
             eng_ext_set_enabled(i, 1);
             eng_ext_load_enabled(1);
         }
         y = y + 36;
-        draw_text(x, y + 4, "Permission", col_text_main());
+
+        let full: int = eng_ext_full(i);
+        draw_text(x, th_text_y(y, 28), "Permission", col_text_main());
         let ks: string = "secondary";
         let kf: string = "secondary";
         if (full == 1) kf = "primary";
         else ks = "primary";
-        if (ui_button_kind(rect(x + w - 176, y, 80, 28), "Sandbox", ks) == 1 && full == 1) {
+        if (ui_button_kind(rect(x + w - 168, y, 76, 28), "Sandbox", ks) == 1 && full == 1) {
             eng_ext_set_full(i, 0);
             eng_ext_load_enabled(1);
         }
-        if (ui_button_kind(rect(x + w - 88, y, 80, 28), "Full", kf) == 1 && full == 0) {
+        if (ui_button_kind(rect(x + w - 84, y, 76, 28), "Full", kf) == 1 && full == 0) {
             eng_ext_set_full(i, 1);
             eng_log("[ext] Full permission: " + id + " can use the entire engine API");
             eng_ext_load_enabled(1);
         }
-        y = y + 34;
+        y = y + 36;
+
         let desc: string = eng_ext_desc(i);
         if (desc.len() > 0) {
-            th_font(11);
+            th_font(12);
             draw_text(x, y, desc, col_text_dim());
             th_font(14);
-            y = y + 20;
+            y = y + 22;
         }
         if (full == 1) {
-            th_font(11);
-            draw_text(x, y, "Full trust — this DLL can call any engine API.", col_text_dim());
+            th_font(12);
+            draw_text(x, y, "Full trust - this DLL can call any engine API.", col_text_dim());
             th_font(14);
-            y = y + 20;
+            y = y + 22;
         }
-        y = y + 16;
+        y = y + 20;
         i = i + 1;
     }
     settings_bottom = y;

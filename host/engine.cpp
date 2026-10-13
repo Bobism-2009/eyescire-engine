@@ -6504,6 +6504,24 @@ extern "C" int engine_ext_install_dll(const char* dll_path) {
     return 1;
 }
 
+extern "C" int engine_ext_uninstall(int i) {
+    if (!g.projLoaded || i < 0 || i >= (int)g.exts.size()) return 0;
+    EngineState::ExtInfo e = g.exts[i];
+    if (e.handle != 0) {
+        engine_dll_call(e.handle, "ext_shutdown");
+        int h = e.handle;
+        g.exts[i].handle = 0;
+        engine_dll_unload(h);
+    }
+    std::string dir = ext_join(ext_join(g.projRoot, "extensions"), e.id);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    g.exts.erase(g.exts.begin() + i);
+    engine_ext_save_cfg();
+    engine_log(("[ext] uninstalled " + e.id).c_str());
+    return 1;
+}
+
 extern "C" void engine_ext_unload_all() {
     for (auto& e : g.exts) {
         if (e.handle == 0) continue;

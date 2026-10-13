@@ -477,6 +477,7 @@ EYESCIRE_API void        engine_ext_set_enabled(int i, int enabled);
 EYESCIRE_API void        engine_ext_set_full(int i, int full_permission);
 EYESCIRE_API void        engine_ext_save_cfg();
 EYESCIRE_API int         engine_ext_install_dll(const char* dll_path); /* copy into extensions/<id>/ */
+EYESCIRE_API int         engine_ext_uninstall(int i);                 /* unload + delete extensions/<id>/ */
 EYESCIRE_API void        engine_ext_load_enabled(int editor_host); /* 1 = also call ext_editor */
 EYESCIRE_API void        engine_ext_update_all();
 EYESCIRE_API void        engine_ext_unload_all();
