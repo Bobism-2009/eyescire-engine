@@ -10,6 +10,7 @@ struct Part {
     int tag = -1;
     int soft = 0;
     int dim = 0; /* 1 = 3D billboard, 0 = flat view */
+    int streak = 0; /* 1 = rain streak (tall thin, along fall) */
     int r = 255, g = 255, b = 255, a = 255;
     float x = 0, y = 0, z = 0;
     float vx = 0, vy = 0, vz = 0;
@@ -22,6 +23,7 @@ struct PartDraw {
     int image;
     int r, g, b, a;
     int soft;
+    int streak;
 };
 
 struct PartPix {
@@ -49,28 +51,36 @@ static int part_slot() {
     return -1;
 }
 
-static void part_spawn(int image, int tag, float x, float y, float z, float size, float speed,
-                       float spreadDeg, float life, int r, int g, int b, int a, int soft, int dim) {
+static void part_spawn_vel(int image, int tag, float x, float y, float z, float size,
+                           float vx, float vy, float vz, float life,
+                           int r, int g, int b, int a, int soft, int dim, int streak) {
     int i = part_slot();
     if (i < 0 || image == 0) return;
-    float spread = spreadDeg * 0.0174532925f;
-    if (spread < 0) spread = 0;
-    float el = part_rnd() * spread;
-    float az = part_rnd() * 6.2831853f;
     Part& p = g_part[i];
     p.alive = 1;
     p.image = image;
     p.tag = tag;
     p.soft = soft ? 1 : 0;
     p.dim = dim ? 1 : 0;
+    p.streak = streak ? 1 : 0;
     p.r = r; p.g = g; p.b = b; p.a = a;
     p.x = x; p.y = y; p.z = z;
-    p.vx = std::sin(el) * std::cos(az) * speed;
-    p.vy = -std::cos(el) * speed;
-    p.vz = dim ? std::sin(el) * std::sin(az) * speed : 0;
+    p.vx = vx; p.vy = vy; p.vz = vz;
     p.life = life;
     p.maxLife = life > 0.05f ? life : 0.05f;
     p.size = size;
+}
+
+static void part_spawn(int image, int tag, float x, float y, float z, float size, float speed,
+                       float spreadDeg, float life, int r, int g, int b, int a, int soft, int dim) {
+    float spread = spreadDeg * 0.0174532925f;
+    if (spread < 0) spread = 0;
+    float el = part_rnd() * spread;
+    float az = part_rnd() * 6.2831853f;
+    float vx = std::sin(el) * std::cos(az) * speed;
+    float vy = -std::cos(el) * speed;
+    float vz = dim ? std::sin(el) * std::sin(az) * speed : 0;
+    part_spawn_vel(image, tag, x, y, z, size, vx, vy, vz, life, r, g, b, a, soft, dim, 0);
 }
 
 static const PartPix* part_pixels(int imageId) {
@@ -121,6 +131,7 @@ static int part_collect_3d(PartDraw* out, int cap) {
         d.image = p.image;
         d.r = p.r; d.g = p.g; d.b = p.b; d.a = a;
         d.soft = p.soft;
+        d.streak = p.streak;
     }
     return n;
 }
@@ -161,7 +172,20 @@ static void part_tick() {
         if (!p.alive) continue;
         p.life -= dt;
         if (p.life <= 0) { p.alive = 0; continue; }
-        p.vy += 420.f * dt;
+        /* Snow (tag -3) falls gently and drifts; rain keeps a hard drop. */
+        if (p.tag == -3) {
+            p.vy += 70.f * dt;
+            p.vx += (part_rnd() - 0.5f) * 18.f * dt;
+            p.vz += (part_rnd() - 0.5f) * 18.f * dt;
+            if (p.vx > 40.f) p.vx = 40.f;
+            if (p.vx < -40.f) p.vx = -40.f;
+            if (p.vz > 40.f) p.vz = 40.f;
+            if (p.vz < -40.f) p.vz = -40.f;
+        } else if (p.tag == -2) {
+            p.vy += 520.f * dt;
+        } else {
+            p.vy += 420.f * dt;
+        }
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.z += p.vz * dt;

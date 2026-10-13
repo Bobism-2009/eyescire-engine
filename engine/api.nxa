@@ -286,6 +286,24 @@ extern "C" int    engine_scene_sky();
 extern "C" void   engine_scene_set_sky(int);
 extern "C" const char* engine_scene_sky_face(int);
 extern "C" void   engine_scene_set_sky_face(int, const char*);
+extern "C" int    engine_day_cycle();
+extern "C" void   engine_set_day_cycle(int);
+extern "C" float  engine_day_time();
+extern "C" void   engine_set_day_time(float);
+extern "C" float  engine_day_length();
+extern "C" void   engine_set_day_length(float);
+extern "C" int    engine_day_paused();
+extern "C" void   engine_set_day_paused(int);
+extern "C" void   engine_day_apply();
+extern "C" int    engine_weather();
+extern "C" void   engine_set_weather(int);
+extern "C" int    engine_weather_intensity();
+extern "C" void   engine_set_weather_intensity(int);
+extern "C" float  engine_wetness();
+extern "C" float  engine_snow_cover();
+extern "C" void   engine_set_wetness(float);
+extern "C" void   engine_set_snow_cover(float);
+extern "C" void   engine_env_set_focus(float, float, float);
 extern "C" int    engine_init_headless(int, int);
 extern "C" void   engine_input_begin_frame();
 extern "C" void   engine_input_key(int, int);
@@ -1187,6 +1205,27 @@ fn scene_sky_face(face: int): string {
     return s;
 }
 fn scene_set_sky_face(face: int, path: string) { inline_cpp! { engine_scene_set_sky_face(face, path.c_str()); } }
+
+fn day_cycle(): int { let r: int = 0; inline_cpp! { r = engine_day_cycle(); } return r; }
+fn set_day_cycle(on: int) { inline_cpp! { engine_set_day_cycle(on); } }
+fn day_time(): float { let r: float = 0.35; inline_cpp! { r = engine_day_time(); } return r; }
+fn set_day_time(t: float) { inline_cpp! { engine_set_day_time(t); } }
+fn day_length(): float { let r: float = 120.0; inline_cpp! { r = engine_day_length(); } return r; }
+fn set_day_length(sec: float) { inline_cpp! { engine_set_day_length(sec); } }
+fn day_paused(): int { let r: int = 0; inline_cpp! { r = engine_day_paused(); } return r; }
+fn set_day_paused(on: int) { inline_cpp! { engine_set_day_paused(on); } }
+fn day_apply() { inline_cpp! { engine_day_apply(); } }
+
+fn weather(): int { let r: int = 0; inline_cpp! { r = engine_weather(); } return r; }
+fn set_weather(mode: int) { inline_cpp! { engine_set_weather(mode); } }
+fn weather_intensity(): int { let r: int = 50; inline_cpp! { r = engine_weather_intensity(); } return r; }
+fn set_weather_intensity(v: int) { inline_cpp! { engine_set_weather_intensity(v); } }
+fn wetness(): float { let r: float = 0.0; inline_cpp! { r = engine_wetness(); } return r; }
+fn snow_cover(): float { let r: float = 0.0; inline_cpp! { r = engine_snow_cover(); } return r; }
+fn set_wetness(v: float) { inline_cpp! { engine_set_wetness(v); } }
+fn set_snow_cover(v: float) { inline_cpp! { engine_set_snow_cover(v); } }
+
+fn env_set_focus(sx: float, sy: float, sz: float) { inline_cpp! { engine_env_set_focus(sx, sy, sz); } }
 
 /* software 3D view inside the engine window (editor); see host/render3d.inl */
 fn r3d_begin(x: int, y: int, w: int, h: int, ex: float, ey: float, ez: float,

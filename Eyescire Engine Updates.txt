@@ -192,9 +192,9 @@ A checkpoint a script can send the player back to, and a teleport volume.
 
 A camera zone that changes the view when the player walks into it.
 
-Day and night, so the directional light can move over time.
+✔ Day and night, so the directional light can move over time.
 
-Rain and snow.
+✔ Rain and snow.
 
 Scatter grass and small rocks across a surface.
 

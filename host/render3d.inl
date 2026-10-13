@@ -2049,6 +2049,34 @@ static GLuint part_gl_tex(int imageId) {
 
 static void particles33(const PartDraw* draws, int n);
 
+/* Build a camera-facing quad. Streaks are tall and thin along world down. */
+static void part_billboard(const PartDraw& d, V3& p0, V3& p1, V3& p2, V3& p3) {
+    float cx = d.x * kUnit, cy = -d.y * kUnit, cz = -d.z * kUnit;
+    V3 c = v3(cx, cy, cz);
+    if (d.streak) {
+        V3 along = v3(0, -1, 0); /* world down = falling rain */
+        V3 across = cross(C.fwd, along);
+        if (dot(across, across) < 1e-8f) across = C.right;
+        across = norm(across);
+        float hw = d.size * kUnit * 0.06f;
+        float hh = d.size * kUnit * 0.55f;
+        if (hw < 0.01f) hw = 0.01f;
+        V3 rgt = across * hw;
+        V3 up = along * hh;
+        p0 = c - rgt - up;
+        p1 = c + rgt - up;
+        p2 = c + rgt + up;
+        p3 = c - rgt + up;
+    } else {
+        float hs = d.size * kUnit * 0.5f;
+        V3 rgt = C.right * hs, up = C.up * hs;
+        p0 = c - rgt - up;
+        p1 = c + rgt - up;
+        p2 = c + rgt + up;
+        p3 = c - rgt + up;
+    }
+}
+
 /* Camera-facing copies of each particle's picture, tinted and faded. */
 static void particles_gl() {
     PartDraw buf[kPartMax];
@@ -2069,12 +2097,8 @@ static void particles_gl() {
         if (!tex) continue;
         glBindTexture(GL_TEXTURE_2D, tex);
         glColor4ub((GLubyte)d.r, (GLubyte)d.g, (GLubyte)d.b, (GLubyte)d.a);
-        float cx = d.x * kUnit, cy = -d.y * kUnit, cz = -d.z * kUnit, hs = d.size * kUnit * 0.5f;
-        V3 rgt = C.right * hs, up = C.up * hs;
-        V3 p0 = v3(cx, cy, cz) - rgt - up;
-        V3 p1 = v3(cx, cy, cz) + rgt - up;
-        V3 p2 = v3(cx, cy, cz) + rgt + up;
-        V3 p3 = v3(cx, cy, cz) - rgt + up;
+        V3 p0, p1, p2, p3;
+        part_billboard(d, p0, p1, p2, p3);
         glBegin(GL_QUADS);
         glTexCoord2f(0, 0); glVertex3f(p0.x, p0.y, p0.z);
         glTexCoord2f(1, 0); glVertex3f(p1.x, p1.y, p1.z);
@@ -2370,6 +2394,8 @@ extern "C" void engine_r3d_begin(int x, int y, int w, int h,
     C.valid = true;
     g_drawn.clear();
     g_lookCam = -1;
+    /* Weather spawn volume follows the look-at point (scene pixels). */
+    engine_env_set_focus((float)tx / kUnit, -(float)ty / kUnit, -(float)tz / kUnit);
     collect_lights();
     add_default_lights();
     g_useVk = false;
@@ -2411,45 +2437,53 @@ static bool pawn_hidden(const Entity& e) {
 extern "C" void engine_r3d_hide_pawn(int on) { g_hidePawn = on ? 1 : 0; }
 extern "C" void engine_r3d_view_hold(int slot) { r3d::g_viewSlot = slot; }
 
-extern "C" void engine_r3d_entity(int s) {
+static void draw_entity_mesh(const Entity& e, int s, int pickable) {
     using namespace r3d;
-    if (!C.valid || !active_slot(s) || !entity_shown(s)) return;
-    const Entity& e = g.entities[s];
-    if (pawn_hidden(e)) return;
-    meshA = std::clamp(e.a, 0, 255);
-    g_drawn.push_back(s);
-    if (g_useVk) { glb::vk_entity(e, s); return; }
-    if (g_useGL) { glb::entity(e, s); return; }
+    if (pickable) g_drawn.push_back(s);
+    Entity tinted = e;
+    env_tint_rgb(tinted.r, tinted.g, tinted.b);
+    if (g_useVk) { glb::vk_entity(tinted, s); return; }
+    if (g_useGL) { glb::entity(tinted, s); return; }
     float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
     if (w <= 0 || h <= 0) return;
     Xform xf;
     xf.center = v3((e.x + w * 0.5f) * kUnit, -(e.y + h * 0.5f) * kUnit, -(e.z + d * 0.5f) * kUnit);
     xform_orient(xf, e);
+    int cr = tinted.r, cg = tinted.g, cb = tinted.b;
     if (e.kind == "sphere") {
         float dm = std::min(w, h) * kUnit;
         xf.scale = v3(dm, dm, dm);
-        mesh_sphere(xf, e.r, e.g, e.b, s);
+        mesh_sphere(xf, cr, cg, cb, s);
     } else if (e.kind == "cylinder") {
         xf.scale = v3(w * kUnit, h * kUnit, w * kUnit);
-        mesh_cylinder(xf, e.r, e.g, e.b, s);
+        mesh_cylinder(xf, cr, cg, cb, s);
     } else if (e.kind == "capsule") {
         xf.scale = v3(w * kUnit, h * kUnit, w * kUnit);
-        mesh_capsule(xf, w, h, e.r, e.g, e.b, s);
+        mesh_capsule(xf, w, h, cr, cg, cb, s);
     } else if (e.kind == "model") {
         const Model* m = nullptr;
         if (!e.model.empty()) m = &model_load(model_path(e.model));
         if (m && m->ok) {
             float sz = std::max(w, h) * kUnit;
             xf.scale = v3(sz, sz, sz);
-            mesh_model(*m, xf, e.r, e.g, e.b, s);
+            mesh_model(*m, xf, cr, cg, cb, s);
         } else {
             xf.scale = v3(w * kUnit, h * kUnit, d * kUnit);
-            mesh_box(xf, e.r, e.g, e.b, s);
+            mesh_box(xf, cr, cg, cb, s);
         }
     } else {
         xf.scale = v3(w * kUnit, h * kUnit, d * kUnit);
-        mesh_box(xf, e.r, e.g, e.b, s);
+        mesh_box(xf, cr, cg, cb, s);
     }
+}
+
+extern "C" void engine_r3d_entity(int s) {
+    using namespace r3d;
+    if (!C.valid || !active_slot(s) || !entity_shown(s)) return;
+    const Entity& e = g.entities[s];
+    if (pawn_hidden(e)) return;
+    meshA = std::clamp(e.a, 0, 255);
+    draw_entity_mesh(e, s, 1);
 }
 
 /* Solid coat on the real mesh, so a hallway stays hollow. */

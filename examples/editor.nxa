@@ -2691,6 +2691,10 @@ fn left_draw() {
 let insp_buf_gx:     string = "";
 let insp_buf_gy:     string = "";
 let gravity_buf_ready: int = 0;
+let insp_buf_day_t:   string = "";
+let insp_buf_day_len: string = "";
+let insp_buf_wx_i:    string = "";
+let env_buf_ready: int = 0;
 
 fn inspector_draw_no_selection() {
     let r: Rect = right_rect();
@@ -2761,6 +2765,94 @@ fn inspector_draw_no_selection() {
         insp_buf_gy = fmt2(0.0);
     }
     yy = yy + 36;
+
+    if (is3d == 1) {
+        if (env_buf_ready == 0) {
+            insp_buf_day_t = fmt2(day_time());
+            insp_buf_day_len = fmt2(day_length());
+            insp_buf_wx_i = "" + weather_intensity();
+            env_buf_ready = 1;
+        }
+        if (edit_target != "insp_day_t") insp_buf_day_t = fmt2(day_time());
+        if (edit_target != "insp_day_len") insp_buf_day_len = fmt2(day_length());
+        if (edit_target != "insp_wx_i") insp_buf_wx_i = "" + weather_intensity();
+
+        yy = chrome_section(x, yy, w, "DAY AND NIGHT");
+        th_font(11);
+        draw_text(x, yy, "Moves the directional light over time. Play advances the clock.", col_text_dim());
+        th_font(14);
+        yy = yy + 18;
+        let dcy: int = day_cycle();
+        let dk0: string = "secondary";
+        let dk1: string = "secondary";
+        if (dcy == 1) dk1 = "primary";
+        else dk0 = "primary";
+        if (ui_button_kind(rect(x, yy, half, 26), "Off", dk0) == 1 && dcy == 1) {
+            set_day_cycle(0);
+            save_active_scene();
+        }
+        if (ui_button_kind(rect(x + half + 8, yy, half, 26), "On", dk1) == 1 && dcy == 0) {
+            set_day_cycle(1);
+            save_active_scene();
+        }
+        yy = yy + 36;
+        chrome_field_label(x, yy, "Time of day (0..1)");
+        yy = yy + 16;
+        let dtb: string = ui_field("insp_day_t", rect(x, yy, half, 24), insp_buf_day_t);
+        if (dtb != insp_buf_day_t) {
+            set_day_time(parse_float_or(dtb, day_time()));
+            insp_buf_day_t = dtb;
+        }
+        if (ui_button(rect(x + half + 8, yy, half, 24), "Noon") == 1) {
+            set_day_time(0.5);
+            insp_buf_day_t = fmt2(0.5);
+            save_active_scene();
+        }
+        yy = yy + 36;
+        chrome_field_label(x, yy, "Day length (sec)");
+        yy = yy + 16;
+        let dlb: string = ui_field("insp_day_len", rect(x, yy, half, 24), insp_buf_day_len);
+        if (dlb != insp_buf_day_len) {
+            set_day_length(parse_float_or(dlb, day_length()));
+            insp_buf_day_len = dlb;
+        }
+        yy = yy + 40;
+
+        yy = chrome_section(x, yy, w, "WEATHER");
+        th_font(11);
+        draw_text(x, yy, "Rain and snow. Wetness and snow tint the scene in Play.", col_text_dim());
+        th_font(14);
+        yy = yy + 18;
+        let wm: int = weather();
+        let wk0: string = "secondary";
+        let wk1: string = "secondary";
+        let wk2: string = "secondary";
+        if (wm == 1) wk1 = "primary";
+        else if (wm == 2) wk2 = "primary";
+        else wk0 = "primary";
+        let third_w: int = (w - 16) / 3;
+        if (ui_button_kind(rect(x, yy, third_w, 26), "Clear", wk0) == 1) {
+            set_weather(0);
+            save_active_scene();
+        }
+        if (ui_button_kind(rect(x + third_w + 8, yy, third_w, 26), "Rain", wk1) == 1) {
+            set_weather(1);
+            save_active_scene();
+        }
+        if (ui_button_kind(rect(x + (third_w + 8) * 2, yy, third_w, 26), "Snow", wk2) == 1) {
+            set_weather(2);
+            save_active_scene();
+        }
+        yy = yy + 36;
+        chrome_field_label(x, yy, "Intensity (0..100)");
+        yy = yy + 16;
+        let wib: string = ui_field("insp_wx_i", rect(x, yy, half, 24), insp_buf_wx_i);
+        if (wib != insp_buf_wx_i) {
+            set_weather_intensity(parse_int_or(wib, weather_intensity()));
+            insp_buf_wx_i = wib;
+        }
+        yy = yy + 40;
+    }
 
     eng_set_font_size(11);
     draw_text(x, yy, "Select an entity to add a Rigidbody.", col_text_dim());
@@ -3618,6 +3710,7 @@ fn insp_albedo(s: int, x: int, yy: int, w: int): int {
 fn inspector_draw_one(s: int) {
     refresh_inspector_buffers(s);
     gravity_buf_ready = 0;   /* so the no-selection scene panel reloads next time */
+    env_buf_ready = 0;
 
     let r: Rect = right_rect();
     let x: int = r.x + 12;
@@ -12385,6 +12478,7 @@ fn settings_save_scene() {
     if (proj_loaded() == 0 || proj_scene_count() == 0) return;
     eng_scene_save(proj_scene_abs(proj_active_scene()));
     gravity_buf_ready = 0;
+    env_buf_ready = 0;
 }
 
 fn settings_page_header(x: int, y: int, title: string, subtitle: string): int {

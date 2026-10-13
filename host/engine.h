@@ -812,6 +812,29 @@ EYESCIRE_API int  engine_scene_sky();                 /* 0 day, 1 sunset, 2 nigh
 EYESCIRE_API void engine_scene_set_sky(int mode);
 EYESCIRE_API const char* engine_scene_sky_face(int face); /* 0..5: right left up down front back */
 EYESCIRE_API void engine_scene_set_sky_face(int face, const char* path);
+
+/* Day/night cycle (drives the first directional + ambient light + clear color). */
+EYESCIRE_API int   engine_day_cycle();
+EYESCIRE_API void  engine_set_day_cycle(int on);
+EYESCIRE_API float engine_day_time();                 /* 0..1 */
+EYESCIRE_API void  engine_set_day_time(float t);
+EYESCIRE_API float engine_day_length();               /* seconds per full loop */
+EYESCIRE_API void  engine_set_day_length(float sec);
+EYESCIRE_API int   engine_day_paused();
+EYESCIRE_API void  engine_set_day_paused(int on);
+EYESCIRE_API void  engine_day_apply();
+
+/* Weather: 0 none, 1 rain, 2 snow. Wetness/snow cover are 0..1 render tints. */
+EYESCIRE_API int   engine_weather();
+EYESCIRE_API void  engine_set_weather(int mode);
+EYESCIRE_API int   engine_weather_intensity();        /* 0..100 */
+EYESCIRE_API void  engine_set_weather_intensity(int v);
+EYESCIRE_API float engine_wetness();
+EYESCIRE_API float engine_snow_cover();
+EYESCIRE_API void  engine_set_wetness(float v);
+EYESCIRE_API void  engine_set_snow_cover(float v);
+
+EYESCIRE_API void  engine_env_set_focus(float sx, float sy, float sz);
 EYESCIRE_API int  engine_init_headless(int w, int h); /* no window; see engine.cpp */
 EYESCIRE_API void engine_input_begin_frame();
 EYESCIRE_API void engine_input_key(int vk, int down);

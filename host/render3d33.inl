@@ -1995,9 +1995,8 @@ static void particles33(const PartDraw* draws, int n) {
         v.clear();
         while (i < n && draws[i].image == image) {
             const PartDraw& d = draws[i++];
-            float cx = d.x * kUnit, cy = -d.y * kUnit, cz = -d.z * kUnit, hs = d.size * kUnit * 0.5f;
-            V3 rgt = C.right * hs, up = C.up * hs, c = v3(cx, cy, cz);
-            V3 p0 = c - rgt - up, p1 = c + rgt - up, p2 = c + rgt + up, p3 = c - rgt + up;
+            V3 p0, p1, p2, p3;
+            part_billboard(d, p0, p1, p2, p3);
             const V3 corner[6] = { p0, p1, p2, p0, p2, p3 };
             const float uv[12] = { 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1 };
             for (int k = 0; k < 6; ++k) {

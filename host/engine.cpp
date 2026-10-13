@@ -1137,6 +1137,11 @@ static void part_tick();
 static void part_reset();
 static void sfx_on_scene_loaded();
 static void sfx_shutdown();
+static void env_step(float dt);
+static void env_reset();
+static void env_apply_day();
+static void env_save_header(std::ostream& f);
+static int  env_try_load_line(const std::string& line);
 
 extern "C" void engine_shutdown() {
     engine_music_stop();
@@ -4711,6 +4716,7 @@ extern "C" void engine_physics_step(double dt) {
     float step = (float)dt;
     if (step <= 0.0f) step = 1.0f / 60.0f;
     if (step > 0.05f) step = 0.05f;   /* clamp so a stall can't explode the sim */
+    env_step(step);
     tween_step(step);
     if (!g.physWorld) return;
     g.physWorld->Step(step, 8, 3);
@@ -5245,6 +5251,7 @@ extern "C" int engine_scene_save(const char* path) {
         f << "\n";
     } else f << "SKY day\n";
     if (g.render3d) f << "RENDER 3D\n";
+    env_save_header(f);
     for (const Entity& e : g.entities) {
         if (!e.active) continue;
         int parentId = 0;
@@ -5301,6 +5308,7 @@ extern "C" int engine_scene_load(const char* path) {
     g.skyMode = 4;
     for (int i = 0; i < 6; ++i) g.skyFace[i].clear();
     g.render3d = false;
+    env_reset();
     std::string line;
     int header_ok = 0;
     struct PendingParent { int slot; int parentId; };
@@ -5309,6 +5317,7 @@ extern "C" int engine_scene_load(const char* path) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
         if (line.rfind("EYESCIRE_SCENE", 0) == 0) { header_ok = 1; continue; }
+        if (env_try_load_line(line)) continue;
         if (line.rfind("NEXT_ID ", 0) == 0) {
             try { g.nextEntityId = std::stoi(line.substr(8)); } catch (...) {}
             continue;
@@ -5487,6 +5496,7 @@ extern "C" int engine_scene_load(const char* path) {
         if (ps >= 0) engine_entity_set_parent(pp.slot, ps);
     }
     part_reset();
+    env_apply_day();
     sfx_on_scene_loaded();
     g_gamePaused = 0;
     return header_ok;
@@ -11056,4 +11066,5 @@ extern "C" int engine_worlds_finish_gen(int size_idx, int diff_idx, int theme_id
 #include "sfx.inl"
 #include "sky.inl"
 #include "particles.inl"
+#include "environ.inl"
 #include "render3d.inl"
