@@ -455,6 +455,32 @@ EYESCIRE_API void engine_dll_unload_all();               /* releases every loade
 EYESCIRE_API int  engine_dll_call(int handle, const char* sym);  /* 1 if symbol called, 0 otherwise */
 EYESCIRE_API int  engine_dll_call_sig(int handle, const char* sym, const char* sig);
 
+/* Extension trust: mark a loaded DLL as an extension and set sandboxed (0) or full (1).
+   While that DLL's entry points run, sandboxed callers are blocked from dangerous APIs.
+   Game script DLLs are left unmarked and stay unrestricted. */
+EYESCIRE_API void engine_ext_mark(int handle, int is_extension);
+EYESCIRE_API void engine_ext_set_trust(int handle, int full_permission);
+EYESCIRE_API int  engine_ext_get_trust(int handle);   /* 1 = full, 0 = sandboxed, -1 = not an extension */
+EYESCIRE_API int  engine_ext_is_sandboxed();          /* 1 while a sandboxed extension entry is on the stack */
+
+/* Project extensions/ registry (extensions/<id>/ + extensions.cfg). */
+EYESCIRE_API void        engine_ext_rescan();
+EYESCIRE_API int         engine_ext_count();
+EYESCIRE_API const char* engine_ext_id(int i);
+EYESCIRE_API const char* engine_ext_name(int i);
+EYESCIRE_API const char* engine_ext_version(int i);
+EYESCIRE_API const char* engine_ext_desc(int i);
+EYESCIRE_API int         engine_ext_enabled(int i);
+EYESCIRE_API int         engine_ext_full(int i);
+EYESCIRE_API int         engine_ext_loaded(int i);     /* 1 if DLL currently loaded */
+EYESCIRE_API void        engine_ext_set_enabled(int i, int enabled);
+EYESCIRE_API void        engine_ext_set_full(int i, int full_permission);
+EYESCIRE_API void        engine_ext_save_cfg();
+EYESCIRE_API int         engine_ext_install_dll(const char* dll_path); /* copy into extensions/<id>/ */
+EYESCIRE_API void        engine_ext_load_enabled(int editor_host); /* 1 = also call ext_editor */
+EYESCIRE_API void        engine_ext_update_all();
+EYESCIRE_API void        engine_ext_unload_all();
+
 /* ======================================================================== */
 /*  Text editor (single-buffer, line oriented)                              */
 /* ======================================================================== */

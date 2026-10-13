@@ -32,7 +32,7 @@ Add a way to allow AI models to connect to Eyescire Engine and use it like any n
 
 ✔ Have Eyescire Engine only export things in build that you actually use.
 
-Ability to install "Plugins" via DLL files- Etc. that it will load at runtime.
+✔ Ability to install "Plugins" via DLL files- Etc. that it will load at runtime.
 
 ✔ Way to swap between local and non local movement of objects.
 

@@ -231,6 +231,8 @@ fn player_main(): int {
         }
         i = i + 1;
     }
+    eng_ext_rescan();
+    eng_ext_load_enabled(0);
 
     phys_begin();
 
@@ -244,6 +246,7 @@ fn player_main(): int {
         ui_poll_buttons();
         snap_to_main_camera();
         apply_engine_view();
+        eng_ext_update_all();
         dispatch_scripts();
         phys_step(eng_dt_seconds());
         draw_scene();
@@ -251,6 +254,7 @@ fn player_main(): int {
         eng_present();
         frame_end();
     }
+    eng_ext_unload_all();
     sfx_set_live(0);
     phys_end();
     return 1;

@@ -321,6 +321,8 @@ fn main() {
 
     sfx_set_live(1);
     init_scripts();
+    eng_ext_rescan();
+    eng_ext_load_enabled(0);
     phys_begin();
 
     while (eng_pump() == 1) {
@@ -328,6 +330,7 @@ fn main() {
         eng_fit_buffer(eng_client_w(), eng_client_h());
         ui_canvas_layout_game_view(rect(0, 0, eng_window_w(), eng_window_h()));
         ui_poll_buttons();
+        eng_ext_update_all();
         dispatch_scripts();
         if (eng_take_leave_play() == 1) break;
         if (eng_key_pressed(VK_ESC) == 1 && scene_has_pause() == 0) break;
@@ -348,6 +351,7 @@ fn main() {
         frame_end();
     }
     eng_mouse_lock(0);
+    eng_ext_unload_all();
     sfx_set_live(0);
     phys_end();
 }

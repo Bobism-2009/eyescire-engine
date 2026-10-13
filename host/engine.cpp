@@ -384,7 +384,22 @@ struct EngineState {
 
     std::unordered_map<int, HMODULE> dlls;
     std::unordered_map<std::string, int> dllByPath; /* normalized path -> handle */
+    std::unordered_map<int, int> dllIsExt;   /* handle -> 1 if marked as extension */
+    std::unordered_map<int, int> dllExtFull; /* handle -> 1 full permission, 0 sandboxed */
     int nextDllHandle = 1;
+
+    struct ExtInfo {
+        std::string id;
+        std::string name;
+        std::string version;
+        std::string desc;
+        std::string dllName;   /* filename inside extensions/<id>/ */
+        int enabled = 1;
+        int full = 0;
+        int handle = 0;        /* loaded dll handle, or 0 */
+    };
+    std::vector<ExtInfo> exts;
+    std::string extTmp;
 
     /* undo/redo */
     std::vector<UndoEntry>   undoStack;
@@ -944,9 +959,53 @@ extern "C" void engine_input_button(int b, int down) {
 }
 extern "C" void engine_input_wheel(int notches) { g.mouseWheelAccum += notches; }
 
+/* Thread-local trust while an extension entry point runs.
+   0 = host / unmarked scripts (unrestricted)
+   1 = sandboxed extension
+   2 = full-permission extension */
+static thread_local int g_ext_tls_trust = 0;
+extern "C" void engine_log(const char* msg);
+
+static int ext_sandboxed_active() {
+    return g_ext_tls_trust == 1 ? 1 : 0;
+}
+
+static int ext_block(const char* what) {
+    if (!ext_sandboxed_active()) return 0;
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "[ext] blocked %s (sandboxed; grant Full permission)", what ? what : "api");
+    engine_log(buf);
+    return 1;
+}
+
+/* 1 if path is under the open project root (no project => not in project). */
+static int ext_path_in_project(const char* path) {
+    if (!path || !*path) return 0;
+    if (!g.projLoaded || g.projRoot.empty()) return 0;
+    std::error_code ec;
+    fs::path abs = fs::weakly_canonical(fs::path(path), ec);
+    if (ec) abs = fs::absolute(fs::path(path), ec);
+    fs::path root = fs::weakly_canonical(fs::path(g.projRoot), ec);
+    if (ec) root = fs::absolute(fs::path(g.projRoot), ec);
+    std::string a = abs.string();
+    std::string r = root.string();
+    for (char& c : a) if (c == '/') c = '\\';
+    for (char& c : r) if (c == '/') c = '\\';
+    while (!a.empty() && (a.back() == '\\')) a.pop_back();
+    while (!r.empty() && (r.back() == '\\')) r.pop_back();
+    if (r.empty()) return 0;
+    if (_stricmp(a.c_str(), r.c_str()) == 0) return 1;
+    if (a.size() > r.size() && _strnicmp(a.c_str(), r.c_str(), (int)r.size()) == 0) {
+        char sep = a[r.size()];
+        if (sep == '\\' || sep == '/') return 1;
+    }
+    return 0;
+}
+
 /* Start a program and return without waiting (unlike engine_run_command).
  * 1 if it started. */
 extern "C" int engine_launch(const char* cmd_line, const char* cwd) {
+    if (ext_block("engine_launch")) return 0;
     if (!cmd_line || !*cmd_line) return 0;
     std::string cmd = cmd_line;
     STARTUPINFOA si{};
@@ -1070,6 +1129,8 @@ extern "C" void engine_shutdown() {
     }
     g.dlls.clear();
     g.dllByPath.clear();
+    g.dllIsExt.clear();
+    g.dllExtFull.clear();
 
     for (auto& kv : g.images) {
         delete kv.second.bmp;
@@ -5386,6 +5447,10 @@ extern "C" int engine_scene_load(const char* path) {
 
 extern "C" int engine_fs_make_dir(const char* path) {
     if (!path) return 0;
+    if (ext_sandboxed_active() && !ext_path_in_project(path)) {
+        ext_block("engine_fs_make_dir outside project");
+        return 0;
+    }
     std::error_code ec;
     fs::create_directories(path, ec);
     return ec ? 0 : 1;
@@ -5429,6 +5494,10 @@ extern "C" const char* engine_fs_list(const char* dir, int i) {
 
 extern "C" int engine_fs_copy_file(const char* src, const char* dst) {
     if (!src || !dst) return 0;
+    if (ext_sandboxed_active() && !ext_path_in_project(dst)) {
+        ext_block("engine_fs_copy_file outside project");
+        return 0;
+    }
     std::error_code ec;
     fs::path d = dst;
     if (d.has_parent_path()) fs::create_directories(d.parent_path(), ec);
@@ -5437,6 +5506,7 @@ extern "C" int engine_fs_copy_file(const char* src, const char* dst) {
 }
 
 extern "C" int engine_fs_copy_tree(const char* src, const char* dst) {
+    if (ext_block("engine_fs_copy_tree")) return 0;
     if (!src || !dst) return 0;
     std::error_code ec;
     if (!fs::exists(src, ec)) return 0;
@@ -5449,6 +5519,7 @@ extern "C" int engine_fs_copy_tree(const char* src, const char* dst) {
 }
 
 extern "C" int engine_fs_remove_tree(const char* path) {
+    if (ext_block("engine_fs_remove_tree")) return 0;
     if (!path) return 0;
     std::error_code ec;
     fs::remove_all(path, ec);
@@ -5456,6 +5527,7 @@ extern "C" int engine_fs_remove_tree(const char* path) {
 }
 
 extern "C" int engine_fs_remove_file(const char* path) {
+    if (ext_block("engine_fs_remove_file")) return 0;
     if (!path) return 0;
     std::error_code ec;
     fs::remove(path, ec);
@@ -5979,6 +6051,7 @@ extern "C" int engine_players_delete(int i) {
 /* ============================================================ */
 
 extern "C" int engine_run_command(const char* cmd_line) {
+    if (ext_block("engine_run_command")) return -1;
     g.lastCmdOutput.clear();
     if (!cmd_line) return -1;
 
@@ -6085,6 +6158,7 @@ std::string normalize_path(const std::string& p) {
 } // namespace
 
 extern "C" int engine_dll_load(const char* path) {
+    if (ext_block("engine_dll_load")) return 0;
     if (!path) return 0;
     std::string norm = normalize_path(path);
     auto it = g.dllByPath.find(norm);
@@ -6102,6 +6176,7 @@ extern "C" int engine_dll_load(const char* path) {
 }
 
 extern "C" int engine_dll_reload(const char* path) {
+    if (ext_block("engine_dll_reload")) return 0;
     if (!path) return 0;
     std::string norm = normalize_path(path);
     auto it = g.dllByPath.find(norm);
@@ -6116,6 +6191,8 @@ extern "C" void engine_dll_unload(int handle) {
     if (it == g.dlls.end()) return;
     if (it->second) FreeLibrary(it->second);
     g.dlls.erase(it);
+    g.dllIsExt.erase(handle);
+    g.dllExtFull.erase(handle);
     for (auto p = g.dllByPath.begin(); p != g.dllByPath.end(); ) {
         if (p->second == handle) p = g.dllByPath.erase(p);
         else                     ++p;
@@ -6123,11 +6200,55 @@ extern "C" void engine_dll_unload(int handle) {
 }
 
 extern "C" void engine_dll_unload_all() {
+    /* Keep extension DLLs loaded; play/rebuild only tears down game scripts. */
+    std::vector<int> drop;
     for (auto& kv : g.dlls) {
-        if (kv.second) FreeLibrary(kv.second);
+        if (g.dllIsExt.find(kv.first) != g.dllIsExt.end()) continue;
+        drop.push_back(kv.first);
     }
-    g.dlls.clear();
-    g.dllByPath.clear();
+    for (int h : drop) engine_dll_unload(h);
+}
+
+extern "C" void engine_ext_mark(int handle, int is_extension) {
+    if (g.dlls.find(handle) == g.dlls.end()) return;
+    if (is_extension) {
+        g.dllIsExt[handle] = 1;
+        if (g.dllExtFull.find(handle) == g.dllExtFull.end()) g.dllExtFull[handle] = 0;
+    } else {
+        g.dllIsExt.erase(handle);
+        g.dllExtFull.erase(handle);
+    }
+}
+
+extern "C" void engine_ext_set_trust(int handle, int full_permission) {
+    if (g.dllIsExt.find(handle) == g.dllIsExt.end()) return;
+    g.dllExtFull[handle] = full_permission ? 1 : 0;
+}
+
+extern "C" int engine_ext_get_trust(int handle) {
+    if (g.dllIsExt.find(handle) == g.dllIsExt.end()) return -1;
+    auto it = g.dllExtFull.find(handle);
+    if (it == g.dllExtFull.end()) return 0;
+    return it->second ? 1 : 0;
+}
+
+extern "C" int engine_ext_is_sandboxed() {
+    return ext_sandboxed_active();
+}
+
+static void ext_tls_push(int handle) {
+    auto it = g.dllIsExt.find(handle);
+    if (it == g.dllIsExt.end() || !it->second) {
+        g_ext_tls_trust = 0;
+        return;
+    }
+    auto ft = g.dllExtFull.find(handle);
+    int full = (ft != g.dllExtFull.end() && ft->second) ? 1 : 0;
+    g_ext_tls_trust = full ? 2 : 1;
+}
+
+static void ext_tls_pop() {
+    g_ext_tls_trust = 0;
 }
 
 void engine_bp_share_push(int handle);
@@ -6142,7 +6263,9 @@ extern "C" int engine_dll_call(int handle, const char* sym) {
     /* Init runs once with no object, so its Set Value has to land in the shared copy. */
     int init = std::strcmp(sym, "script_init") == 0;
     if (init) engine_bp_share_push(handle);
+    ext_tls_push(handle);
     fn();
+    ext_tls_pop();
     if (init) engine_bp_share_pop();
     return 1;
 }
@@ -6160,6 +6283,8 @@ extern "C" int engine_dll_call_sig(int handle, const char* sym, const char* sig)
     if (!raw) return 0;
     engine_bp_share_push(handle);
     struct SharePop { ~SharePop() { engine_bp_share_pop(); } } share_pop;
+    ext_tls_push(handle);
+    struct ExtPop { ~ExtPop() { ext_tls_pop(); } } ext_pop;
     std::string s = sig ? sig : "";
     const double z = 0.0;
     const int n = 0;
@@ -6182,6 +6307,251 @@ extern "C" int engine_dll_call_sig(int handle, const char* sym, const char* sig)
     if (s == "iff")           { ((void (*)(int, double, double))raw)(n, z, z); return 1; }
     ((void (*)())raw)();
     return 1;
+}
+
+/* ============================================================ */
+/*  Project extensions registry                                 */
+/* ============================================================ */
+
+static std::string ext_join(const std::string& a, const std::string& b) {
+    if (a.empty()) return b;
+    if (b.empty()) return a;
+    char last = a.back();
+    if (last == '\\' || last == '/') return a + b;
+    return a + "\\" + b;
+}
+
+static std::string ext_json_str(const std::string& src, const char* key) {
+    if (!key) return "";
+    std::string pat = std::string("\"") + key + "\"";
+    size_t k = src.find(pat);
+    if (k == std::string::npos) return "";
+    k = src.find(':', k + pat.size());
+    if (k == std::string::npos) return "";
+    k = src.find('"', k + 1);
+    if (k == std::string::npos) return "";
+    size_t e = src.find('"', k + 1);
+    if (e == std::string::npos) return "";
+    return src.substr(k + 1, e - (k + 1));
+}
+
+static std::string ext_sanitize_id(const std::string& s) {
+    std::string out;
+    for (char ch : s) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+            (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')
+            out.push_back(ch);
+        if (out.size() >= 48) break;
+    }
+    if (out.empty()) out = "extension";
+    return out;
+}
+
+static void ext_load_cfg_into(std::unordered_map<std::string, std::pair<int, int>>& cfg) {
+    cfg.clear();
+    if (!g.projLoaded) return;
+    std::ifstream f(ext_join(g.projRoot, "extensions.cfg"), std::ios::binary);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("EXT ", 0) != 0) continue;
+        std::istringstream ss(line.substr(4));
+        std::string id;
+        int en = 1, full = 0;
+        if (!(ss >> id >> en >> full)) continue;
+        cfg[id] = { en ? 1 : 0, full ? 1 : 0 };
+    }
+}
+
+extern "C" void engine_ext_save_cfg() {
+    if (!g.projLoaded) return;
+    std::ofstream f(ext_join(g.projRoot, "extensions.cfg"), std::ios::binary | std::ios::trunc);
+    if (!f) return;
+    f << "# Eyescire extensions.cfg — EXT <id> <enabled 0/1> <full 0/1>\n";
+    for (const auto& e : g.exts) {
+        f << "EXT " << e.id << " " << (e.enabled ? 1 : 0) << " " << (e.full ? 1 : 0) << "\n";
+    }
+}
+
+extern "C" void engine_ext_rescan() {
+    g.exts.clear();
+    if (!g.projLoaded || g.projRoot.empty()) return;
+    std::unordered_map<std::string, std::pair<int, int>> cfg;
+    ext_load_cfg_into(cfg);
+    std::string root = ext_join(g.projRoot, "extensions");
+    std::error_code ec;
+    if (!fs::is_directory(root, ec)) return;
+    for (auto& entry : fs::directory_iterator(root, ec)) {
+        if (ec) break;
+        if (!entry.is_directory()) continue;
+        std::string id = ext_sanitize_id(entry.path().filename().string());
+        std::string dir = entry.path().string();
+        std::string manifest = ext_join(dir, "extension.json");
+        EngineState::ExtInfo info;
+        info.id = id;
+        info.name = id;
+        info.version = "1.0";
+        info.dllName = id + ".dll";
+        if (fs::exists(manifest, ec)) {
+            std::ifstream mf(manifest, std::ios::binary);
+            std::string body((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+            std::string jid = ext_json_str(body, "id");
+            std::string jn = ext_json_str(body, "name");
+            std::string jv = ext_json_str(body, "version");
+            std::string jd = ext_json_str(body, "dll");
+            std::string jdesc = ext_json_str(body, "description");
+            if (!jid.empty()) info.id = ext_sanitize_id(jid);
+            if (!jn.empty()) info.name = jn;
+            if (!jv.empty()) info.version = jv;
+            if (!jd.empty()) info.dllName = jd;
+            if (!jdesc.empty()) info.desc = jdesc;
+        }
+        auto cit = cfg.find(info.id);
+        if (cit != cfg.end()) {
+            info.enabled = cit->second.first;
+            info.full = cit->second.second;
+        }
+        std::string dllAbs = ext_join(dir, info.dllName);
+        if (!fs::exists(dllAbs, ec)) {
+            /* pick first .dll in the folder */
+            for (auto& fent : fs::directory_iterator(dir, ec)) {
+                if (ec) break;
+                if (!fent.is_regular_file()) continue;
+                auto ext = fent.path().extension().string();
+                for (char& c : ext) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (ext == ".dll") {
+                    info.dllName = fent.path().filename().string();
+                    break;
+                }
+            }
+        }
+        g.exts.push_back(info);
+    }
+}
+
+extern "C" int engine_ext_count() { return (int)g.exts.size(); }
+
+extern "C" const char* engine_ext_id(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return "";
+    return g.exts[i].id.c_str();
+}
+extern "C" const char* engine_ext_name(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return "";
+    return g.exts[i].name.c_str();
+}
+extern "C" const char* engine_ext_version(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return "";
+    return g.exts[i].version.c_str();
+}
+extern "C" const char* engine_ext_desc(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return "";
+    return g.exts[i].desc.c_str();
+}
+extern "C" int engine_ext_enabled(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return 0;
+    return g.exts[i].enabled ? 1 : 0;
+}
+extern "C" int engine_ext_full(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return 0;
+    return g.exts[i].full ? 1 : 0;
+}
+extern "C" int engine_ext_loaded(int i) {
+    if (i < 0 || i >= (int)g.exts.size()) return 0;
+    return g.exts[i].handle != 0 ? 1 : 0;
+}
+
+extern "C" void engine_ext_set_enabled(int i, int enabled) {
+    if (i < 0 || i >= (int)g.exts.size()) return;
+    g.exts[i].enabled = enabled ? 1 : 0;
+    engine_ext_save_cfg();
+}
+
+extern "C" void engine_ext_set_full(int i, int full_permission) {
+    if (i < 0 || i >= (int)g.exts.size()) return;
+    g.exts[i].full = full_permission ? 1 : 0;
+    if (g.exts[i].handle != 0) engine_ext_set_trust(g.exts[i].handle, g.exts[i].full);
+    engine_ext_save_cfg();
+}
+
+extern "C" int engine_ext_install_dll(const char* dll_path) {
+    if (!g.projLoaded || !dll_path || !*dll_path) return 0;
+    fs::path src(dll_path);
+    if (!fs::exists(src)) return 0;
+    std::string stem = ext_sanitize_id(src.stem().string());
+    std::string dir = ext_join(ext_join(g.projRoot, "extensions"), stem);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    std::string dllName = stem + ".dll";
+    std::string dst = ext_join(dir, dllName);
+    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) return 0;
+    std::string manifest = ext_join(dir, "extension.json");
+    if (!fs::exists(manifest, ec)) {
+        std::ofstream mf(manifest, std::ios::binary | std::ios::trunc);
+        if (mf) {
+            mf << "{\n";
+            mf << "  \"id\": \"" << stem << "\",\n";
+            mf << "  \"name\": \"" << stem << "\",\n";
+            mf << "  \"version\": \"1.0\",\n";
+            mf << "  \"dll\": \"" << dllName << "\",\n";
+            mf << "  \"description\": \"\"\n";
+            mf << "}\n";
+        }
+    }
+    engine_ext_rescan();
+    engine_ext_save_cfg();
+    return 1;
+}
+
+extern "C" void engine_ext_unload_all() {
+    for (auto& e : g.exts) {
+        if (e.handle == 0) continue;
+        engine_dll_call(e.handle, "ext_shutdown");
+        int h = e.handle;
+        e.handle = 0;
+        engine_dll_unload(h);
+    }
+}
+
+extern "C" void engine_ext_load_enabled(int editor_host) {
+    if (!g.projLoaded) return;
+    if (g.exts.empty()) engine_ext_rescan();
+    for (auto& e : g.exts) {
+        if (!e.enabled) {
+            if (e.handle != 0) {
+                engine_dll_call(e.handle, "ext_shutdown");
+                int h = e.handle;
+                e.handle = 0;
+                engine_dll_unload(h);
+            }
+            continue;
+        }
+        if (e.handle != 0) {
+            engine_ext_set_trust(e.handle, e.full);
+            continue;
+        }
+        std::string abs = ext_join(ext_join(ext_join(g.projRoot, "extensions"), e.id), e.dllName);
+        int h = engine_dll_load(abs.c_str());
+        if (h == 0) {
+            engine_log(("[ext] failed to load " + abs).c_str());
+            continue;
+        }
+        engine_ext_mark(h, 1);
+        engine_ext_set_trust(h, e.full);
+        e.handle = h;
+        if (engine_dll_call(h, "ext_init") == 0)
+            engine_log(("[ext] " + e.id + " has no ext_init").c_str());
+        if (editor_host) engine_dll_call(h, "ext_editor");
+        engine_log(("[ext] loaded " + e.id + (e.full ? " (full)" : " (sandboxed)")).c_str());
+    }
+}
+
+extern "C" void engine_ext_update_all() {
+    for (auto& e : g.exts) {
+        if (!e.enabled || e.handle == 0) continue;
+        engine_dll_call(e.handle, "ext_update");
+    }
 }
 
 /* ============================================================ */
@@ -6506,11 +6876,14 @@ extern "C" int engine_project_open(const char* path) {
     }
     pref_load();
     splash_load();
+    engine_ext_rescan();
     engine_project_recent_push(g.projRoot.c_str());
     return 1;
 }
 
 extern "C" void engine_project_close() {
+    engine_ext_unload_all();
+    g.exts.clear();
     g.projLoaded = false;
     g.projRoot.clear();
     g.projName.clear();

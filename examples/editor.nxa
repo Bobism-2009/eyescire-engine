@@ -909,6 +909,8 @@ fn project_open_path(path: string): int {
     }
     eng_set_title("Eyescire Editor - " + proj_name());
     undo_clear();
+    eng_ext_rescan();
+    eng_ext_load_enabled(1);
     eng_log("[project] opened " + path);
     app_state = "edit";
     return 1;
@@ -10832,6 +10834,10 @@ fn do_export() {
         let splash_src: string = proj_path_join(root, "splash.cfg");
         if (eng_fs_exists(splash_src) == 1) eng_fs_copy_file(splash_src, proj_path_join(dist_dir, "splash.cfg"));
     }
+    let ext_src: string = proj_path_join(root, "extensions");
+    if (eng_fs_exists(ext_src) == 1) eng_fs_copy_tree(ext_src, proj_path_join(dist_dir, "extensions"));
+    let ext_cfg: string = proj_path_join(root, "extensions.cfg");
+    if (eng_fs_exists(ext_cfg) == 1) eng_fs_copy_file(ext_cfg, proj_path_join(dist_dir, "extensions.cfg"));
     let icons_dst: string = proj_path_join(dist_dir, "icons");
     eng_fs_make_dir(icons_dst);
     let logo_src: string = eng_exe_dir() + "\\icons\\eyescire.png";
@@ -11836,6 +11842,93 @@ fn settings_page_build(x: int, y: int, w: int) {
     draw_text(x, y, "Off copies every scene, script, prefab, and asset.", col_text_dim());
 }
 
+fn settings_page_extensions(x: int, y: int, w: int) {
+    y = chrome_section(x, y, w, "INSTALL");
+    draw_text(x, y, "DLL extensions load with the project. Sandboxed by default until you grant Full.", col_text_dim());
+    y = y + 28;
+    if (ui_button(rect(x, y, 200, 28), "Install DLL...") == 1) {
+        let chosen: string = eng_open_file_dialog("Install Extension DLL", "Extension DLL (*.dll)|*.dll|All files|*.*", proj_root());
+        if (chosen.len() > 0) {
+            if (eng_ext_install_dll(chosen) == 1) {
+                eng_ext_load_enabled(1);
+                eng_log("[ext] installed " + chosen);
+            } else {
+                eng_log("[ext] install failed: " + chosen);
+            }
+        }
+    }
+    if (ui_button(rect(x + 208, y, 120, 28), "Rescan") == 1) {
+        eng_ext_rescan();
+        eng_ext_load_enabled(1);
+    }
+    y = y + 44;
+    y = chrome_section(x, y, w, "INSTALLED");
+    let n: int = eng_ext_count();
+    if (n == 0) {
+        draw_text(x, y, "No extensions in this project yet.", col_text_dim());
+        y = y + 28;
+        settings_bottom = y;
+        return;
+    }
+    let i: int = 0;
+    while (i < n) {
+        let name: string = eng_ext_name(i);
+        let ver: string = eng_ext_version(i);
+        let id: string = eng_ext_id(i);
+        th_font_semi(13);
+        draw_text(x, y, name + "  v" + ver, col_text_main());
+        th_font(11);
+        draw_text(x, y + 18, id, col_text_dim());
+        th_font(14);
+        let en: int = eng_ext_enabled(i);
+        let full: int = eng_ext_full(i);
+        let koff: string = "secondary";
+        let kon: string = "secondary";
+        if (en == 1) kon = "primary";
+        else koff = "primary";
+        if (ui_button_kind(rect(x + w - 176, y, 80, 28), "Off", koff) == 1 && en == 1) {
+            eng_ext_set_enabled(i, 0);
+            eng_ext_load_enabled(1);
+        }
+        if (ui_button_kind(rect(x + w - 88, y, 80, 28), "On", kon) == 1 && en == 0) {
+            eng_ext_set_enabled(i, 1);
+            eng_ext_load_enabled(1);
+        }
+        y = y + 36;
+        draw_text(x, y + 4, "Permission", col_text_main());
+        let ks: string = "secondary";
+        let kf: string = "secondary";
+        if (full == 1) kf = "primary";
+        else ks = "primary";
+        if (ui_button_kind(rect(x + w - 176, y, 80, 28), "Sandbox", ks) == 1 && full == 1) {
+            eng_ext_set_full(i, 0);
+            eng_ext_load_enabled(1);
+        }
+        if (ui_button_kind(rect(x + w - 88, y, 80, 28), "Full", kf) == 1 && full == 0) {
+            eng_ext_set_full(i, 1);
+            eng_log("[ext] Full permission: " + id + " can use the entire engine API");
+            eng_ext_load_enabled(1);
+        }
+        y = y + 34;
+        let desc: string = eng_ext_desc(i);
+        if (desc.len() > 0) {
+            th_font(11);
+            draw_text(x, y, desc, col_text_dim());
+            th_font(14);
+            y = y + 20;
+        }
+        if (full == 1) {
+            th_font(11);
+            draw_text(x, y, "Full trust — this DLL can call any engine API.", col_text_dim());
+            th_font(14);
+            y = y + 20;
+        }
+        y = y + 16;
+        i = i + 1;
+    }
+    settings_bottom = y;
+}
+
 fn settings_onoff(x: int, y: int, label: string, key: string, def: int) {
     draw_text(x, y + 6, label, col_text_main());
     let on: int = pref_int(key, def);
@@ -12047,6 +12140,8 @@ fn settings_draw() {
     settings_nav(rect(nav.x, ny, nav.w, 36), 5, "Audio");
     ny = ny + 42;
     settings_nav(rect(nav.x, ny, nav.w, 36), 6, "Build");
+    ny = ny + 42;
+    settings_nav(rect(nav.x, ny, nav.w, 36), 7, "Extensions");
 
     let x: int = body.x + 48;
     let y: int = body.y + 36 - settings_scroll;
@@ -12061,11 +12156,12 @@ fn settings_draw() {
     else if (settings_page == 3) settings_page_editor(x, y, w);
     else if (settings_page == 4) settings_page_graphics(x, y, w);
     else if (settings_page == 5) settings_page_audio(x, y, w);
-    else settings_page_build(x, y, w);
+    else if (settings_page == 6) settings_page_build(x, y, w);
+    else settings_page_extensions(x, y, w);
     eng_clear_clip();
 
     let max_scroll: int = 0;
-    if (settings_page == 0 || settings_page == 1 || settings_page == 4) {
+    if (settings_page == 0 || settings_page == 1 || settings_page == 4 || settings_page == 7) {
         let content_h: int = settings_bottom + settings_scroll - (body.y + 36);
         max_scroll = content_h - (body.h - 72);
         if (max_scroll < 0) max_scroll = 0;
@@ -12095,6 +12191,7 @@ fn edit_frame() {
     menu_dismiss_if_outside_click();
     drag_update();
     if (app_state == "play") play_sim();
+    if (proj_loaded() == 1) eng_ext_update_all();
 
     let bgc: Color = col_bg_deep();
     eng_clear(bgc.r, bgc.g, bgc.b);

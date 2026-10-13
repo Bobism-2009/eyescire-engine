@@ -435,6 +435,26 @@ extern "C" void   engine_dll_unload(int);
 extern "C" void   engine_dll_unload_all();
 extern "C" int    engine_dll_call(int, const char*);
 extern "C" int    engine_dll_call_sig(int, const char*, const char*);
+extern "C" void   engine_ext_mark(int, int);
+extern "C" void   engine_ext_set_trust(int, int);
+extern "C" int    engine_ext_get_trust(int);
+extern "C" int    engine_ext_is_sandboxed();
+extern "C" void   engine_ext_rescan();
+extern "C" int    engine_ext_count();
+extern "C" const char* engine_ext_id(int);
+extern "C" const char* engine_ext_name(int);
+extern "C" const char* engine_ext_version(int);
+extern "C" const char* engine_ext_desc(int);
+extern "C" int    engine_ext_enabled(int);
+extern "C" int    engine_ext_full(int);
+extern "C" int    engine_ext_loaded(int);
+extern "C" void   engine_ext_set_enabled(int, int);
+extern "C" void   engine_ext_set_full(int, int);
+extern "C" void   engine_ext_save_cfg();
+extern "C" int    engine_ext_install_dll(const char*);
+extern "C" void   engine_ext_load_enabled(int);
+extern "C" void   engine_ext_update_all();
+extern "C" void   engine_ext_unload_all();
 
 extern "C" int         engine_te_load(const char*);
 extern "C" int         engine_te_save();
@@ -1639,6 +1659,75 @@ fn eng_dll_call_sig(handle: int, sym: string, sig: string): int {
     inline_cpp! { r = engine_dll_call_sig(handle, sym.c_str(), sig.c_str()); }
     return r;
 }
+
+fn eng_ext_mark(handle: int, is_extension: int) {
+    inline_cpp! { engine_ext_mark(handle, is_extension); }
+}
+fn eng_ext_set_trust(handle: int, full_permission: int) {
+    inline_cpp! { engine_ext_set_trust(handle, full_permission); }
+}
+fn eng_ext_get_trust(handle: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_get_trust(handle); }
+    return r;
+}
+fn eng_ext_is_sandboxed(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_is_sandboxed(); }
+    return r;
+}
+fn eng_ext_rescan() { inline_cpp! { engine_ext_rescan(); } }
+fn eng_ext_count(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_count(); }
+    return r;
+}
+fn eng_ext_id(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_ext_id(i); }
+    return s;
+}
+fn eng_ext_name(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_ext_name(i); }
+    return s;
+}
+fn eng_ext_version(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_ext_version(i); }
+    return s;
+}
+fn eng_ext_desc(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_ext_desc(i); }
+    return s;
+}
+fn eng_ext_enabled(i: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_enabled(i); }
+    return r;
+}
+fn eng_ext_full(i: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_full(i); }
+    return r;
+}
+fn eng_ext_loaded(i: int): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_loaded(i); }
+    return r;
+}
+fn eng_ext_set_enabled(i: int, enabled: int) { inline_cpp! { engine_ext_set_enabled(i, enabled); } }
+fn eng_ext_set_full(i: int, full_permission: int) { inline_cpp! { engine_ext_set_full(i, full_permission); } }
+fn eng_ext_save_cfg() { inline_cpp! { engine_ext_save_cfg(); } }
+fn eng_ext_install_dll(path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_ext_install_dll(path.c_str()); }
+    return r;
+}
+fn eng_ext_load_enabled(editor_host: int) { inline_cpp! { engine_ext_load_enabled(editor_host); } }
+fn eng_ext_update_all() { inline_cpp! { engine_ext_update_all(); } }
+fn eng_ext_unload_all() { inline_cpp! { engine_ext_unload_all(); } }
 
 // ----- text editor ----------------------------------------------------------
 

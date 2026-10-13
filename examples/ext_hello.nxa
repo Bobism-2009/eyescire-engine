@@ -1,0 +1,25 @@
+// Sample Eyescire extension DLL.
+// Build:
+//   NexaC examples\ext_hello.nxa --dll --link build\engine.lib -p -o build\ext_hello.dll
+// Install from the editor: Settings -> Extensions -> Install DLL...
+//
+// Sandboxed by default: logging and game APIs work; process/FS wipe APIs are blocked
+// until the user grants Full permission.
+
+#include "../engine/script.nxa"
+
+fn ext_init() {
+    eng_log("[ext_hello] ext_init (sandboxed API)");
+}
+
+fn ext_editor() {
+    eng_log("[ext_hello] ext_editor - running inside the editor");
+}
+
+fn ext_update() {
+    /* optional per-frame hook */
+}
+
+fn ext_shutdown() {
+    eng_log("[ext_hello] ext_shutdown");
+}
