@@ -1,7 +1,7 @@
 # Eyescire Engine
 
 A Unity/Godot-flavored 2D and 3D scene editor + runtime, written in
-[Nexa](https://github.com/...). The engine is two layers:
+[Nexa](https://github.com/bobism-2009/Nexa-Lang). The engine is two layers:
 
 - **`host/host.cpp`** - a tiny Win32 + GDI runtime exposing a flat C ABI
   (window, drawing, input, images, time). About 350 lines of C++ that get
