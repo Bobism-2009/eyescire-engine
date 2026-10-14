@@ -1,26 +1,22 @@
 // =============================================================================
 // Eyescire Engine - editor theme.
 //
-// NexaC's std/ui ("modern" style, "dark" theme) rebuilt on the engine.dll
-// renderer. std/ui only draws into its own gfx window, so the editor keeps
-// its engine window and takes std/ui's palette (col_ui_* in color.nxa),
-// shapes and type instead: 6 px rounding, soft shadows, accent-filled primary
-// buttons, outlined secondary buttons, an accent focus ring on inputs, and a
-// short accent bar on the selected list row.
+// Charcoal chrome on the engine.dll renderer: 10 px rounding, soft single
+// shadow, Bahnschrift type, soft steel accent, muted field text.
 //
 // Editor-only: not part of engine.nxa, so scripts never compile it. Include it
 // after engine.nxa.
 // =============================================================================
 
-let TH_RADIUS: int = 6;
+let TH_RADIUS: int = 10;
 
 // ----- type ------------------------------------------------------------------
-// Chrome uses Segoe UI; code, the console and anything that must match the
-// shipped game (entity labels) stay on Consolas, the runtime's font.
+// Chrome uses Bahnschrift; code, the console and anything that must match the
+// shipped game (entity labels) stay on Cascadia Mono / Consolas-class.
 
-fn th_font(px: int)      { eng_set_font("Segoe UI", px); }
-fn th_font_semi(px: int) { eng_set_font("Segoe UI Semibold", px); }
-fn th_font_mono(px: int) { eng_set_font("Consolas", px); }
+fn th_font(px: int)      { eng_set_font("Bahnschrift", px); }
+fn th_font_semi(px: int) { eng_set_font("Bahnschrift SemiBold", px); }
+fn th_font_mono(px: int) { eng_set_font("Cascadia Mono", px); }
 
 /* y that vertically centres a line of the current font inside [ry, ry+rh). */
 fn th_text_y(ry: int, rh: int): int {
@@ -31,7 +27,7 @@ fn th_text_y(ry: int, rh: int): int {
 
 fn th_white(): Color { return rgb(255, 255, 255); }
 
-/* Lift a colour toward white by amt (std/ui's hover/press shade on dark). */
+/* Lift a colour toward white by amt. */
 fn th_shade(c: Color, amt: int): Color {
     return col_lerp(c, th_white(), (amt * 100) / 255);
 }
@@ -61,53 +57,49 @@ fn th_ring(r: Rect, rad: int, thickness: int, c: Color) {
 }
 
 fn th_shadow(r: Rect, rad: int) {
-    eng_fill_round_a(r.x - 2, r.y, r.w + 4, r.h + 6, rad + 3, 0, 0, 0, 34);
-    eng_fill_round_a(r.x, r.y + 2, r.w, r.h + 2, rad + 1, 0, 0, 0, 60);
+    /* One soft lift — avoid stacked heavy shadows. */
+    eng_fill_round_a(r.x, r.y + 3, r.w, r.h + 2, rad + 2, 0, 0, 0, 55);
 }
 
 // ----- surfaces --------------------------------------------------------------
 
-/* A raised card (std/ui panel): shadow, surface fill, hairline edge. */
 fn th_card(r: Rect, active: int, hover: int) {
-    let rad: int = TH_RADIUS + 2;
+    let rad: int = TH_RADIUS;
     th_shadow(r, rad);
     let fill: Color = col_ui_panel();
-    if (hover == 1) fill = col_lerp(col_ui_panel(), col_ui_panel_hi(), 60);
+    if (hover == 1) fill = col_ui_panel_hi();
     th_fill(r, rad, fill);
     let edge: Color = col_ui_border();
     if (active == 1) edge = col_ui_accent();
     th_edge(r, rad, edge);
 }
 
-/* Menus, dropdowns, context menus, dialogs. */
 fn th_popup(r: Rect) {
-    let rad: int = TH_RADIUS + 2;
+    let rad: int = TH_RADIUS;
     th_shadow(r, rad);
     th_fill(r, rad, col_ui_panel());
     th_edge(r, rad, col_ui_border());
 }
 
-/* List row: selection gets the tint plus std/ui's short accent bar. */
 fn th_row(r: Rect, selected: int, hover: int) {
     if (selected == 1) {
-        th_fill(r, 4, col_ui_select());
-        let bh: int = r.h - 8;
-        if (bh > 14) bh = 14;
+        th_fill(r, 6, col_ui_select());
+        let bh: int = r.h - 10;
+        if (bh > 16) bh = 16;
+        if (bh < 8) bh = 8;
         let a: Color = col_ui_accent();
-        eng_fill_round_a(r.x + 3, r.y + (r.h - bh) / 2, 3, bh, 1, a.r, a.g, a.b, 255);
+        eng_fill_round_a(r.x + 4, r.y + (r.h - bh) / 2, 3, bh, 2, a.r, a.g, a.b, 255);
     } else if (hover == 1) {
-        th_fill(r, 4, col_ui_panel_hi());
+        th_fill(r, 6, col_ui_panel_hi());
     }
 }
 
-/* Menu entry hover: an inset raised pill. */
 fn th_menu_row(r: Rect, hover: int) {
-    if (hover == 1) th_fill(rect(r.x + 3, r.y + 1, r.w - 6, r.h - 2), 4, col_ui_panel_hi());
+    if (hover == 1) th_fill(rect(r.x + 4, r.y + 2, r.w - 8, r.h - 4), 6, col_ui_panel_hi());
 }
 
 // ----- widgets ---------------------------------------------------------------
 
-/* std/ui button. kind: "primary" "secondary" "ghost" "danger" "disabled". */
 fn th_button(r: Rect, label: string, kind: string, hover: int, held: int) {
     let rad: int = th_radius_for(r.h);
     let fill: Color = col_ui_panel();
@@ -117,25 +109,25 @@ fn th_button(r: Rect, label: string, kind: string, hover: int, held: int) {
     if (kind == "primary" || kind == "danger") {
         fill = col_ui_accent();
         if (kind == "danger") fill = col_ui_danger();
-        text = th_white();
-        if (held == 1)       fill = th_shade(fill, 44);
-        else if (hover == 1) fill = th_shade(fill, 22);
+        text = rgb(220, 220, 220);
+        if (held == 1)       fill = th_shade(fill, 36);
+        else if (hover == 1) fill = th_shade(fill, 18);
     } else if (kind == "ghost") {
         fill = col_ui_panel_hi();
         filled = 0;
         if (hover == 1 || held == 1) filled = 1;
-        if (held == 1) fill = th_shade(fill, 18);
+        if (held == 1) fill = th_shade(fill, 14);
     } else if (kind == "disabled") {
-        fill = col_ui_bg();
-        text = rgb(92, 96, 104);
-        outlined = 1;
+        /* Same outer plate as primary — muted fill, no hairline outline. */
+        fill = rgb(32, 32, 32);
+        text = rgb(96, 96, 96);
+        outlined = 0;
+        filled = 1;
     } else {
-        outlined = 1;
-        if (hover == 1) fill = col_ui_panel_hi();
-        if (held == 1)  fill = th_shade(col_ui_panel_hi(), 18);
-    }
-    if (filled == 1 && outlined == 0 && kind != "ghost" && held == 0) {
-        eng_fill_round_a(r.x, r.y + 1, r.w, r.h, rad, 0, 0, 0, 50);
+        outlined = 0;
+        fill = col_ui_panel_hi();
+        if (hover == 1) fill = th_shade(col_ui_panel_hi(), 18);
+        if (held == 1)  fill = th_shade(col_ui_panel_hi(), 28);
     }
     if (filled == 1)   th_fill(r, rad, fill);
     if (outlined == 1) th_edge(r, rad, col_ui_border());
@@ -145,26 +137,19 @@ fn th_button(r: Rect, label: string, kind: string, hover: int, held: int) {
     th_font(14);
 }
 
-/* std/ui text box frame; the caller draws the text. */
 fn th_field(r: Rect, focused: int, hover: int) {
     let rad: int = th_radius_for(r.h);
-    let a: Color = col_ui_accent();
-    if (focused == 1) {
-        eng_outline_round_a(r.x - 3, r.y - 3, r.w + 5, r.h + 5, rad + 3, 3, a.r, a.g, a.b, 60);
-    }
     th_fill(r, rad, col_ui_input());
+    /* No idle hairline — only a soft fill lift on hover / accent fill on focus. */
     if (focused == 1) {
-        th_edge(r, rad, a);
+        th_fill_a(rect(r.x, r.y, r.w, r.h), rad, col_ui_accent(), 28);
     } else if (hover == 1) {
-        th_edge(r, rad, th_shade(col_ui_border(), 40));
-    } else {
-        th_edge(r, rad, col_ui_border());
+        th_fill(r, rad, th_shade(col_ui_input(), 18));
     }
 }
 
-/* Text tab: muted label, the active one bright with an accent underline. */
 fn th_tab(r: Rect, label: string, active: int, hover: int) {
-    if (hover == 1 && active == 0) th_fill(rect(r.x, r.y + 3, r.w, r.h - 6), 4, col_ui_panel());
+    if (hover == 1 && active == 0) th_fill(rect(r.x + 2, r.y + 4, r.w - 4, r.h - 8), 6, col_ui_panel());
     let tc: Color = col_ui_text_dim();
     if (active == 1 || hover == 1) tc = col_ui_text();
     if (active == 1) th_font_semi(12);
@@ -172,30 +157,28 @@ fn th_tab(r: Rect, label: string, active: int, hover: int) {
     draw_text_centered(r.x, r.y - 1, r.w, r.h, label, tc);
     if (active == 1) {
         let a: Color = col_ui_accent();
-        eng_fill_round_a(r.x + 6, r.y + r.h - 3, r.w - 12, 3, 1, a.r, a.g, a.b, 255);
+        eng_fill_round_a(r.x + 8, r.y + r.h - 3, r.w - 16, 2, 1, a.r, a.g, a.b, 255);
     }
     th_font(14);
 }
 
-/* std/ui progress bar: 8 px rounded track, accent fill. */
 fn th_progress(x: int, y: int, w: int, num: int, den: int) {
-    th_fill(rect(x, y, w, 8), 4, col_ui_track());
+    th_fill(rect(x, y, w, 6), 3, col_ui_track());
     if (den <= 0 || num <= 0) return;
     let fw: int = (num * w) / den;
     if (fw > w) fw = w;
-    if (fw < 8) fw = 8;
-    th_fill(rect(x, y, fw, 8), 4, col_ui_accent());
+    if (fw < 6) fw = 6;
+    th_fill(rect(x, y, fw, 6), 3, col_ui_accent());
 }
 
-/* Small rounded status chip, e.g. EDIT / PLAY. */
 fn th_chip(r: Rect, label: string, c: Color) {
-    th_fill_a(r, r.h / 2, c, 48);
+    th_fill_a(r, r.h / 2, c, 40);
+    th_edge(r, r.h / 2, c);
     th_font_semi(11);
     draw_text_centered(r.x, r.y, r.w, r.h, label, c);
     th_font(14);
 }
 
-/* Semibold caption in muted text, as std/ui's section titles. */
 fn th_caption(x: int, y: int, s: string) {
     th_font_semi(11);
     draw_text(x, y, s, col_ui_text_dim());

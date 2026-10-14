@@ -146,23 +146,24 @@ fn col_palette(i: int): Color {
 }
 
 // ----- semantic UI colors (the editor reads these for chrome) ---------------
-// Values are NexaC std/ui's "dark" theme, so engine chrome and std/ui windows
-// (the player launcher's error screen) share one palette.
+// Charcoal + soft steel. Equal RGB on surfaces (no blue cast). Shared by
+// editor chrome and std/ui windows (player launcher error screen).
 
-fn col_ui_bg(): Color           { return rgb( 27,  28,  32); }   /* page      */
-fn col_ui_panel(): Color        { return rgb( 37,  39,  44); }   /* surface   */
-fn col_ui_panel_hi(): Color     { return rgb( 48,  51,  58); }   /* raised    */
-fn col_ui_border(): Color       { return rgb( 59,  63,  71); }
-fn col_ui_divider(): Color      { return rgb( 44,  46,  52); }   /* hairlines */
-fn col_ui_input(): Color        { return rgb( 29,  31,  35); }
-fn col_ui_track(): Color        { return rgb( 58,  62,  70); }
-fn col_ui_text(): Color         { return rgb(232, 233, 236); }
-fn col_ui_text_dim(): Color     { return rgb(156, 161, 170); }
-fn col_ui_accent(): Color       { return rgb( 79, 140, 255); }
-fn col_ui_accent_hot(): Color   { return rgb(112, 162, 255); }
-fn col_ui_danger(): Color       { return rgb(240,  82,  79); }
-fn col_ui_success(): Color      { return rgb( 52, 196, 120); }
-fn col_ui_warn(): Color         { return rgb(240, 176,  72); }
-fn col_ui_select(): Color       { return rgb( 41,  56,  84); }   /* list row  */
-fn col_ui_grid(): Color         { return rgb( 36,  38,  44); }
-fn col_ui_grid_major(): Color   { return rgb( 52,  55,  62); }
+fn col_ui_bg(): Color           { return rgb( 18,  18,  18); }   /* page      */
+fn col_ui_panel(): Color        { return rgb( 28,  28,  28); }   /* surface   */
+fn col_ui_panel_hi(): Color     { return rgb( 38,  38,  38); }   /* raised    */
+fn col_ui_border(): Color       { return rgb( 40,  40,  40); }   /* soft, near panel */
+fn col_ui_divider(): Color      { return rgb( 34,  34,  34); }   /* near-invisible */
+fn col_ui_input(): Color        { return rgb( 22,  22,  22); }
+fn col_ui_track(): Color        { return rgb( 50,  50,  50); }
+fn col_ui_text(): Color         { return rgb(196, 196, 196); }   /* titles    */
+fn col_ui_text_dim(): Color     { return rgb(122, 122, 122); }   /* labels    */
+fn col_ui_text_value(): Color   { return rgb(168, 168, 168); }   /* fields    */
+fn col_ui_accent(): Color       { return rgb(120, 148, 196); }
+fn col_ui_accent_hot(): Color   { return rgb(148, 172, 214); }
+fn col_ui_danger(): Color       { return rgb(220,  88,  82); }
+fn col_ui_success(): Color      { return rgb( 90, 168, 118); }
+fn col_ui_warn(): Color         { return rgb(210, 160,  72); }
+fn col_ui_select(): Color       { return rgb( 36,  36,  36); }   /* list row  */
+fn col_ui_grid(): Color         { return rgb( 30,  30,  30); }
+fn col_ui_grid_major(): Color   { return rgb( 44,  44,  44); }

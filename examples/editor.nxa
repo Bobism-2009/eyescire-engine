@@ -19,15 +19,15 @@ extern "C" __declspec(dllimport) int __stdcall MessageBoxA(void*, const char*, c
 let WIN_W:  int = 1320;
 let WIN_H:  int =  820;
 
-let MENUBAR_H:    int = 26;
-let TOOLBAR_H:    int = 38;
-let VTABS_H:      int = 28;
-let STATUSBAR_H:  int = 22;
-let SIDE_W_LEFT:  int = 252;
-let SIDE_W_RIGHT: int = 308;
-let DOCK_H:       int = 236;       /* bottom dock (Project / Console) */
-let DOCK_TABS_H:  int = 28;
-let TAB_H:        int = 26;
+let MENUBAR_H:    int = 30;
+let TOOLBAR_H:    int = 44;
+let VTABS_H:      int = 32;
+let STATUSBAR_H:  int = 26;
+let SIDE_W_LEFT:  int = 260;
+let SIDE_W_RIGHT: int = 316;
+let DOCK_H:       int = 248;       /* bottom dock (Project / Console) */
+let DOCK_TABS_H:  int = 32;
+let TAB_H:        int = 28;
 
 let app_state: string = "welcome";
 let app_subtab: string = "scenes";   /* assets sub-tab: scenes / scripts / prefabs */
@@ -409,13 +409,13 @@ fn draw_subfolders(grid: Rect, abs_dir: string, browse: string, panel: string, c
     return slot;
 }
 
-/* chrome palette: std/ui "dark" (engine/color.nxa col_ui_*) */
+/* chrome palette: charcoal + soft steel (engine/color.nxa col_ui_*) */
 fn col_accent(): Color     { return col_ui_accent(); }
 fn col_accent_dim(): Color { return col_ui_select(); }
 fn col_warn(): Color       { return col_ui_warn(); }
 fn col_play(): Color       { return col_ui_success(); }
 fn col_danger(): Color     { return col_ui_danger(); }
-fn col_bg_deep(): Color    { return rgb(21, 22, 25); }      /* menu + status strips */
+fn col_bg_deep(): Color    { return rgb(14, 14, 14); }      /* menu + status strips */
 fn col_panel_dark(): Color { return col_ui_bg(); }          /* panel bodies */
 fn col_panel_med(): Color  { return col_ui_panel(); }       /* cards, controls */
 fn col_panel_lit(): Color  { return col_ui_panel_hi(); }    /* hover */
@@ -424,7 +424,7 @@ fn col_text_dim(): Color   { return col_ui_text_dim(); }
 fn col_text_main(): Color  { return col_ui_text(); }
 fn col_header(): Color     { return col_ui_bg(); }
 fn col_field(): Color      { return col_ui_input(); }
-fn col_viewport(): Color   { return rgb(30, 32, 37); }
+fn col_viewport(): Color   { return rgb(24, 24, 24); }
 
 fn menubar_y(): int { return 0; }
 fn menubar_bottom(): int { return MENUBAR_H; }
@@ -532,11 +532,11 @@ fn point_in_rect(px: int, py: int, r: Rect): bool {
 }
 
 fn chrome_vsep(x: int, y: int, h: int) {
-    draw_fill_rect(rect(x, y, 1, h), col_border_soft());
+    /* Intentionally blank — 1px rules cause harsh eye strain. */
 }
 
 fn chrome_hsep(x: int, y: int, w: int) {
-    draw_fill_rect(rect(x, y, w, 1), col_border_soft());
+    /* Intentionally blank — panels separate by fill tone only. */
 }
 
 fn chrome_panel(r: Rect) {
@@ -545,19 +545,16 @@ fn chrome_panel(r: Rect) {
 
 fn chrome_header_bar(r: Rect, title: string) {
     draw_fill_rect(r, col_header());
-    chrome_hsep(r.x, r.y + r.h - 1, r.w);
     th_font_semi(12);
-    draw_text(r.x + 12, th_text_y(r.y, r.h), title, col_text_main());
+    draw_text(r.x + 14, th_text_y(r.y, r.h), title, col_text_main());
     th_font(14);
 }
 
-/* Inspector / form section: std/ui caption plus a hairline. Returns y below it. */
+/* Inspector / form section caption. Returns y below it. */
 fn chrome_section(x: int, y: int, w: int, title: string): int {
     th_font_semi(11);
-    let tw: int = eng_text_width(title);
     draw_text(x, y + 3, title, col_text_dim());
     th_font(14);
-    chrome_hsep(x + tw + 10, y + 11, w - tw - 10);
     return y + 26;
 }
 
@@ -682,11 +679,11 @@ fn ui_field_draw(r: Rect, value: string, focused: int) {
         if (mid_w < 1) mid_w = 1;
         draw_fill_rect(rect(x + pre_w, r.y + 4, mid_w, r.h - 8), rgb(46, 96, 180));
     }
-    draw_text(x, ty, value, col_text_main());
+    draw_text(x, ty, value, col_ui_text_value());
     if (focused == 1 && edit_anchor == edit_caret) {
         let pre: string = value.substring(0, edit_caret);
         let cx: int = x + eng_text_width(pre);
-        draw_fill_rect(rect(cx, r.y + 5, 1, r.h - 10), col_text_main());
+        draw_fill_rect(rect(cx, r.y + 5, 1, r.h - 10), col_ui_text_value());
     }
     th_font(14);
 }
@@ -1426,6 +1423,49 @@ fn welcome_draw_recent(cx: int, cy: int, cw: int, ch: int) {
     }
 }
 
+/* Soft mini-preview for a new-project template card. */
+fn welcome_template_preview(pv: Rect, id: string) {
+    th_fill(pv, TH_RADIUS, col_viewport());
+    /* gentle inner plate */
+    th_fill_a(rect(pv.x + 6, pv.y + 6, pv.w - 12, pv.h - 12), TH_RADIUS - 2, col_panel_med(), 70);
+
+    let ac: Color = col_accent();
+    let coin: Color = rgb(210, 168, 88);
+    let soft: Color = rgb(70, 70, 70);
+
+    if (id == "empty") {
+        /* blank canvas: muted document plate + empty glyph */
+        let plate: Rect = rect(pv.x + pv.w / 2 - 22, pv.y + 16, 44, 48);
+        th_fill(plate, 8, soft);
+        th_fill(rect(plate.x + 4, plate.y + 4, plate.w - 8, plate.h - 8), 6, col_viewport());
+        icon_draw("empty", pv.x + pv.w / 2 - 12, pv.y + pv.h / 2 - 10, 24, 24, col_text_dim());
+    } else if (id == "topdown") {
+        /* top-down arena: soft ground disc, player, coins */
+        let gx: int = pv.x + pv.w / 2 - 34;
+        let gy: int = pv.y + pv.h / 2 - 26;
+        eng_fill_round_a(gx, gy, 68, 52, 26, soft.r, soft.g, soft.b, 220);
+        eng_fill_round_a(gx + 8, gy + 6, 52, 40, 20, 32, 32, 32, 255);
+        /* player (top-down capsule) */
+        icon_draw("capsule", pv.x + pv.w / 2 - 11, pv.y + pv.h / 2 - 14, 22, 28, ac);
+        /* coins */
+        icon_draw("sphere", pv.x + 22, pv.y + 18, 14, 14, coin);
+        icon_draw("sphere", pv.x + pv.w - 36, pv.y + pv.h - 28, 14, 14, coin);
+        icon_draw("sphere", pv.x + pv.w - 48, pv.y + 20, 11, 11, th_shade(coin, 40));
+    } else if (id == "3d") {
+        /* soft platform + cube + coin + camera cue */
+        let fx: int = pv.x + 18;
+        let fw: int = pv.w - 36;
+        let fy: int = pv.y + pv.h - 20;
+        eng_fill_round_a(fx + 10, fy - 10, fw - 20, 14, 7, soft.r, soft.g, soft.b, 200);
+        eng_fill_round_a(fx, fy - 2, fw, 12, 6, 48, 48, 48, 255);
+        icon_draw("cube", pv.x + pv.w / 2 - 16, fy - 42, 28, 28, ac);
+        icon_draw("sphere", pv.x + 36, fy - 36, 16, 16, coin);
+        icon_draw("camera", pv.x + pv.w - 34, pv.y + 12, 16, 16, col_text_dim());
+    } else {
+        icon_draw("scene", pv.x + pv.w / 2 - 14, pv.y + pv.h / 2 - 14, 28, 28, col_text_dim());
+    }
+}
+
 fn welcome_template_card(rx: int, ry: int, rw: int, rh: int, id: string, title: string, desc: string): int {
     let mx: int = eng_mouse_x();
     let my: int = eng_mouse_y();
@@ -1437,30 +1477,9 @@ fn welcome_template_card(rx: int, ry: int, rw: int, rh: int, id: string, title: 
     if (hover) card_hover = 1;
     th_card(card, active, card_hover);
 
-    /* preview block (decorative) */
+    /* preview block — soft filled mini-scene, no hairline art */
     let pv: Rect = rect(card.x + 12, card.y + 12, card.w - 24, 80);
-    th_fill(pv, TH_RADIUS, col_viewport());
-    if (id == "topdown") {
-        eng_fill_round_a(pv.x + pv.w / 2 - 9, pv.y + pv.h / 2 - 9, 18, 18, 4, 220, 180, 80, 255);
-        eng_fill_round_a(pv.x + 28, pv.y + 18, 10, 10, 5, 240, 210, 80, 255);
-        eng_fill_round_a(pv.x + pv.w - 40, pv.y + pv.h - 30, 10, 10, 5, 240, 210, 80, 255);
-    } else if (id == "3d") {
-        /* a floor in perspective, a cube on it and a coin */
-        let fx: int = pv.x + 20;
-        let fw: int = pv.w - 40;
-        let fy: int = pv.y + pv.h - 22;
-        eng_fill_rect(fx + 18, fy - 12, fw - 36, 12, 58, 74, 100);
-        eng_fill_rect(fx, fy, fw, 8, 70, 90, 120);
-        let cx0: int = pv.x + pv.w / 2 - 16;
-        let cy0: int = fy - 34;
-        eng_fill_rect(cx0, cy0, 26, 26, 79, 140, 255);
-        eng_fill_rect(cx0, cy0, 26, 5, 130, 175, 255);
-        eng_fill_rect(cx0 + 21, cy0, 5, 26, 55, 100, 200);
-        eng_fill_round_a(pv.x + 44, fy - 40, 14, 14, 7, 245, 200, 70, 255);
-    } else {
-        eng_fill_rect(pv.x + pv.w / 2 - 30, pv.y + pv.h / 2, 60, 1, 62, 78, 112);
-        eng_fill_rect(pv.x + pv.w / 2, pv.y + pv.h / 2 - 30, 1, 60, 62, 78, 112);
-    }
+    welcome_template_preview(pv, id);
     if (active == 1) th_chip(rect(pv.x + pv.w - 74, pv.y + 8, 66, 20), "SELECTED", col_accent());
 
     th_font_semi(14);
@@ -1703,9 +1722,11 @@ fn compile_overlay_draw() {
     let px: int = (WIN_W - pw) / 2;
     let py: int = (WIN_H - ph) / 2;
 
+    /* Solid wipe — no translucent shadow peeking the editor behind. */
     draw_fill_rect(rect(0, 0, WIN_W, WIN_H), col_ui_bg());
     let card: Rect = rect(px, py, pw, ph);
-    th_popup(card);
+    th_fill(card, TH_RADIUS, col_ui_panel());
+
 
     th_font_semi(18);
     draw_text(px + 28, py + 26, "Compiling Nexa scripts", col_text_main());
@@ -5170,15 +5191,12 @@ fn tool_help_text(): string {
 }
 
 fn toolbar_tool_rect(index: int): Rect {
-    let r: Rect = toolbar_rect();
-    let by: int = r.y + 4;
-    let bh: int = TOOLBAR_H - 8;
     let bx: int = TOOL_BTN_X0 + index * (TOOL_BTN_W + TOOL_BTN_GAP);
-    return rect(bx, by, TOOL_BTN_W, bh);
+    return rect(bx, toolbar_btn_y(), TOOL_BTN_W, toolbar_btn_h());
 }
 
-fn toolbar_btn_y(): int { return toolbar_y() + 4; }
-fn toolbar_btn_h(): int { return TOOLBAR_H - 8; }
+fn toolbar_btn_h(): int { return 32; }
+fn toolbar_btn_y(): int { return toolbar_y() + (TOOLBAR_H - toolbar_btn_h()) / 2; }
 
 fn toolbar_icon_w(): int { return 32; }
 fn toolbar_save_rect(): Rect {
@@ -11770,6 +11788,37 @@ fn export_is_source(rel: string): int {
     return 0;
 }
 
+fn export_fail(msg: string) {
+    eng_log("[export] " + msg);
+    dock_tab = "console";
+    inline_cpp! {
+        MessageBoxA(nullptr, msg.c_str(), "Eyescire Export", 0x10);
+    }
+}
+
+/* llvm-mingw runtime DLLs — search next to the editor, engine.dll, then ../release. */
+fn export_find_runtime_dll(name: string): string {
+    let a: string = eng_exe_dir() + "\\" + name;
+    if (eng_fs_exists(a) == 1) return a;
+    let engp: string = eng_engine_dll_path();
+    let slash: int = -1;
+    let i: int = 0;
+    while (i < engp.len()) {
+        let c: string = engp.substring(i, 1);
+        if (c == "\\" || c == "/") slash = i;
+        i = i + 1;
+    }
+    if (slash >= 0) {
+        let b: string = engp.substring(0, slash) + "\\" + name;
+        if (eng_fs_exists(b) == 1) return b;
+        let c2: string = engp.substring(0, slash) + "\\..\\release\\" + name;
+        if (eng_fs_exists(c2) == 1) return c2;
+    }
+    let d: string = eng_exe_dir() + "\\..\\release\\" + name;
+    if (eng_fs_exists(d) == 1) return d;
+    return "";
+}
+
 fn do_export() {
     if (proj_loaded() == 0) return;
 
@@ -11779,6 +11828,14 @@ fn do_export() {
     let dist_dir:  string = proj_path_join(dist_root, pname);
     if (export_dest.len() > 0) dist_dir = export_dest;
 
+    /* Resolve runtime DLLs before wiping dist — abort cleanly if missing. */
+    let cxx_src: string = export_find_runtime_dll("libc++.dll");
+    let unw_src: string = export_find_runtime_dll("libunwind.dll");
+    if (cxx_src.len() == 0 || unw_src.len() == 0) {
+        export_fail("libc++.dll / libunwind.dll not found next to the editor. Run build.cmd, then export again.");
+        return;
+    }
+
     eng_log("[export] target: " + dist_dir);
     eng_fs_remove_tree(dist_dir);
     eng_fs_make_dir(dist_dir);
@@ -11787,25 +11844,32 @@ fn do_export() {
     if (scene_render3d() == 1) {
         /* 3D: EyescirePlayer3D.exe -> <ProjectName>.exe; it opens project.eye beside it */
         if (eng_fs_copy_file(player3d_exe_path(), runtime_dst) == 0) {
-            eng_log("[export] FAILED to copy EyescirePlayer3D.exe"); return;
+            export_fail("FAILED to copy EyescirePlayer3D.exe"); return;
         }
     } else {
         /* EyescirePlayer.exe launcher -> <ProjectName>.exe */
         if (eng_fs_copy_file(eng_runtime_exe_path(), runtime_dst) == 0) {
-            eng_log("[export] FAILED to copy EyescirePlayer.exe launcher"); return;
+            export_fail("FAILED to copy EyescirePlayer.exe launcher"); return;
         }
 
         /* EyescirePlayer.dll — game player module */
         let player_dst: string = proj_path_join(dist_dir, "EyescirePlayer.dll");
         if (eng_fs_copy_file(eng_player_dll_path(), player_dst) == 0) {
-            eng_log("[export] FAILED to copy EyescirePlayer.dll"); return;
+            export_fail("FAILED to copy EyescirePlayer.dll"); return;
         }
     }
 
     /* engine.dll */
     let engine_dst: string = proj_path_join(dist_dir, "engine.dll");
     if (eng_fs_copy_file(eng_engine_dll_path(), engine_dst) == 0) {
-        eng_log("[export] FAILED to copy engine.dll"); return;
+        export_fail("FAILED to copy engine.dll"); return;
+    }
+
+    if (eng_fs_copy_file(cxx_src, proj_path_join(dist_dir, "libc++.dll")) == 0) {
+        export_fail("FAILED to copy libc++.dll"); return;
+    }
+    if (eng_fs_copy_file(unw_src, proj_path_join(dist_dir, "libunwind.dll")) == 0) {
+        export_fail("FAILED to copy libunwind.dll"); return;
     }
 
     let root: string = proj_root();
@@ -11816,7 +11880,7 @@ fn do_export() {
     if (prot > 0) enc = 1;
     if (enc == 1) {
         if (eng_content_key_generate() == 0) {
-            eng_log("[export] FAILED to generate content key"); return;
+            export_fail("FAILED to generate content key"); return;
         }
         eng_content_set_protect(prot);
         if (prot == 3) eng_log("[export] Secure protection: dual ChaCha + per-file keys + triple split");
@@ -11878,7 +11942,7 @@ fn do_export() {
         if (prot >= 2) emb = eng_content_embed_key_ex(runtime_dst, engine_dst);
         else emb = eng_content_embed_key(runtime_dst);
         if (emb == 0) {
-            eng_log("[export] FAILED to embed content key in " + runtime_dst); return;
+            export_fail("FAILED to embed content key (protection). Check Console for details."); return;
         }
         eng_content_key_clear();
     }
@@ -11928,15 +11992,15 @@ fn ui_chrome_icon_draw(r: Rect, icon: string, tooltip: string, kind: string) {
     if (kind != "disabled" && st == 2) held = 1;
     th_button(r, "", kind, hover, held);
     let c: Color = col_text_main();
-    if (kind == "primary" || kind == "danger") c = th_white();
-    if (kind == "disabled") c = rgb(92, 96, 104);
-    let margin: int = 6;
-    if (r.h < 24) margin = 3;
-    let s: int = r.h - margin * 2;
-    let sw: int = r.w - margin * 2;
-    if (sw < s) s = sw;
-    if (s < 8) s = 8;
-    icon_draw(icon, r.x + (r.w - s) / 2, r.y + (r.h - s) / 2 + held, s, s, c);
+    if (kind == "primary" || kind == "danger") c = rgb(220, 220, 220);
+    if (kind == "disabled") c = rgb(110, 110, 110);
+    /* Fixed glyph size so Play / Pause / Stop share one optical box. */
+    let s: int = 18;
+    if (r.w < 28 || r.h < 28) s = 14;
+    let ix: int = r.x + (r.w - s) / 2;
+    let iy: int = r.y + (r.h - s) / 2;
+    if (held == 1) iy = iy + 1;
+    icon_draw(icon, ix, iy, s, s, c);
     if (hover == 1 && tooltip.len() > 0) tooltip_request(tooltip, r);
 }
 
@@ -11956,7 +12020,6 @@ fn ui_tool_btn_draw(r: Rect, label: string, shortcut: string, active: int) {
     let tc: Color = col_text_dim();
     if (active == 1) {
         th_fill(r, th_radius_for(r.h), col_accent_dim());
-        th_edge(r, th_radius_for(r.h), col_accent());
         tc = th_shade(col_accent(), 90);
     } else if (hover == 1) {
         th_fill(r, th_radius_for(r.h), col_panel_lit());

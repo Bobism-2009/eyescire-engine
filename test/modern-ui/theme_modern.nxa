@@ -1,0 +1,189 @@
+// =============================================================================
+// Modern UI experiment — editor theme (test only).
+//
+// Not used by the production editor. True charcoal + soft steel accent,
+// clearer hierarchy, slightly larger rounding. Production theme stays in
+// engine/theme.nxa.
+// =============================================================================
+
+let TH_RADIUS: int = 10;
+
+/* Neutral black-gray surfaces (equal RGB — no blue cast). Soft steel accent. */
+fn mui_bg(): Color         { return rgb( 18,  18,  18); }
+fn mui_panel(): Color      { return rgb( 28,  28,  28); }
+fn mui_panel_hi(): Color   { return rgb( 38,  38,  38); }
+fn mui_border(): Color     { return rgb( 56,  56,  56); }
+fn mui_divider(): Color    { return rgb( 42,  42,  42); }
+fn mui_input(): Color      { return rgb( 22,  22,  22); }
+fn mui_track(): Color      { return rgb( 50,  50,  50); }
+fn mui_text(): Color       { return rgb(196, 196, 196); }  /* titles / chrome */
+fn mui_text_dim(): Color   { return rgb(122, 122, 122); }  /* field labels */
+fn mui_text_value(): Color { return rgb(168, 168, 168); }  /* field values */
+fn mui_accent(): Color     { return rgb(120, 148, 196); }
+fn mui_accent_hot(): Color { return rgb(148, 172, 214); }
+fn mui_danger(): Color     { return rgb(220,  88,  82); }
+fn mui_success(): Color    { return rgb( 90, 168, 118); }
+fn mui_warn(): Color       { return rgb(210, 160,  72); }
+fn mui_select(): Color     { return rgb( 36,  36,  36); }
+fn mui_grid(): Color       { return rgb( 30,  30,  30); }
+fn mui_grid_major(): Color { return rgb( 44,  44,  44); }
+
+fn th_font(px: int)      { eng_set_font("Bahnschrift", px); }
+fn th_font_semi(px: int) { eng_set_font("Bahnschrift SemiBold", px); }
+fn th_font_mono(px: int) { eng_set_font("Cascadia Mono", px); }
+
+fn th_text_y(ry: int, rh: int): int {
+    return ry + (rh - eng_text_height()) / 2;
+}
+
+fn th_white(): Color { return rgb(255, 255, 255); }
+
+fn th_shade(c: Color, amt: int): Color {
+    return col_lerp(c, th_white(), (amt * 100) / 255);
+}
+
+fn th_radius_for(h: int): int {
+    if (TH_RADIUS * 2 > h) return h / 2;
+    return TH_RADIUS;
+}
+
+fn th_fill(r: Rect, rad: int, c: Color) {
+    eng_fill_round_a(r.x, r.y, r.w, r.h, rad, c.r, c.g, c.b, 255);
+}
+
+fn th_fill_a(r: Rect, rad: int, c: Color, a: int) {
+    eng_fill_round_a(r.x, r.y, r.w, r.h, rad, c.r, c.g, c.b, a);
+}
+
+fn th_edge(r: Rect, rad: int, c: Color) {
+    eng_outline_round_a(r.x, r.y, r.w - 1, r.h - 1, rad, 1, c.r, c.g, c.b, 255);
+}
+
+fn th_ring(r: Rect, rad: int, thickness: int, c: Color) {
+    eng_outline_round_a(r.x, r.y, r.w - 1, r.h - 1, rad, thickness, c.r, c.g, c.b, 255);
+}
+
+fn th_shadow(r: Rect, rad: int) {
+    /* One soft lift — avoid stacked heavy shadows. */
+    eng_fill_round_a(r.x, r.y + 3, r.w, r.h + 2, rad + 2, 0, 0, 0, 55);
+}
+
+fn th_card(r: Rect, active: int, hover: int) {
+    let rad: int = TH_RADIUS;
+    th_shadow(r, rad);
+    let fill: Color = mui_panel();
+    if (hover == 1) fill = mui_panel_hi();
+    th_fill(r, rad, fill);
+    let edge: Color = mui_border();
+    if (active == 1) edge = mui_accent();
+    th_edge(r, rad, edge);
+}
+
+fn th_popup(r: Rect) {
+    let rad: int = TH_RADIUS;
+    th_shadow(r, rad);
+    th_fill(r, rad, mui_panel());
+    th_edge(r, rad, mui_border());
+}
+
+fn th_row(r: Rect, selected: int, hover: int) {
+    if (selected == 1) {
+        th_fill(r, 6, mui_select());
+        let bh: int = r.h - 10;
+        if (bh > 16) bh = 16;
+        if (bh < 8) bh = 8;
+        let a: Color = mui_accent();
+        eng_fill_round_a(r.x + 4, r.y + (r.h - bh) / 2, 3, bh, 2, a.r, a.g, a.b, 255);
+    } else if (hover == 1) {
+        th_fill(r, 6, mui_panel_hi());
+    }
+}
+
+fn th_menu_row(r: Rect, hover: int) {
+    if (hover == 1) th_fill(rect(r.x + 4, r.y + 2, r.w - 8, r.h - 4), 6, mui_panel_hi());
+}
+
+fn th_button(r: Rect, label: string, kind: string, hover: int, held: int) {
+    let rad: int = th_radius_for(r.h);
+    let fill: Color = mui_panel();
+    let text: Color = mui_text();
+    let filled: int = 1;
+    let outlined: int = 0;
+    if (kind == "primary" || kind == "danger") {
+        fill = mui_accent();
+        if (kind == "danger") fill = mui_danger();
+        text = rgb(220, 220, 220);
+        if (held == 1)       fill = th_shade(fill, 36);
+        else if (hover == 1) fill = th_shade(fill, 18);
+    } else if (kind == "ghost") {
+        fill = mui_panel_hi();
+        filled = 0;
+        if (hover == 1 || held == 1) filled = 1;
+        if (held == 1) fill = th_shade(fill, 14);
+    } else if (kind == "disabled") {
+        fill = mui_bg();
+        text = rgb(88, 92, 100);
+        outlined = 1;
+    } else {
+        outlined = 1;
+        if (hover == 1) fill = mui_panel_hi();
+        if (held == 1)  fill = th_shade(mui_panel_hi(), 14);
+    }
+    if (filled == 1)   th_fill(r, rad, fill);
+    if (outlined == 1) th_edge(r, rad, mui_border());
+    if (label.len() == 0) return;
+    th_font_semi(12);
+    draw_text_centered(r.x, r.y + held, r.w, r.h, label, text);
+    th_font(14);
+}
+
+fn th_field(r: Rect, focused: int, hover: int) {
+    let rad: int = th_radius_for(r.h);
+    let a: Color = mui_accent();
+    th_fill(r, rad, mui_input());
+    if (focused == 1) {
+        th_edge(r, rad, a);
+        th_ring(rect(r.x - 1, r.y - 1, r.w + 2, r.h + 2), rad + 1, 1, mui_accent_hot());
+    } else if (hover == 1) {
+        th_edge(r, rad, th_shade(mui_border(), 50));
+    } else {
+        th_edge(r, rad, mui_border());
+    }
+}
+
+fn th_tab(r: Rect, label: string, active: int, hover: int) {
+    if (hover == 1 && active == 0) th_fill(rect(r.x + 2, r.y + 4, r.w - 4, r.h - 8), 6, mui_panel());
+    let tc: Color = mui_text_dim();
+    if (active == 1 || hover == 1) tc = mui_text();
+    if (active == 1) th_font_semi(12);
+    else             th_font(12);
+    draw_text_centered(r.x, r.y - 1, r.w, r.h, label, tc);
+    if (active == 1) {
+        let a: Color = mui_accent();
+        eng_fill_round_a(r.x + 8, r.y + r.h - 3, r.w - 16, 2, 1, a.r, a.g, a.b, 255);
+    }
+    th_font(14);
+}
+
+fn th_progress(x: int, y: int, w: int, num: int, den: int) {
+    th_fill(rect(x, y, w, 6), 3, mui_track());
+    if (den <= 0 || num <= 0) return;
+    let fw: int = (num * w) / den;
+    if (fw > w) fw = w;
+    if (fw < 6) fw = 6;
+    th_fill(rect(x, y, fw, 6), 3, mui_accent());
+}
+
+fn th_chip(r: Rect, label: string, c: Color) {
+    th_fill_a(r, r.h / 2, c, 40);
+    th_edge(r, r.h / 2, c);
+    th_font_semi(11);
+    draw_text_centered(r.x, r.y, r.w, r.h, label, c);
+    th_font(14);
+}
+
+fn th_caption(x: int, y: int, s: string) {
+    th_font_semi(11);
+    draw_text(x, y, s, mui_text_dim());
+    th_font(14);
+}

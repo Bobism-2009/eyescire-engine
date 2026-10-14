@@ -34,6 +34,21 @@ if not exist bin\engine.dll (echo engine.dll build failed & exit /b 1)
 copy /y bin\engine.dll build\engine.dll >nul
 copy /y bin\engine.lib build\engine.lib >nul
 
+rem llvm-mingw C++ runtime (engine.dll imports these; must sit next to the exes)
+echo == copying libc++.dll / libunwind.dll
+set RT_DIR=
+for /f "delims=" %%i in ('clang++ -print-prog-name^=clang++') do set RT_DIR=%%~dpi
+if not exist "%RT_DIR%libc++.dll" (
+  echo libc++.dll not found next to the compiler: %RT_DIR%
+  exit /b 1
+)
+if not exist "%RT_DIR%libunwind.dll" (
+  echo libunwind.dll not found next to the compiler: %RT_DIR%
+  exit /b 1
+)
+copy /y "%RT_DIR%libc++.dll"    build\ >nul
+copy /y "%RT_DIR%libunwind.dll" build\ >nul
+
 rem game scripts compile against the eyescire package (#include ^<eyescire/script^>):
 rem keep it in step with engine\ so they see the same API as engine.dll
 if exist "%USERPROFILE%\.nexa\packages\eyescire" copy /y engine\*.nxa "%USERPROFILE%\.nexa\packages\eyescire\" >nul
@@ -82,6 +97,7 @@ if not exist build\EyescirePlayer.exe (echo EyescirePlayer.exe build failed & ex
 echo.
 echo Build complete:
 dir /b build\*.exe
+dir /b build\libc++.dll build\libunwind.dll 2>nul
 echo.
 echo Try:
 echo   build\editor.exe

@@ -23,10 +23,17 @@ if not exist build\editor.exe (echo build\editor.exe missing - run build.cmd fir
 if not exist build\engine.dll (echo build\engine.dll missing - run build.cmd first & exit /b 1)
 if not exist build\EyescirePlayer3D.exe (echo build\EyescirePlayer3D.exe missing - run build.cmd first & exit /b 1)
 
-set RT_DIR=
-for /f "delims=" %%i in ('clang++ -print-prog-name^=clang++') do set RT_DIR=%%~dpi
-if not exist "%RT_DIR%libc++.dll"    (echo libc++.dll not found next to the compiler: %RT_DIR% & exit /b 1)
-if not exist "%RT_DIR%libunwind.dll" (echo libunwind.dll not found next to the compiler: %RT_DIR% & exit /b 1)
+rem Prefer the copies build.cmd already staged; fall back to the compiler bin.
+set CXX_DLL=build\libc++.dll
+set UNW_DLL=build\libunwind.dll
+if not exist "%CXX_DLL%" (
+  set RT_DIR=
+  for /f "delims=" %%i in ('clang++ -print-prog-name^=clang++') do set RT_DIR=%%~dpi
+  set CXX_DLL=%RT_DIR%libc++.dll
+  set UNW_DLL=%RT_DIR%libunwind.dll
+)
+if not exist "%CXX_DLL%" (echo libc++.dll not found - run build.cmd first & exit /b 1)
+if not exist "%UNW_DLL%" (echo libunwind.dll not found - run build.cmd first & exit /b 1)
 
 rem rename first: it fails as a whole if anything inside is open, so a running
 rem release\editor.exe can't leave the folder half-deleted
@@ -40,8 +47,8 @@ copy /y build\editor.exe           release\ >nul
 copy /y build\EyescirePlayer3D.exe release\ >nul
 copy /y build\engine.dll           release\ >nul
 copy /y build\engine.lib           release\ >nul
-copy /y "%RT_DIR%libc++.dll"       release\ >nul
-copy /y "%RT_DIR%libunwind.dll"    release\ >nul
+copy /y "%CXX_DLL%"                release\libc++.dll >nul
+copy /y "%UNW_DLL%"                release\libunwind.dll >nul
 if exist build\icons (
   mkdir release\icons
   copy /y build\icons\*.png release\icons\ >nul
