@@ -1991,13 +1991,15 @@ static void line(V3 a, V3 b, int r, int g_, int bl, int alpha) {
     glEnable(GL_LIGHTING);
 }
 
-/* Selection outline: stencil the selected meshes, then draw them again as thick
-   wireframe where the stencil is clear, which leaves only the silhouette. */
+/* Selection outline: stencil the visible selected mesh, then thick wireframe
+   where the stencil is clear. Depth stays on so an overlapping neighbor does
+   not get a silhouette slash cut through it. */
 static void outline(int r, int g_, int b) {
     if (S.core) { outline33(r, g_, b); return; }
     if (S.selected.empty()) return;
     glDisable(GL_LIGHTING);
-    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glEnable(GL_STENCIL_TEST);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDepthMask(GL_FALSE);
@@ -2009,8 +2011,11 @@ static void outline(int r, int g_, int b) {
     glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     glLineWidth(4.0f);
+    glEnable(GL_POLYGON_OFFSET_LINE);
+    glPolygonOffset(-1.0f, -1.0f);
     glColor3ub((GLubyte)r, (GLubyte)g_, (GLubyte)b);
     for (int s : S.selected) if (active_slot(s)) shape(g.entities[s]);
+    glDisable(GL_POLYGON_OFFSET_LINE);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glLineWidth(1.0f);
     glDisable(GL_STENCIL_TEST);
@@ -2495,10 +2500,11 @@ extern "C" void engine_r3d_hitbox(int s) {
     float w = (float)e.w, h = (float)e.h;
     if (w <= 0 || h <= 0) return;
     if (g_useGL || g_useVk) {
-        if (g_useVk) glb::vk_frame_cover_model(e, 70, 210, 120, 90);
+        /* soft white — matches modern selection chrome (not legacy lime) */
+        if (g_useVk) glb::vk_frame_cover_model(e, 235, 236, 240, 72);
         else {
             glb::aa_for(e);
-            glb::cover_model(e, 70, 210, 120, 90);
+            glb::cover_model(e, 235, 236, 240, 72);
             glb::aa_project();
         }
         return;
@@ -2512,8 +2518,8 @@ extern "C" void engine_r3d_hitbox(int s) {
     float sz = std::max(w, h) * kUnit;
     xf.scale = v3(sz, sz, sz);
     int saved = meshA;
-    meshA = 90;
-    mesh_model(*m, xf, 70, 210, 120, -1);
+    meshA = 72;
+    mesh_model(*m, xf, 235, 236, 240, -1);
     meshA = saved;
 }
 

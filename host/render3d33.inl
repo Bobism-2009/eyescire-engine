@@ -477,12 +477,16 @@ float shadow_pcf(vec4 clip) {
         vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
     );
     float s = 0.0;
-    float scale = 48.0 / 4096.0;
+    float scale = 24.0 / 2048.0;
     for (int i = 0; i < 16; i++) {
         float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
         s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
     }
-    return s / 16.0;
+    float lit = s / 16.0;
+    /* Soften the light-frustum border so it does not read as a hard triangle. */
+    float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
+    float fade = smoothstep(0.0, 0.06, edge);
+    return mix(1.0, lit, fade);
 }
 void main() {
     vec3 col = gl_FrontFacing ? vFront : vBack;
@@ -576,12 +580,15 @@ float shadow_pcf(vec4 clip) {
         vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
     );
     float s = 0.0;
-    float scale = 48.0 / 4096.0;
+    float scale = 24.0 / 2048.0;
     for (int i = 0; i < 16; i++) {
         float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
         s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
     }
-    return s / 16.0;
+    float lit = s / 16.0;
+    float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
+    float fade = smoothstep(0.0, 0.06, edge);
+    return mix(1.0, lit, fade);
 }
 vec3 shade(vec3 n, vec3 pe, vec3 albedo, float metal, float rough) {
     vec3 direct = vec3(0.0);
@@ -1308,7 +1315,8 @@ using FbTexFn = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
 static FbTexFn g_fbTex = nullptr;
 static int g_shFailed = 0;
 
-static constexpr int kShadowMap = 4096;
+/* 2048 is enough for soft PCF; 4096 was a large GPU fill-rate cost every frame. */
+static constexpr int kShadowMap = 2048;
 
 static bool ensure_shadow_target() {
     if (g_shFailed) return false;
@@ -1336,14 +1344,17 @@ static bool ensure_shadow_target() {
     return true;
 }
 
-/* Fit the light box to the camera so a huge ground plane cannot dilute the
-   shadow map into blocky texels. */
+/* Fit the light box: prefer the caster AABB so the map does not skate with
+   the orbit target (that left a sliding dark wedge on large floors). Pull
+   slightly toward the look point for sharper nearby detail, and keep a higher
+   max half so big scenes stay covered. */
 static void shadow_fit_box(V3& center, float& half, float sceneRadius) {
     float halfScene = sceneRadius * 1.1f;
     if (halfScene < 6.f) halfScene = 6.f;
+    V3 sceneCenter = center;
     if (!C.valid) {
         half = halfScene;
-        if (half > 24.f) half = 24.f;
+        if (half > 96.f) half = 96.f;
         return;
     }
     V3 gap = C.target - C.eye;
@@ -1352,10 +1363,13 @@ static void shadow_fit_box(V3& center, float& half, float sceneRadius) {
     float aspect = (float)T.w / (float)std::max(T.h, 1);
     float halfCam = d * tanHalf * std::max(aspect, 1.f) * 1.35f + 4.f;
     if (halfCam < 10.f) halfCam = 10.f;
-    if (halfCam > 24.f) halfCam = 24.f;
-    half = halfCam;
-    if (halfScene < half) half = std::max(halfScene, 8.f);
-    center = C.target;
+    if (halfCam > 96.f) halfCam = 96.f;
+    half = halfScene;
+    if (half > halfCam * 1.6f) half = halfCam * 1.6f;
+    if (half < halfCam) half = halfCam;
+    if (half > 96.f) half = 96.f;
+    if (half < 8.f) half = 8.f;
+    center = sceneCenter * 0.72f + C.target * 0.28f;
 }
 
 /* Large flat floors inflate the light box; skip them when measuring casters. */
@@ -1856,7 +1870,10 @@ static void line33(V3 a, V3 b, int r, int g, int bl, int alpha) {
 static void outline33(int r, int og, int ob) {
     flush_lines33();
     if (S.selected.empty()) return;
-    glDisable(GL_DEPTH_TEST);
+    /* Depth on: only the visible front of the selection is stenciled, so an
+       overlapping mesh does not get a silhouette plane cut through it. */
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
     glEnable(GL_STENCIL_TEST);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDepthMask(GL_FALSE);
@@ -1869,6 +1886,8 @@ static void outline33(int r, int og, int ob) {
     glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
     glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glEnable(GL_POLYGON_OFFSET_LINE);
+    glPolygonOffset(-1.0f, -1.0f);
     K.color[0] = r / 255.0f; K.color[1] = og / 255.0f; K.color[2] = ob / 255.0f;
     if (K.wideLines) {
         glLineWidth(4.0f);
@@ -1884,6 +1903,7 @@ static void outline33(int r, int og, int ob) {
         }
         K.ndcX = K.ndcY = 0;
     }
+    glDisable(GL_POLYGON_OFFSET_LINE);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glLineWidth(1.0f);
     glDisable(GL_STENCIL_TEST);

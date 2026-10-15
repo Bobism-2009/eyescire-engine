@@ -654,7 +654,7 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
             V3 up = norm(cross(rightv, fwd));
             float dist = half + 4.0f;
             V3 eye = center - fwd * dist;
-            float texel = (half * 2.f) / 4096.f;
+            float texel = (half * 2.f) / 2048.f;
             if (texel > 1e-6f) {
                 float lx = dot(eye, rightv);
                 float ly = dot(eye, up);

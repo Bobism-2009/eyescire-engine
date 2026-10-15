@@ -17,6 +17,12 @@
 
 #include <box2d/box2d.h>
 
+/* Jolt headers live in physics_jolt.inl (included with the physics section).
+   Predeclare the invalid body id sentinel used on Entity. */
+#ifndef EYESCIRE_JOLT_INVALID_BODY
+#define EYESCIRE_JOLT_INVALID_BODY 0xffffffffu
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -267,7 +273,8 @@ struct Entity {
     int         hitbox        = 0;
     /* 0..100. Sliders and progress bars. Scene field 54. */
     int         uiValue       = 0;
-    b2Body*     body          = nullptr;  /* runtime only, not serialized */
+    b2Body*     body          = nullptr;  /* runtime only, not serialized (Box2D / 2D) */
+    uint32_t    joltBody      = EYESCIRE_JOLT_INVALID_BODY; /* runtime only (Jolt / 3D) */
 };
 
 struct UndoEntry {
@@ -3133,6 +3140,27 @@ extern "C" const char* engine_entity_model_path(int s) {
 struct FpsBody { float vy = 0.f; int grounded = 1; };
 static std::unordered_map<int, FpsBody> g_fps;
 
+/* Forward decls — bodies live in physics_jolt.inl (same anonymous namespace). */
+namespace {
+bool jolt_active();
+void jolt_destroy_body(Entity& e);
+void jolt_begin();
+void jolt_end();
+void jolt_step(float dt);
+void jolt_apply_entity(Entity& e);
+void jolt_set_gravity(float gx, float gy);
+void jolt_apply_force(Entity& e, float fx, float fy, float fz);
+void jolt_apply_impulse(Entity& e, float ix, float iy, float iz);
+void jolt_set_velocity(Entity& e, float vx, float vy, float vz);
+void jolt_get_velocity(const Entity& e, float& vx, float& vy, float& vz);
+void jolt_set_body_type(Entity& e, int t);
+void jolt_set_friction(Entity& e, float v);
+void jolt_set_restitution(Entity& e, float v);
+void jolt_set_gravity_scale(Entity& e, float v);
+void jolt_set_fixed_rotation(Entity& e, int on);
+void jolt_rebuild_body(int slot);
+}
+
 static void destroy_subtree(int s) {
     if (!active_slot(s)) return;
     for (int c = 0; c < (int)g.entities.size(); ++c) {
@@ -3141,7 +3169,9 @@ static void destroy_subtree(int s) {
     }
     Entity& e = g.entities[s];
     int gone = e.id;
-    if (e.body && g.physWorld) {
+    if (jolt_active() && e.joltBody != EYESCIRE_JOLT_INVALID_BODY) {
+        jolt_destroy_body(e);
+    } else if (e.body && g.physWorld) {
         g.physWorld->DestroyBody(e.body);
         e.body = nullptr;
     }
@@ -4239,9 +4269,14 @@ const std::vector<float>& hitbox_skin(const Entity& e) {
     return hitbox_cache(e).skin;
 }
 
-/* In a 3D scene Box2D still runs on the front plane (x/y). Depth is the
-   missing axis: two meshes that only look far apart because of z must not
-   push each other. Slot is stored as userData.pointer = slot + 1. */
+} // namespace — close before Jolt headers (they specialize ::std)
+
+#include "physics_jolt.inl"
+
+namespace {
+
+/* Depth filter for the legacy Box2D-in-3D path (unused when Jolt is active).
+   Slot is stored as userData.pointer = slot + 1. */
 static int phys_body_slot(b2Body* body) {
     if (!body) return -1;
     int s = (int)body->GetUserData().pointer - 1;
@@ -4370,6 +4405,10 @@ void physics_create_body(int slot) {
 }
 
 void physics_rebuild_body(int slot) {
+    if (jolt_active()) {
+        jolt_rebuild_body(slot);
+        return;
+    }
     if (!g.physWorld || !active_slot(slot)) return;
     Entity& e = g.entities[slot];
     if (e.body) {
@@ -4385,6 +4424,10 @@ void physics_rebuild_body(int slot) {
    physics step copies the old body position back over x, y, and rotation. */
 static void physics_apply_entity(Entity& e) {
     if (g_physWriteback) return;
+    if (jolt_active()) {
+        if (e.hasBody) jolt_apply_entity(e);
+        return;
+    }
     if (!g.physWorld || !e.hasBody || !e.body) return;
     float ppm = g.pixelsPerMeter;
     if (ppm < 1.f) ppm = 50.f;
@@ -4402,6 +4445,10 @@ static void physics_apply_entity(Entity& e) {
 extern "C" void engine_physics_set_gravity(float gx, float gy) {
     g.gravityX = gx;
     g.gravityY = gy;
+    if (jolt_active()) {
+        jolt_set_gravity(gx, gy);
+        return;
+    }
     if (g.physWorld) {
         g.physWorld->SetGravity(b2Vec2(gx / g.pixelsPerMeter, gy / g.pixelsPerMeter));
     }
@@ -4414,19 +4461,22 @@ extern "C" void  engine_physics_set_ppm(float ppm) {
     if (ppm > 400.0f) ppm = 400.0f;
     g.pixelsPerMeter = ppm;
 }
-extern "C" int   engine_physics_active() { return g.physWorld ? 1 : 0; }
+extern "C" int   engine_physics_active() {
+    return (g.physWorld || jolt_active()) ? 1 : 0;
+}
 
 extern "C" void engine_physics_begin() {
-    if (g.physWorld) engine_physics_end();
+    engine_physics_end();
+    if (g.render3d) {
+        /* Real 3D rigid bodies via Jolt — no Box2D / mesh_hold. */
+        jolt_begin();
+        return;
+    }
     g.physWorld = new b2World(b2Vec2(g.gravityX / g.pixelsPerMeter,
                                      g.gravityY / g.pixelsPerMeter));
-    /* 3D scenes keep Box2D on x/y, but skip pairs that do not share depth. */
-    if (g.render3d) {
-        g.physWorld->SetContactFilter(&g_physDepthFilter);
-        g.physWorld->SetContactListener(&g_physDepthListener);
-    }
     for (int s = 0; s < (int)g.entities.size(); ++s) {
         g.entities[s].body = nullptr;
+        g.entities[s].joltBody = EYESCIRE_JOLT_INVALID_BODY;
         if (g.entities[s].active && g.entities[s].hasBody) physics_create_body(s);
     }
 }
@@ -4718,6 +4768,12 @@ extern "C" void engine_physics_step(double dt) {
     if (step > 0.05f) step = 0.05f;   /* clamp so a stall can't explode the sim */
     env_step(step);
     tween_step(step);
+
+    if (jolt_active()) {
+        jolt_step(step);
+        return;
+    }
+
     if (!g.physWorld) return;
     g.physWorld->Step(step, 8, 3);
 
@@ -4742,34 +4798,46 @@ extern "C" void engine_physics_step(double dt) {
             if (deg < 0) deg += 360;
             e.rotDeg = deg;
         }
-        mesh_hold(s);
+        /* mesh_hold is the fake-3D depth resolver; 2D scenes only. */
     }
 }
 
 extern "C" void engine_physics_end() {
+    if (jolt_active()) jolt_end();
     if (g.physWorld) {
         delete g.physWorld;   /* frees all bodies/fixtures */
         g.physWorld = nullptr;
     }
-    for (Entity& e : g.entities) e.body = nullptr;
+    for (Entity& e : g.entities) {
+        e.body = nullptr;
+        e.joltBody = EYESCIRE_JOLT_INVALID_BODY;
+    }
     g_tweens.clear();
 }
 
 /* ---- per-entity rigidbody component accessors ---- */
 extern "C" int  engine_entity_has_body(int s) { return active_slot(s) && g.entities[s].hasBody ? 1 : 0; }
-extern "C" void engine_entity_set_body(int s, int on) { if (active_slot(s)) g.entities[s].hasBody = on != 0; }
+extern "C" void engine_entity_set_body(int s, int on) {
+    if (!active_slot(s)) return;
+    g.entities[s].hasBody = on != 0;
+    /* While a sim is running, create/destroy the live body to match. */
+    if (jolt_active() || g.physWorld) physics_rebuild_body(s);
+}
 extern "C" int  engine_entity_body_type(int s) { return active_slot(s) ? g.entities[s].bodyType : 0; }
 extern "C" void engine_entity_set_body_type(int s, int t) {
     if (!active_slot(s)) return;
     if (t < 0) t = 0; if (t > 2) t = 2;
     g.entities[s].bodyType = t;
-    if (g.entities[s].body) g.entities[s].body->SetType(box2d_type(t));
+    if (jolt_active()) jolt_set_body_type(g.entities[s], t);
+    else if (g.entities[s].body) g.entities[s].body->SetType(box2d_type(t));
 }
 extern "C" float engine_entity_density(int s) { return active_slot(s) ? g.entities[s].density : 0.0f; }
 extern "C" void  engine_entity_set_density(int s, float v) {
     if (!active_slot(s)) return;
     g.entities[s].density = v;
-    if (g.entities[s].body) {
+    if (jolt_active()) {
+        jolt_rebuild_body(s);
+    } else if (g.entities[s].body) {
         for (b2Fixture* f = g.entities[s].body->GetFixtureList(); f; f = f->GetNext()) f->SetDensity(v);
         g.entities[s].body->ResetMassData();
     }
@@ -4778,21 +4846,24 @@ extern "C" float engine_entity_friction(int s) { return active_slot(s) ? g.entit
 extern "C" void  engine_entity_set_friction(int s, float v) {
     if (!active_slot(s)) return;
     g.entities[s].friction = v;
-    if (g.entities[s].body)
+    if (jolt_active()) jolt_set_friction(g.entities[s], v);
+    else if (g.entities[s].body)
         for (b2Fixture* f = g.entities[s].body->GetFixtureList(); f; f = f->GetNext()) f->SetFriction(v);
 }
 extern "C" float engine_entity_restitution(int s) { return active_slot(s) ? g.entities[s].restitution : 0.0f; }
 extern "C" void  engine_entity_set_restitution(int s, float v) {
     if (!active_slot(s)) return;
     g.entities[s].restitution = v;
-    if (g.entities[s].body)
+    if (jolt_active()) jolt_set_restitution(g.entities[s], v);
+    else if (g.entities[s].body)
         for (b2Fixture* f = g.entities[s].body->GetFixtureList(); f; f = f->GetNext()) f->SetRestitution(v);
 }
 extern "C" float engine_entity_gravity_scale(int s) { return active_slot(s) ? g.entities[s].gravityScale : 0.0f; }
 extern "C" void  engine_entity_set_gravity_scale(int s, float v) {
     if (!active_slot(s)) return;
     g.entities[s].gravityScale = v;
-    if (g.entities[s].body) g.entities[s].body->SetGravityScale(v);
+    if (jolt_active()) jolt_set_gravity_scale(g.entities[s], v);
+    else if (g.entities[s].body) g.entities[s].body->SetGravityScale(v);
 }
 extern "C" int  engine_entity_fixed_rotation(int s) { return active_slot(s) && g.entities[s].fixedRotation ? 1 : 0; }
 extern "C" int engine_entity_ui_value(int s) {
@@ -4854,28 +4925,77 @@ extern "C" float engine_entity_hitbox_hh(int s, int i) {
 extern "C" void engine_entity_set_fixed_rotation(int s, int on) {
     if (!active_slot(s)) return;
     g.entities[s].fixedRotation = on != 0;
-    if (g.entities[s].body) g.entities[s].body->SetFixedRotation(on != 0);
+    if (jolt_active()) jolt_set_fixed_rotation(g.entities[s], on);
+    else if (g.entities[s].body) g.entities[s].body->SetFixedRotation(on != 0);
 }
 
 /* ---- script-facing body controls (only meaningful while sim is active) ---- */
 extern "C" void engine_entity_apply_force(int s, float fx, float fy) {
-    if (active_slot(s) && g.entities[s].body)
+    if (!active_slot(s)) return;
+    if (jolt_active()) jolt_apply_force(g.entities[s], fx, fy, 0.f);
+    else if (g.entities[s].body)
+        g.entities[s].body->ApplyForceToCenter(b2Vec2(fx / g.pixelsPerMeter, fy / g.pixelsPerMeter), true);
+}
+extern "C" void engine_entity_apply_force3(int s, float fx, float fy, float fz) {
+    if (!active_slot(s)) return;
+    if (jolt_active()) jolt_apply_force(g.entities[s], fx, fy, fz);
+    else if (g.entities[s].body)
         g.entities[s].body->ApplyForceToCenter(b2Vec2(fx / g.pixelsPerMeter, fy / g.pixelsPerMeter), true);
 }
 extern "C" void engine_entity_apply_impulse(int s, float ix, float iy) {
-    if (active_slot(s) && g.entities[s].body)
+    if (!active_slot(s)) return;
+    if (jolt_active()) jolt_apply_impulse(g.entities[s], ix, iy, 0.f);
+    else if (g.entities[s].body)
+        g.entities[s].body->ApplyLinearImpulseToCenter(b2Vec2(ix / g.pixelsPerMeter, iy / g.pixelsPerMeter), true);
+}
+extern "C" void engine_entity_apply_impulse3(int s, float ix, float iy, float iz) {
+    if (!active_slot(s)) return;
+    if (jolt_active()) jolt_apply_impulse(g.entities[s], ix, iy, iz);
+    else if (g.entities[s].body)
         g.entities[s].body->ApplyLinearImpulseToCenter(b2Vec2(ix / g.pixelsPerMeter, iy / g.pixelsPerMeter), true);
 }
 extern "C" void engine_entity_set_velocity(int s, float vx, float vy) {
-    if (active_slot(s) && g.entities[s].body)
+    if (!active_slot(s)) return;
+    if (jolt_active()) {
+        float ox = 0, oy = 0, oz = 0;
+        jolt_get_velocity(g.entities[s], ox, oy, oz);
+        jolt_set_velocity(g.entities[s], vx, vy, oz);
+    } else if (g.entities[s].body)
+        g.entities[s].body->SetLinearVelocity(b2Vec2(vx / g.pixelsPerMeter, vy / g.pixelsPerMeter));
+}
+extern "C" void engine_entity_set_velocity3(int s, float vx, float vy, float vz) {
+    if (!active_slot(s)) return;
+    if (jolt_active()) jolt_set_velocity(g.entities[s], vx, vy, vz);
+    else if (g.entities[s].body)
         g.entities[s].body->SetLinearVelocity(b2Vec2(vx / g.pixelsPerMeter, vy / g.pixelsPerMeter));
 }
 extern "C" float engine_entity_velocity_x(int s) {
-    if (active_slot(s) && g.entities[s].body) return g.entities[s].body->GetLinearVelocity().x * g.pixelsPerMeter;
+    if (!active_slot(s)) return 0.0f;
+    if (jolt_active()) {
+        float vx = 0, vy = 0, vz = 0;
+        jolt_get_velocity(g.entities[s], vx, vy, vz);
+        return vx;
+    }
+    if (g.entities[s].body) return g.entities[s].body->GetLinearVelocity().x * g.pixelsPerMeter;
     return 0.0f;
 }
 extern "C" float engine_entity_velocity_y(int s) {
-    if (active_slot(s) && g.entities[s].body) return g.entities[s].body->GetLinearVelocity().y * g.pixelsPerMeter;
+    if (!active_slot(s)) return 0.0f;
+    if (jolt_active()) {
+        float vx = 0, vy = 0, vz = 0;
+        jolt_get_velocity(g.entities[s], vx, vy, vz);
+        return vy;
+    }
+    if (g.entities[s].body) return g.entities[s].body->GetLinearVelocity().y * g.pixelsPerMeter;
+    return 0.0f;
+}
+extern "C" float engine_entity_velocity_z(int s) {
+    if (!active_slot(s)) return 0.0f;
+    if (jolt_active()) {
+        float vx = 0, vy = 0, vz = 0;
+        jolt_get_velocity(g.entities[s], vx, vy, vz);
+        return vz;
+    }
     return 0.0f;
 }
 

@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Eyescire Engine documentation</title>
+  <meta name="description" content="Official documentation for Eyescire Engine — getting started, manual, and scripting reference." />
+  <link rel="icon" href="assets/logo.png" type="image/png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="docs-page">
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-nav" data-nav>
+    <div class="nav-inner">
+      <a class="brand" href="index.html" aria-label="Eyescire home">
+        <img src="assets/logo.png" alt="" width="36" height="36" />
+        <span>Eyescire</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" data-nav-toggle>
+        <span class="sr-only">Menu</span>
+        <span></span><span></span>
+      </button>
+      <nav id="nav-links" class="nav-links" data-nav-links>
+        <a href="index.html#features">Features</a>
+        <a href="index.html#download">Download</a>
+        <a href="docs.html" aria-current="page">Docs</a>
+        <a class="nav-cta" href="https://github.com/Bobism-2009/eyescire-engine" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="docs-shell">
+    <aside class="docs-side" aria-label="Documentation">
+      <p class="docs-side-label">Docs</p>
+      <nav class="docs-toc">
+        <p class="docs-toc-group">Getting started</p>
+        <a href="#home">Overview</a>
+        <a href="#install">Installation</a>
+        <a href="#first-steps">First steps</a>
+
+        <p class="docs-toc-group">Manual</p>
+        <a href="#projects">Projects</a>
+        <a href="#scenes">Scenes &amp; entities</a>
+        <a href="#scripting">Scripting</a>
+        <a href="#rendering">2D &amp; 3D</a>
+        <a href="#physics">Physics</a>
+        <a href="#export">Exporting</a>
+
+        <p class="docs-toc-group">Reference</p>
+        <a href="#api">Script API</a>
+        <a href="#hotkeys">Editor shortcuts</a>
+      </nav>
+    </aside>
+
+    <main id="main" class="docs-main">
+
+      <header id="home" class="docs-hero docs-section">
+        <p class="eyebrow">Eyescire Engine · v0.1</p>
+        <h1>Documentation</h1>
+        <p>
+          Official docs for the free and open-source Eyescire Engine.
+          Start with installation, then the manual for how projects, scenes, and scripts fit together.
+        </p>
+      </header>
+
+      <div class="docs-tiles" aria-label="Choose a starting point">
+        <a class="docs-tile" href="#first-steps">
+          <span class="docs-tile-label">New here</span>
+          <strong>I want to make a game</strong>
+          <span>Install Eyescire, create a project, and hit Play.</span>
+        </a>
+        <a class="docs-tile" href="#projects">
+          <span class="docs-tile-label">Manual</span>
+          <strong>How Eyescire works</strong>
+          <span>Projects, scenes, entities, scripting, 2D/3D, and export.</span>
+        </a>
+        <a class="docs-tile" href="#api">
+          <span class="docs-tile-label">Reference</span>
+          <strong>Script API</strong>
+          <span>What you can call from Nexa with <code>&lt;eyescire/script&gt;</code>.</span>
+        </a>
+      </div>
+
+      <!-- ----- Getting started ----- -->
+
+      <article id="install" class="docs-section">
+        <h2>Installation</h2>
+        <p>Eyescire currently supports <strong>Windows 10/11 (x64)</strong>.</p>
+
+        <h3>From the installer</h3>
+        <ol>
+          <li><a href="downloads/EyescireSetup-0.1-windows.7z">Download EyescireSetup (.7z)</a></li>
+          <li>Extract and run <code>EyescireSetup.exe</code></li>
+        </ol>
+
+        <h3>From source</h3>
+        <p>You need <code>clang++</code> and <code>NexaC</code> on your <code>PATH</code>.</p>
+        <pre class="code-block"><code>git clone https://github.com/Bobism-2009/eyescire-engine.git
+cd eyescire-engine
+build.cmd
+build\editor.exe</code></pre>
+        <p>Or grab the <a href="downloads/eyescire-engine-0.1-source.7z">source archive (.7z)</a>.</p>
+      </article>
+
+      <article id="first-steps" class="docs-section">
+        <h2>First steps</h2>
+        <ol>
+          <li>Open the editor and create a <strong>New Project</strong> (Empty, Top-down, or 3D).</li>
+          <li>Open a scene, place entities, attach a script from <code>scripts/</code> if you want behavior.</li>
+          <li>Press <strong>Play</strong> (<kbd>Ctrl+P</kbd>). Scripts compile to <code>bin/*.dll</code> and run in the same runtime the exporter ships.</li>
+        </ol>
+        <div class="docs-callout">
+          <p>
+            A project is a folder with <code>project.eye</code>. Scenes live in <code>scenes/</code>,
+            scripts in <code>scripts/</code>, and assets in <code>assets/</code>. That layout is what
+            Play and Export both expect.
+          </p>
+        </div>
+      </article>
+
+      <!-- ----- Manual ----- -->
+
+      <article id="projects" class="docs-section">
+        <h2>Projects</h2>
+        <p>
+          Everything you make lives in a <strong>project</strong>. The manifest
+          <code>project.eye</code> names the game, lists scenes, and points at the start scene.
+        </p>
+        <pre class="code-block"><code>project.eye
+scenes/       # .scene files
+scripts/      # .nxa game scripts (+ optional .ebp blueprints)
+assets/       # images, .obj models, sounds
+prefabs/      # reusable entity trees
+bin/          # compiled script DLLs (generated)
+dist/         # export output (generated)</code></pre>
+        <p>
+          Opening a project rescans these folders. You usually do not edit
+          <code>project.eye</code> by hand — the editor keeps it in sync.
+        </p>
+      </article>
+
+      <article id="scenes" class="docs-section">
+        <h2>Scenes &amp; entities</h2>
+        <p>
+          A <strong>scene</strong> is a tree of <strong>entities</strong> (transforms, kinds,
+          components like sprites, lights, or scripts). Scenes are saved as text
+          <code>.scene</code> files under <code>scenes/</code>.
+        </p>
+        <p>
+          Entities have a <strong>kind</strong> that defines what they are in the world:
+        </p>
+        <ul>
+          <li><strong>2D</strong> — rectangles, sprites, labels</li>
+          <li><strong>3D</strong> — cube, sphere, cylinder, capsule, model (<code>.obj</code>)</li>
+          <li><strong>Lights</strong> — directional, point, spot, ambient</li>
+          <li><strong>Camera</strong> — frames what Play and export show</li>
+          <li><strong>UI</strong> — panels, buttons, and related widgets on the 1280×720 canvas</li>
+          <li><strong>Emitter / empty</strong> — particles and empty transform roots</li>
+        </ul>
+        <p>
+          Prefabs (<code>.prefab</code>) store an entity subtree you can instance into any scene.
+          In 3D mode, entities have <strong>Z</strong> and <strong>Depth</strong>
+          (distance into the screen). Play simulates full X/Y/Z rigid bodies with Jolt.
+        </p>
+      </article>
+
+      <article id="scripting" class="docs-section">
+        <h2>Scripting</h2>
+        <p>
+          Game logic is written in <strong>Nexa</strong>. Put <code>.nxa</code> files in
+          <code>scripts/</code> and assign them on entities (Script field). On Play or Build,
+          each script compiles to a DLL under <code>bin/</code>.
+        </p>
+        <pre class="code-block"><code>#include &lt;eyescire/script&gt;
+
+fn script_init() {
+}
+
+fn script_update() {
+    let me: int = eng_self();
+    /* move, read input, etc. */
+}
+
+/* optional */
+fn script_draw() {
+}</code></pre>
+        <ul>
+          <li><code>script_init</code> — once when Play starts</li>
+          <li><code>script_update</code> — every frame, per entity that uses the script (<code>eng_self()</code>)</li>
+          <li><code>script_draw</code> — optional custom drawing during Play</li>
+        </ul>
+        <p>
+          Build with <kbd>Ctrl+B</kbd> (incremental) or <kbd>Ctrl+Shift+B</kbd> (rebuild).
+          The same DLLs ship in an exported game.
+        </p>
+      </article>
+
+      <article id="rendering" class="docs-section">
+        <h2>2D &amp; 3D</h2>
+        <p>
+          Scenes can render in <strong>2D</strong> or <strong>3D</strong> (scene setting when
+          nothing is selected). 2D is the layout view; 3D uses the engine renderer
+          (OpenGL 3.3 by default, optional Vulkan 1.4 or OpenGL 1.1).
+        </p>
+        <ul>
+          <li><strong>2D / UI</strong> — world sprites and a separate UI canvas (1280×720)</li>
+          <li><strong>3D</strong> — primitives, models, lights, fog / environment; Play uses the main camera</li>
+          <li><strong>Players</strong> — 2D exports use the 2D player; 3D exports use <code>EyescirePlayer3D</code></li>
+        </ul>
+        <p>
+          Navigation in the 3D view uses familiar editor controls (fly, orbit, frame selection).
+          Switch back to 2D layout when you need precise placement on the 2D plane.
+        </p>
+      </article>
+
+      <article id="physics" class="docs-section">
+        <h2>Physics</h2>
+        <p>
+          Rigid-body simulation is backend-split by scene mode:
+        </p>
+        <ul>
+          <li><strong>2D</strong> — <strong>Box2D</strong> on X/Y (screen +Y is down)</li>
+          <li><strong>3D</strong> (<code>RENDER 3D</code>) — <strong>Jolt Physics</strong> in world
+            X/Y/Z (physics +Y is up; scene +Y down maps accordingly)</li>
+        </ul>
+        <p>
+          Gravity and pixels-per-meter are scene settings. Bodies are configured on entities
+          (kind, hitbox, density, friction, etc.); Play calls <code>phys_begin</code> /
+          <code>phys_step</code> / <code>phys_end</code> each session. Scripts use the same
+          <code>phys_*</code> / <code>ent_*</code> APIs; forces and velocities route to the
+          active backend. In 3D, use <code>ent_set_velocity3</code> /
+          <code>ent_velocity_z</code> (and the <code>*3</code> force/impulse helpers) when you
+          need the Z axis.
+        </p>
+      </article>
+
+      <article id="export" class="docs-section">
+        <h2>Exporting</h2>
+        <p>
+          <kbd>Ctrl+E</kbd> (or Project → Export) writes a runnable build under
+          <code>dist/&lt;ProjectName&gt;/</code>: player executable, <code>engine.dll</code>,
+          project data, compiled scripts, and assets.
+        </p>
+        <ul>
+          <li><strong>2D projects</strong> — 2D player + engine runtime</li>
+          <li><strong>3D projects</strong> — 3D player + engine runtime</li>
+          <li><strong>Content protection</strong> — optional encryption of shipped content (Settings)</li>
+        </ul>
+        <p>macOS and Linux export targets are not available yet.</p>
+      </article>
+
+      <!-- ----- Reference ----- -->
+
+      <article id="api" class="docs-section">
+        <h2>Script API</h2>
+        <p>
+          Scripts include <code>&lt;eyescire/script&gt;</code>, which pulls in the engine API
+          (<code>engine/api.nxa</code> and related modules). Grouped overview — not a full symbol list:
+        </p>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead>
+              <tr><th>Area</th><th>Use for</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Entities</td><td>Transform, color, visibility, parenting, find / overlap</td></tr>
+              <tr><td>3D</td><td>Z, depth, models</td></tr>
+              <tr><td>Input</td><td>Keys, mouse, <code>VK_*</code> constants</td></tr>
+              <tr><td>Time</td><td><code>eng_dt_seconds</code> and frame timing</td></tr>
+              <tr><td>Physics</td><td>Forces, velocity, body setup, gravity / PPM</td></tr>
+              <tr><td>Audio</td><td>Music, SFX, positional sound</td></tr>
+              <tr><td>UI</td><td>Canvas widgets and button dispatch</td></tr>
+              <tr><td>Published props</td><td>Designer-facing values on entities</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Prefer these APIs over calling host C directly. For the full surface, see
+          <code>engine/api.nxa</code> in the source tree.
+        </p>
+      </article>
+
+      <article id="hotkeys" class="docs-section">
+        <h2>Editor shortcuts</h2>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead>
+              <tr><th>Shortcut</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd></td><td>Hand / Move / Rotate / Scale</td></tr>
+              <tr><td><kbd>L</kbd></td><td>Local / world axes</td></tr>
+              <tr><td><kbd>Ctrl+S</kbd></td><td>Save</td></tr>
+              <tr><td><kbd>Ctrl+Z</kbd> / <kbd>Y</kbd></td><td>Undo / redo</td></tr>
+              <tr><td><kbd>Ctrl+B</kbd></td><td>Build scripts</td></tr>
+              <tr><td><kbd>Ctrl+P</kbd></td><td>Play</td></tr>
+              <tr><td><kbd>Ctrl+E</kbd></td><td>Export</td></tr>
+              <tr><td><kbd>F2</kbd> / <kbd>Del</kbd></td><td>Rename / delete</td></tr>
+              <tr><td><kbd>F</kbd></td><td>Frame selection (3D)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <p class="docs-end">
+        Help improve these docs on
+        <a href="https://github.com/Bobism-2009/eyescire-engine" target="_blank" rel="noopener">GitHub</a>
+        (<code>website/docs.html</code>).
+      </p>
+    </main>
+  </div>
+
+  <footer class="site-foot">
+    <div class="wrap foot-inner">
+      <a class="brand" href="index.html">
+        <img src="assets/logo.png" alt="" width="32" height="32" />
+        <span>Eyescire</span>
+      </a>
+      <p>Free and open-source 2D &amp; 3D game engine.</p>
+      <nav>
+        <a href="https://github.com/Bobism-2009/eyescire-engine" target="_blank" rel="noopener">GitHub</a>
+        <a href="index.html#download">Download</a>
+        <a href="docs.html">Docs</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

@@ -2,10 +2,11 @@
 rem -----------------------------------------------------------------------
 rem Eyescire Engine - one-shot build for Windows.
 rem
-rem 1. Build Box2D (third_party\box2d) into bin\box2d.lib (once).
-rem 2. Compile the native engine (host\engine.cpp) to engine.dll + engine.lib,
-rem    statically linking Box2D.
-rem 3. Build each .nxa app against engine.lib (the import library).
+rem 1. Build Box2D (third_party\box2d) into bin\box2d.lib (once) — 2D physics.
+rem 2. Build Jolt  (third_party\jolt)  into bin\jolt.lib  (once) — 3D physics.
+rem 3. Compile the native engine (host\engine.cpp) to engine.dll + engine.lib,
+rem    statically linking Box2D and Jolt.
+rem 4. Build each .nxa app against engine.lib (the import library).
 rem
 rem clang++ and NexaC ship as .cmd shims, so we invoke them through `call`
 rem to keep control inside this batch file.
@@ -17,6 +18,9 @@ if not exist bin    mkdir bin
 if not exist scenes mkdir scenes
 
 set BOX2D_INC=-Ithird_party\box2d\include
+set JOLT_INC=-Ithird_party\jolt
+rem Match the defines used when compiling engine.cpp against Jolt headers.
+set JOLT_DEFS=-DNDEBUG -DJPH_DISABLE_CUSTOM_ALLOCATOR
 
 echo == building Box2D (bin\box2d.lib)
 if not exist bin\box2d.lib (
@@ -28,8 +32,19 @@ if not exist bin\box2d.lib (
 )
 if not exist bin\box2d.lib (echo box2d build failed & exit /b 1)
 
+echo == building Jolt (bin\jolt.lib)
+if not exist bin\jolt.lib (
+  if not exist third_party\jolt\obj mkdir third_party\jolt\obj
+  for /r third_party\jolt\Jolt %%f in (*.cpp) do (
+    call clang++ -std=c++17 -O2 -c %JOLT_INC% %JOLT_DEFS% "%%f" -o "third_party\jolt\obj\%%~nf.o"
+    if errorlevel 1 (echo jolt compile failed: %%f & exit /b 1)
+  )
+  call llvm-ar rcs bin\jolt.lib third_party\jolt\obj\*.o
+)
+if not exist bin\jolt.lib (echo jolt build failed & exit /b 1)
+
 echo == compiling engine.dll
-call clang++ -std=c++17 -O2 -shared -DEYESCIRE_BUILDING=1 %BOX2D_INC% host\engine.cpp bin\box2d.lib -o bin\engine.dll -Wl,--out-implib,bin\engine.lib -lgdi32 -luser32 -lgdiplus -lcomdlg32 -lwinmm -lole32 -luuid -lshell32 -lopengl32 -lmfplat -lmfreadwrite -lmfuuid -ldwmapi
+call clang++ -std=c++17 -O2 -shared -DEYESCIRE_BUILDING=1 %BOX2D_INC% %JOLT_INC% %JOLT_DEFS% host\engine.cpp bin\box2d.lib bin\jolt.lib -o bin\engine.dll -Wl,--out-implib,bin\engine.lib -lgdi32 -luser32 -lgdiplus -lcomdlg32 -lwinmm -lole32 -luuid -lshell32 -lopengl32 -lmfplat -lmfreadwrite -lmfuuid -ldwmapi
 if not exist bin\engine.dll (echo engine.dll build failed & exit /b 1)
 copy /y bin\engine.dll build\engine.dll >nul
 copy /y bin\engine.lib build\engine.lib >nul

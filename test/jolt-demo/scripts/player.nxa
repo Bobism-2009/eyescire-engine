@@ -1,0 +1,110 @@
+// Jolt demo player — move on X/Z, jump on Y, shove / rain / blast.
+// Note: --dll scripts export string params as const char*, so avoid
+// passing string variables / concatenations into eng_log / ent_create.
+#include <eyescire/script>
+
+let speed: float = 900.0;
+let jump: float = 1750.0;
+let rain_n: int = 0;
+
+fn spawn_rain_piece(i: int) {
+    let w: int = 110;
+    let h: int = 110;
+    let r: int = 200;
+    let g: int = 140;
+    let b: int = 70;
+    let bounce: float = 0.2;
+    let x: int = 1100 + (i * 97) - ((i * 97) / 900) * 900;
+    let y: int = 200 + (i * 40) - ((i * 40) / 280) * 280;
+    let z: int = -200 + (i * 53) - ((i * 53) / 500) * 500;
+    let mod: int = i - (i / 3) * 3;
+    let s: int = -1;
+    if (mod == 1) {
+        r = 240; g = 190; b = 80;
+        bounce = 0.7;
+        s = ent_create("sphere", "rain_sphere", x, y, w, h, r, g, b);
+    } else if (mod == 2) {
+        w = 90; h = 200;
+        r = 140; g = 200; b = 255;
+        bounce = 0.25;
+        s = ent_create("capsule", "rain_capsule", x, y, w, h, r, g, b);
+    } else {
+        s = ent_create("cube", "rain_cube", x, y, w, h, r, g, b);
+    }
+    rain_n = rain_n + 1;
+    if (s < 0) return;
+    ent_set_z(s, z);
+    ent_set_depth(s, w);
+    ent_set_body_type(s, 1);
+    ent_set_density(s, 1.0);
+    ent_set_friction(s, 0.35);
+    ent_set_restitution(s, bounce);
+    ent_set_body(s, 1);
+}
+
+fn rain_burst() {
+    let i: int = 0;
+    while (i < 8) {
+        spawn_rain_piece(rain_n + i);
+        i = i + 1;
+    }
+    eng_log("[jolt-demo] rained 8 bodies");
+}
+
+fn blast_from_player(me: int) {
+    let px: float = ent_x(me) + ent_w(me) * 0.5;
+    let py: float = ent_y(me) + ent_h(me) * 0.5;
+    let pz: float = ent_z(me);
+    let n: int = ent_count();
+    let s: int = 0;
+    let hit: int = 0;
+    while (s < n) {
+        if (ent_active(s) == 1 && s != me && ent_has_body(s) == 1 && ent_body_type(s) == 1) {
+            let cx: float = ent_x(s) + ent_w(s) * 0.5;
+            let cy: float = ent_y(s) + ent_h(s) * 0.5;
+            let cz: float = ent_z(s);
+            let dx: float = cx - px;
+            let dy: float = cy - py;
+            let dz: float = cz - pz;
+            let d2: float = dx * dx + dy * dy + dz * dz;
+            if (d2 > 1.0 && d2 < 900000.0) {
+                let d: float = math.sqrt(d2);
+                let power: float = 220000.0 / d;
+                ent_apply_impulse3(s, (dx / d) * power, (dy / d) * power * 0.35, (dz / d) * power);
+                hit = hit + 1;
+            }
+        }
+        s = s + 1;
+    }
+    eng_log("[jolt-demo] blast fired");
+}
+
+fn script_init() {
+    eng_log("[jolt-demo] player ready - Jolt owns this 3D scene");
+}
+
+fn script_update() {
+    let me: int = eng_self();
+    if (me < 0) return;
+
+    let vx: float = 0.0;
+    let vz: float = 0.0;
+    if (key_down(VK_A) || key_down(VK_LEFT))  vx = vx - speed;
+    if (key_down(VK_D) || key_down(VK_RIGHT)) vx = vx + speed;
+    /* W/S walk into / out of the screen (scene +Z is into the screen). */
+    if (key_down(VK_W) || key_down(VK_UP))    vz = vz + speed;
+    if (key_down(VK_S) || key_down(VK_DOWN))  vz = vz - speed;
+
+    let vy: float = ent_velocity_y(me);
+    let grounded: int = 0;
+    if (vy > -8.0 && vy < 8.0) grounded = 1;
+    if (grounded == 1 && key_pressed(VK_SPACE)) vy = 0.0 - jump;
+
+    ent_set_velocity3(me, vx, vy, vz);
+
+    if (key_pressed(VK_E)) {
+        ent_apply_impulse3(me, 42000.0, -8000.0, 18000.0);
+    }
+    if (key_pressed(VK_R)) rain_burst();
+    if (key_pressed(VK_G)) blast_from_player(me);
+}

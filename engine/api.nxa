@@ -424,10 +424,14 @@ extern "C" float  engine_entity_hitbox_cy(int, int);
 extern "C" float  engine_entity_hitbox_hw(int, int);
 extern "C" float  engine_entity_hitbox_hh(int, int);
 extern "C" void   engine_entity_apply_force(int, float, float);
+extern "C" void   engine_entity_apply_force3(int, float, float, float);
 extern "C" void   engine_entity_apply_impulse(int, float, float);
+extern "C" void   engine_entity_apply_impulse3(int, float, float, float);
 extern "C" void   engine_entity_set_velocity(int, float, float);
+extern "C" void   engine_entity_set_velocity3(int, float, float, float);
 extern "C" float  engine_entity_velocity_x(int);
 extern "C" float  engine_entity_velocity_y(int);
+extern "C" float  engine_entity_velocity_z(int);
 
 extern "C" int        engine_fs_make_dir(const char*);
 extern "C" int        engine_fs_exists(const char*);
@@ -1607,10 +1611,14 @@ fn ent_hitbox_hw(slot: int, i: int): float { let r: float = 0.0; inline_cpp! { r
 fn ent_hitbox_hh(slot: int, i: int): float { let r: float = 0.0; inline_cpp! { r = engine_entity_hitbox_hh(slot, i); } return r; }
 
 fn ent_apply_force(slot: int, fx: float, fy: float) { inline_cpp! { engine_entity_apply_force(slot, fx, fy); } }
+fn ent_apply_force3(slot: int, fx: float, fy: float, fz: float) { inline_cpp! { engine_entity_apply_force3(slot, fx, fy, fz); } }
 fn ent_apply_impulse(slot: int, ix: float, iy: float) { inline_cpp! { engine_entity_apply_impulse(slot, ix, iy); } }
+fn ent_apply_impulse3(slot: int, ix: float, iy: float, iz: float) { inline_cpp! { engine_entity_apply_impulse3(slot, ix, iy, iz); } }
 fn ent_set_velocity(slot: int, vx: float, vy: float) { inline_cpp! { engine_entity_set_velocity(slot, vx, vy); } }
+fn ent_set_velocity3(slot: int, vx: float, vy: float, vz: float) { inline_cpp! { engine_entity_set_velocity3(slot, vx, vy, vz); } }
 fn ent_velocity_x(slot: int): float { let r: float = 0.0; inline_cpp! { r = engine_entity_velocity_x(slot); } return r; }
 fn ent_velocity_y(slot: int): float { let r: float = 0.0; inline_cpp! { r = engine_entity_velocity_y(slot); } return r; }
+fn ent_velocity_z(slot: int): float { let r: float = 0.0; inline_cpp! { r = engine_entity_velocity_z(slot); } return r; }
 
 // ----- file system ----------------------------------------------------------
 

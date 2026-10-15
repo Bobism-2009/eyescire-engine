@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Eyescire Engine — Open source 2D &amp; 3D</title>
+  <meta name="description" content="Eyescire is a free, open-source 2D and 3D game engine with a focused scene editor, written in Nexa." />
+  <link rel="icon" href="assets/logo.png" type="image/png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-nav" data-nav>
+    <div class="nav-inner">
+      <a class="brand" href="#top" aria-label="Eyescire home">
+        <img src="assets/logo.png" alt="" width="36" height="36" />
+        <span>Eyescire</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" data-nav-toggle>
+        <span class="sr-only">Menu</span>
+        <span></span><span></span>
+      </button>
+      <nav id="nav-links" class="nav-links" data-nav-links>
+        <a href="#features">Features</a>
+        <a href="#download">Download</a>
+        <a href="docs.html">Docs</a>
+        <a class="nav-cta" href="https://github.com/Bobism-2009/eyescire-engine" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-media" aria-hidden="true">
+        <img src="assets/hero.jpg" alt="" data-hero-img />
+        <div class="hero-veil"></div>
+      </div>
+      <div class="hero-copy">
+        <p class="brand-mark" data-reveal>Eyescire</p>
+        <h1 data-reveal data-delay="1">Your open-source<br />2D &amp; 3D game engine.</h1>
+        <p class="lede" data-reveal data-delay="2">
+          Build scenes in a focused editor. Script them in Nexa. Ship Windows games with the same runtime that powers Play.
+        </p>
+        <div class="hero-actions" data-reveal data-delay="3">
+          <a class="btn btn-primary" href="#download">Download</a>
+          <a class="btn btn-ghost" href="docs.html">Docs</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="band band-ink" id="features">
+      <div class="wrap">
+        <header class="section-head">
+          <h2>A clear way to make games</h2>
+          <p>Everything you need to author, play, and export — without a maze of panels.</p>
+        </header>
+        <ul class="feature-grid">
+          <li>
+            <h3>Dedicated 2D &amp; 3D</h3>
+            <p>Same scene file for flat layout and world space. Flip the viewport to 3D when the project needs depth, lights, and fog.</p>
+          </li>
+          <li>
+            <h3>Focused editor</h3>
+            <p>Hierarchy, viewport, and inspector. Multi-select, gizmos, and Play that runs through the real game camera.</p>
+          </li>
+          <li>
+            <h3>Script in Nexa</h3>
+            <p>Engine and games share one language. Attach scripts in the editor; the runtime loads them with your scene.</p>
+          </li>
+          <li>
+            <h3>Ship on Windows</h3>
+            <p>Export a player build with your project packed for distribution — including optional content protection.</p>
+          </li>
+          <li>
+            <h3>Physics &amp; particles</h3>
+            <p>Box2D under the hood, plus emitters, weather, and day/night controls for living environments.</p>
+          </li>
+          <li>
+            <h3>Open source</h3>
+            <p>MIT-style contribution welcome. The editor, runtime, and host layer live in one repository.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="split-rail">
+      <article class="rail" data-reveal>
+        <p class="eyebrow">Editor</p>
+        <h2>See the game you are making</h2>
+        <p>Author entities in 2D layout or orbit a 3D view. Selection outlines, move tools, and the game view share one picture so what you edit is what Play shows.</p>
+      </article>
+      <article class="rail rail-alt" data-reveal>
+        <p class="eyebrow">Runtime</p>
+        <h2>One engine under Edit and Play</h2>
+        <p>Scenes, scripts, physics, and input go through the same native layer. Export packs that stack for the player instead of a separate pipeline.</p>
+      </article>
+    </section>
+
+    <section class="band" id="download">
+      <div class="wrap download">
+        <header class="section-head">
+          <h2>Download</h2>
+          <p>Pick your platform. Windows is available now; macOS and Linux are coming later.</p>
+        </header>
+
+        <div class="platform-picker" data-platform-picker data-reveal>
+          <div class="platform-tabs" role="tablist" aria-label="Platform">
+            <button type="button" class="platform-tab is-active" role="tab" aria-selected="true" data-platform="windows">
+              <span class="platform-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 5.5 10.5 4.4v7.1H3V5.5zm8.5-1.3L21 3v8.5h-9.5V4.2zM3 13.5h7.5v7.1L3 19.5v-6zm8.5 0H21V21l-9.5-1.3v-6.2z"/></svg>
+              </span>
+              <span class="platform-name">Windows</span>
+              <span class="platform-sub">10 / 11</span>
+            </button>
+            <button type="button" class="platform-tab is-soon" role="tab" aria-selected="false" data-platform="macos">
+              <span class="platform-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M16.2 13.3c0-2.2 1.8-3.2 1.9-3.3-1-1.5-2.6-1.7-3.2-1.7-1.4-.1-2.6.8-3.3.8s-1.7-.8-2.9-.8c-1.5 0-2.8.9-3.6 2.2-1.5 2.7-.4 6.6 1.1 8.8.7 1.1 1.6 2.3 2.7 2.2 1.1 0 1.5-.7 2.8-.7s1.6.7 2.8.7 1.9-1.1 2.6-2.1c.8-1.2 1.2-2.4 1.2-2.4s-2.1-.8-2.1-3.7zM14.6 6.5c.6-.7 1-1.7.9-2.7-.9.1-1.9.6-2.5 1.3-.6.6-1.1 1.6-.9 2.6 1 .1 1.9-.5 2.5-1.2z"/></svg>
+              </span>
+              <span class="platform-name">macOS</span>
+              <span class="platform-sub">Coming soon</span>
+            </button>
+            <button type="button" class="platform-tab is-soon" role="tab" aria-selected="false" data-platform="linux">
+              <span class="platform-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12.5 2.2c-.6 0-1.3.5-1.6 1.4-.2.6-.2 1.3 0 2.1.4 1.4 1.2 2.3 2 2.3.5 0 1-.4 1.3-1 .4-.8.4-1.8.1-2.6-.3-.9-1-.1.2-2.2zm-5.2 5c-.9.1-2.3 1.5-3.1 3.3C3 13 3.1 15.4 4 17c.5.8 1.1 1.1 1.6.7.3-.3.4-.6.6-1.5.2-1 .5-1.3 1-1.3.4 0 .7.3 1.1 1 .7 1.2 1.5 1.8 2.3 1.8.7 0 1.2-.5 2-1.5.5-.7.9-1 1.4-1 .6 0 1 .5 1.6 1.6.5.9 1 1.3 1.5 1.3.6 0 1.2-.6 1.8-1.8.4-.8.5-1.4.3-1.7-.1-.2-.4-.2-.9 0-.8.3-1.3.2-1.5-.4-.1-.4 0-.9.3-1.6.5-1.2.5-2.3.1-3.1-.5-1-1.5-1.5-2.9-1.5-1 0-1.8.3-2.7.8-.6.4-1.1.5-1.6.5-.5 0-1.1-.2-1.9-.6-.7-.4-1.3-.5-1.8-.5zM9.8 19.2c-.5.8-1.1 1.2-1.7 1.2-.3 0-.7-.2-1.1-.7-.5-.7-.9-1-1.3-1-.5 0-.8.5-.8 1.4 0 1.5 1.2 3.1 2.7 3.1.7 0 1.4-.4 2.1-1.1.6-.6.9-.9 1.3-.9.5 0 .9.4 1.6 1.1.7.7 1.4 1.1 2 1.1 1.6 0 3.1-1.9 3.1-3.5 0-.8-.3-1.2-.7-1.2-.4 0-.8.3-1.4 1-.9 1.1-1.6 1.6-2.3 1.6-.5 0-.9-.3-1.5-1.1-.7-.9-1.2-1.3-1.7-1.3-.4 0-.8.3-1.3 1.1z"/></svg>
+              </span>
+              <span class="platform-name">Linux</span>
+              <span class="platform-sub">Coming soon</span>
+            </button>
+          </div>
+
+          <div class="platform-panel is-active" data-platform-panel="windows">
+            <div class="platform-panel-copy">
+              <p class="dl-label">Available now · v0.1</p>
+              <p class="dl-title">Eyescire for Windows</p>
+              <p class="dl-meta">Windows 10 / 11 · x64 · installer or full source</p>
+            </div>
+            <div class="download-actions">
+              <a class="btn btn-primary" href="downloads/EyescireSetup-0.1-windows.7z">Download installer (.7z)</a>
+              <a class="btn btn-ghost" href="downloads/eyescire-engine-0.1-source.7z">Download source (.7z)</a>
+              <a class="btn btn-ghost" href="docs.html#install">Install guide</a>
+            </div>
+            <p class="dl-note">Extract the installer archive and run <code>EyescireSetup.exe</code>. Source needs clang++ and NexaC — see the install guide.</p>
+            <pre class="code-block"><code>git clone https://github.com/Bobism-2009/eyescire-engine.git
+cd eyescire-engine
+build.cmd
+build\editor.exe</code></pre>
+          </div>
+
+          <div class="platform-panel" data-platform-panel="macos" hidden>
+            <div class="platform-panel-copy">
+              <p class="dl-label">Not available yet</p>
+              <p class="dl-title">Eyescire for macOS</p>
+              <p class="dl-meta">A macOS editor and player build is planned. Windows is the supported platform today.</p>
+            </div>
+            <div class="download-actions">
+              <button type="button" class="btn btn-primary" disabled>Coming soon</button>
+              <a class="btn btn-ghost" href="docs.html#install">See Windows install</a>
+            </div>
+          </div>
+
+          <div class="platform-panel" data-platform-panel="linux" hidden>
+            <div class="platform-panel-copy">
+              <p class="dl-label">Not available yet</p>
+              <p class="dl-title">Eyescire for Linux</p>
+              <p class="dl-meta">A Linux editor and player build is planned. Windows is the supported platform today.</p>
+            </div>
+            <div class="download-actions">
+              <button type="button" class="btn btn-primary" disabled>Coming soon</button>
+              <a class="btn btn-ghost" href="docs.html#install">See Windows install</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band band-mist" id="involved">
+      <div class="wrap">
+        <header class="section-head">
+          <h2>Get involved</h2>
+          <p>Help shape an engine that stays small enough to understand and sharp enough to ship with.</p>
+        </header>
+        <ul class="involve-list">
+          <li data-reveal>
+            <h3>Code</h3>
+            <p>Fix bugs, harden the host layer, or improve the editor tools. Pull requests are welcome on GitHub.</p>
+            <a href="https://github.com/Bobism-2009/eyescire-engine/issues" target="_blank" rel="noopener">Browse issues</a>
+          </li>
+          <li data-reveal data-delay="1">
+            <h3>Document</h3>
+            <p>Expand the README, write scene-format notes, or record how a feature should feel in the editor.</p>
+            <a href="docs.html">Read the docs</a>
+          </li>
+          <li data-reveal data-delay="2">
+            <h3>Report</h3>
+            <p>Found a wipe in the viewport or a bad export? File it so it can be tracked and fixed.</p>
+            <a href="https://github.com/Bobism-2009/eyescire-engine/issues/new" target="_blank" rel="noopener">Open a report</a>
+          </li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-foot">
+    <div class="wrap foot-inner">
+      <a class="brand" href="#top">
+        <img src="assets/logo.png" alt="" width="32" height="32" />
+        <span>Eyescire</span>
+      </a>
+      <p>Free and open-source 2D &amp; 3D game engine.</p>
+      <nav>
+        <a href="https://github.com/Bobism-2009/eyescire-engine" target="_blank" rel="noopener">GitHub</a>
+        <a href="#download">Download</a>
+        <a href="docs.html">Docs</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

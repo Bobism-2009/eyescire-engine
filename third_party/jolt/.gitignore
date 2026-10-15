@@ -1,0 +1,20 @@
+# Local compile outputs
+obj/
+Build/
+build/
+out/
+.vs/
+*.o
+*.obj
+*.lib
+*.a
+*.pdb
+
+# Upstream demos / tests (engine only needs Jolt/)
+HelloWorld/
+UnitTests/
+Samples/
+TestFramework/
+PerformanceTest/
+Assets/
+Docs/

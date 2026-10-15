@@ -351,9 +351,22 @@ fn ui_draw_label(sx: int, sy: int, sw: int, sh: int, txt: string, r: int, g: int
         return;
     }
     if (scene_render3d() == 1) {
+        /* 5x7 px font: fit + center in the label box (same as file-font path) */
         let sc: int = sh / 8;
         if (sc < 1) sc = 1;
-        eng_text_px(sx, sy, txt, r, g, b, sc);
+        let tw: int = txt.len() * 6 * sc;
+        if (tw > sw && tw > 0) {
+            let fit: int = sc * sw / tw;
+            if (fit < 1) fit = 1;
+            sc = fit;
+            tw = txt.len() * 6 * sc;
+        }
+        let th: int = 7 * sc;
+        let x: int = sx;
+        if (tw < sw) x = sx + (sw - tw) / 2;
+        let y: int = sy;
+        if (th < sh) y = sy + (sh - th) / 2;
+        eng_text_px(x, y, txt, r, g, b, sc);
     } else {
         eng_set_font("Consolas", ui_label_font_px(sh));
         eng_text(sx, sy, txt, r, g, b);

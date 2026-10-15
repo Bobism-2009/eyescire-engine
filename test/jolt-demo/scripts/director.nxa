@@ -1,0 +1,22 @@
+// Boots the Jolt demo and nudges the first domino once Play settles.
+#include <eyescire/script>
+
+let nudged: int = 0;
+let age: float = 0.0;
+
+fn script_init() {
+    eng_log("[jolt-demo] RENDER 3D → Jolt Physics");
+    eng_log("[jolt-demo] crates / balls / capsules / dominos are live rigid bodies");
+}
+
+fn script_update() {
+    age = age + eng_dt_seconds();
+    if (nudged == 1) return;
+    if (age < 0.45) return;
+    let d: int = ent_find_by_name("domino_1");
+    if (d >= 0) {
+        ent_apply_impulse3(d, 28000.0, 0.0, 0.0);
+        eng_log("[jolt-demo] tipped domino_1");
+    }
+    nudged = 1;
+}

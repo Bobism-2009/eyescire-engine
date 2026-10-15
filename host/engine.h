@@ -399,12 +399,17 @@ EYESCIRE_API float engine_entity_hitbox_cy(int slot, int i);
 EYESCIRE_API float engine_entity_hitbox_hw(int slot, int i);
 EYESCIRE_API float engine_entity_hitbox_hh(int slot, int i);
 
-/* Script-facing controls (only affect a body while the sim is active). */
+/* Script-facing controls (only affect a body while the sim is active).
+   2D uses Box2D (X/Y). RENDER 3D uses Jolt (X/Y/Z); *3 / velocity_z apply on that path. */
 EYESCIRE_API void  engine_entity_apply_force(int slot, float fx, float fy);
+EYESCIRE_API void  engine_entity_apply_force3(int slot, float fx, float fy, float fz);
 EYESCIRE_API void  engine_entity_apply_impulse(int slot, float ix, float iy);
+EYESCIRE_API void  engine_entity_apply_impulse3(int slot, float ix, float iy, float iz);
 EYESCIRE_API void  engine_entity_set_velocity(int slot, float vx, float vy);
+EYESCIRE_API void  engine_entity_set_velocity3(int slot, float vx, float vy, float vz);
 EYESCIRE_API float engine_entity_velocity_x(int slot);
 EYESCIRE_API float engine_entity_velocity_y(int slot);
+EYESCIRE_API float engine_entity_velocity_z(int slot);
 
 /* ======================================================================== */
 /*  Scene serialization                                                     */

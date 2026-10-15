@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableDelayedExpansion
 rem -----------------------------------------------------------------------
 rem Eyescire Engine - assemble release\ from build\ (run build.cmd first).
 rem
@@ -15,6 +16,9 @@ rem comdlg32, user32, gdi32, kernel32) is part of Windows 10/11.
 rem
 rem The runtime DLLs are taken from the toolchain that compiled engine.dll,
 rem so their versions always match it.
+rem
+rem NOTE: never "copy ... release\libc++.dll" — COPY treats ++ as concatenate.
+rem Always copy into the directory so the source basename is preserved.
 rem -----------------------------------------------------------------------
 
 cd /d "%~dp0"
@@ -24,16 +28,16 @@ if not exist build\engine.dll (echo build\engine.dll missing - run build.cmd fir
 if not exist build\EyescirePlayer3D.exe (echo build\EyescirePlayer3D.exe missing - run build.cmd first & exit /b 1)
 
 rem Prefer the copies build.cmd already staged; fall back to the compiler bin.
-set CXX_DLL=build\libc++.dll
-set UNW_DLL=build\libunwind.dll
-if not exist "%CXX_DLL%" (
-  set RT_DIR=
-  for /f "delims=" %%i in ('clang++ -print-prog-name^=clang++') do set RT_DIR=%%~dpi
-  set CXX_DLL=%RT_DIR%libc++.dll
-  set UNW_DLL=%RT_DIR%libunwind.dll
+set "CXX_DLL=build\libc++.dll"
+set "UNW_DLL=build\libunwind.dll"
+if not exist "!CXX_DLL!" (
+  set "RT_DIR="
+  for /f "delims=" %%i in ('clang++ -print-prog-name^=clang++') do set "RT_DIR=%%~dpi"
+  set "CXX_DLL=!RT_DIR!libc++.dll"
+  set "UNW_DLL=!RT_DIR!libunwind.dll"
 )
-if not exist "%CXX_DLL%" (echo libc++.dll not found - run build.cmd first & exit /b 1)
-if not exist "%UNW_DLL%" (echo libunwind.dll not found - run build.cmd first & exit /b 1)
+if not exist "!CXX_DLL!" (echo libc++.dll not found - run build.cmd first & exit /b 1)
+if not exist "!UNW_DLL!" (echo libunwind.dll not found - run build.cmd first & exit /b 1)
 
 rem rename first: it fails as a whole if anything inside is open, so a running
 rem release\editor.exe can't leave the folder half-deleted
@@ -47,8 +51,13 @@ copy /y build\editor.exe           release\ >nul
 copy /y build\EyescirePlayer3D.exe release\ >nul
 copy /y build\engine.dll           release\ >nul
 copy /y build\engine.lib           release\ >nul
-copy /y "%CXX_DLL%"                release\libc++.dll >nul
-copy /y "%UNW_DLL%"                release\libunwind.dll >nul
+copy /y "!CXX_DLL!"                release\ >nul
+if errorlevel 1 (echo FAILED to copy libc++.dll from !CXX_DLL! & exit /b 1)
+copy /y "!UNW_DLL!"                release\ >nul
+if errorlevel 1 (echo FAILED to copy libunwind.dll from !UNW_DLL! & exit /b 1)
+if not exist "release\libc++.dll" (echo release\libc++.dll missing after copy & exit /b 1)
+if not exist "release\libunwind.dll" (echo release\libunwind.dll missing after copy & exit /b 1)
+
 if exist build\icons (
   mkdir release\icons
   copy /y build\icons\*.png release\icons\ >nul
@@ -60,3 +69,5 @@ dir /b release
 echo.
 echo Optional: run installer.cmd to build release\EyescireSetup.exe
 echo ^(GUI installer: engine + eyescire package, optional NexaC / Nexium^)
+endlocal
+exit /b 0
