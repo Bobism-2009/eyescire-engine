@@ -58,10 +58,11 @@ struct Cam {
 };
 static Cam C;
 
-/* 1 = OpenGL 3.3, which is what the view opens with. 0 is the 1.1 path.
-   g_wantVk asks for Vulkan 1.4. If that device cannot be created, ready()
-   opens OpenGL 3.3 and does not claim Vulkan. */
-static int g_want33 = 1;
+/* 78 = Filament, which is what the view opens with. 33 is OpenGL 3.3, 0 is
+   the 1.1 path. g_wantVk asks for Vulkan 1.4. If Filament or Vulkan cannot
+   be created, ready() opens OpenGL 3.3. */
+static int g_wantFilament = 1;
+static int g_want33 = 0;
 static int g_wantVk = 0;
 
 static const V3 kDefaultLight = norm(v3(-0.45f, 1.0f, 0.75f));
@@ -379,8 +380,15 @@ static void capsule_emit(const CapsuleLocal& c, float sx, float sy, float sz, F 
             for (int i = 0; i < SEG; ++i) {
                 float p0 = (float)i / SEG * 6.2831853f;
                 float p1 = (float)(i + 1) / SEG * 6.2831853f;
-                put(side, a0, p0); put(side, a0, p1); put(side, a1, p1);
-                put(side, a0, p0); put(side, a1, p1); put(side, a1, p0);
+                /* Front faces point the same way as the outward normals.
+                   The lower hemisphere's angle runs upward, so its winding flips. */
+                if (side > 0) {
+                    put(side, a0, p0); put(side, a0, p1); put(side, a1, p1);
+                    put(side, a0, p0); put(side, a1, p1); put(side, a1, p0);
+                } else {
+                    put(side, a0, p0); put(side, a1, p1); put(side, a0, p1);
+                    put(side, a0, p0); put(side, a1, p0); put(side, a1, p1);
+                }
             }
         }
     }
@@ -394,8 +402,8 @@ static void capsule_emit(const CapsuleLocal& c, float sx, float sy, float sz, F 
             float px = c.rx * cp, pz = c.rx * sp;
             emit(px, y, pz, px * sx * sx, 0.f, pz * sz * sz);
         };
-        band(-c.cy, c0, s0); band(-c.cy, c1, s1); band(c.cy, c1, s1);
-        band(-c.cy, c0, s0); band(c.cy, c1, s1); band(c.cy, c0, s0);
+        band(c.cy, c0, s0); band(c.cy, c1, s1); band(-c.cy, c1, s1);
+        band(c.cy, c0, s0); band(-c.cy, c1, s1); band(-c.cy, c0, s0);
     }
 }
 
@@ -1139,6 +1147,8 @@ static void add_default_lights() {
 
 static int g_viewSlot = -1;
 
+#include "filament_load.inl"
+
 namespace glb {
 
 constexpr GLenum kFramebuffer = 0x8D40, kReadFramebuffer = 0x8CA8, kDrawFramebuffer = 0x8CA9;
@@ -1174,6 +1184,7 @@ struct State {
     std::vector<int> selected;                     /* drawn this frame and selected */
     bool core = false;                             /* this context is OpenGL 3.3 */
     bool vk = false;                               /* this window is Vulkan 1.4 */
+    bool filament = false;                         /* Filament owns this window */
     bool bgra = false;                             /* compatibility context reads DIB order */
 };
 static State S;
@@ -1270,15 +1281,15 @@ static bool aa_kind(const Entity& e) {
     return true;
 }
 
-/* 8 when any drawn mesh should be smooth, otherwise 0. The project switch is
-   the default. An object set to on still asks for samples when the project is off. */
+/* 4x MSAA when smooth edges are on. 8x costs roughly double the resolve fill
+   for little visible gain at typical editor/player resolutions. */
 static int aa_samples() {
-    int want = g_aa ? 8 : 0;
+    int want = g_aa ? 4 : 0;
     if (!want) {
         for (int s = 0; s < (int)g.entities.size(); ++s) {
             const Entity& e = g.entities[s];
             if (e.aa != 1 || !aa_kind(e) || !entity_shown(s)) continue;
-            want = 8;
+            want = 4;
             break;
         }
     }
@@ -1307,10 +1318,10 @@ static bool ensure_buffers(int w, int h, int samples) {
     int tries[3];
     int ntry = 0;
     if (samples > 0) {
-        int s8 = std::min(8, S.maxSamples);
         int s4 = std::min(4, S.maxSamples);
-        if (samples >= 8 && s8 > 0) tries[ntry++] = s8;
-        if (samples >= 4 && s4 > 0 && (ntry == 0 || tries[ntry - 1] != s4)) tries[ntry++] = s4;
+        int s2 = std::min(2, S.maxSamples);
+        if (samples >= 4 && s4 > 0) tries[ntry++] = s4;
+        if (s2 > 0 && (ntry == 0 || tries[ntry - 1] != s2)) tries[ntry++] = s2;
     }
     tries[ntry++] = 0;
     for (int i = 0; i < ntry; ++i) {
@@ -1342,8 +1353,7 @@ static void build_lists() {
         { { .5f,-.5f,-.5f},{-.5f,-.5f,-.5f},{-.5f, .5f,-.5f},{ .5f, .5f,-.5f} },
     };
     static const float N[6][3] = { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
-    /* each face is a grid: lighting is per vertex, and a point or spot light's
-       pool has to show on a face much bigger than its reach (the ground) */
+    /* Fixed-function path lights per vertex, so faces stay subdivided. */
     const int GRID = 24;
     glNewList(S.listBox, GL_COMPILE);
     glBegin(GL_QUADS);
@@ -1469,6 +1479,8 @@ static void place(int x, int y, int w, int h) {
     SetWindowPos(S.wnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
+static void place_view(int w, int h) { place(C.sx, C.sy, w, h); }
+
 static int g_swapApplied = -1;
 static int g_swapOk = 0;
 
@@ -1496,6 +1508,22 @@ static bool ready() {
     S.wnd = CreateWindowExA(ex, "EyescireGLView", "", style, 0, 0, 16, 16, parent, nullptr,
                             GetModuleHandleA(nullptr), nullptr);
     if (!S.wnd) return false;
+    if (g_wantFilament) {
+        if (fil_init(S.wnd)) {
+            S.filament = true;
+            S.ok = true;
+            return true;
+        }
+        fil_shutdown();
+        std::string why = fil_error();
+        if (!why.empty()) log_push("Filament: " + why + ". Using OpenGL 3.3.");
+        DestroyWindow(S.wnd);
+        S.wnd = nullptr;
+        g_wantFilament = 0;
+        g_want33 = 1;
+        S.tried = false;
+        return ready();
+    }
     if (g_wantVk) {
         if (nexa_vk14::open(S.wnd, g_vsync) && nexa_vk14::scene_ok()) {
             S.vk = true;
@@ -1717,6 +1745,7 @@ static void vk_line(V3 a, V3 b, int r, int g, int bl, int alpha) {
 }
 
 static bool is_vk() { return S.vk; }
+static bool is_filament() { return S.filament; }
 
 static bool begin(int w, int h, double fov_deg, int br, int bg, int bb) {
     place(C.sx, C.sy, w, h);
@@ -2128,7 +2157,6 @@ static void finish() {
     S.bindFb(kDrawFramebuffer, S.fboOut);
     S.blit(0, 0, S.w, S.h, 0, 0, S.w, S.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     S.bindFb(kFramebuffer, 0);
-    glFlush();
 }
 
 static GLuint ovTex = 0;
@@ -2149,6 +2177,19 @@ static void store_capture(const unsigned char* topDown, int w, int h) {
    viewport-space HUD on top. bits is a top-down BGRA image with alpha,
    or null when the HUD is empty. */
 static void show_window(const void* bits, int w, int h) {
+    if (S.filament) {
+        if (p_fb_overlay) p_fb_overlay(bits, w, h);
+        int presented = p_fb_draw ? p_fb_draw(g_armCapture) : 0;
+        g_glPresented = (presented && g_vsync) ? 1 : 0;
+        if (g_armCapture) {
+            std::vector<unsigned char> rgba((size_t)w * (size_t)h * 4);
+            int rw = 0, rh = 0;
+            if (p_fb_take_capture && p_fb_take_capture(rgba.data(), (int)rgba.size(), &rw, &rh))
+                store_capture(rgba.data(), rw, rh);
+            else g_armCapture = 0;
+        }
+        return;
+    }
     if (S.vk) {
         if (g_armCapture) nexa_vk14::arm_read(1);
         nexa_vk14::present(bits, w, h);
@@ -2234,6 +2275,9 @@ static void show_window(const void* bits, int w, int h) {
 
 static bool g_useGL = false;           /* this frame is drawn by glb */
 static bool g_useVk = false;           /* this frame is drawn by Vulkan 1.4 */
+static bool g_useFilament = false;     /* this frame is drawn by Filament */
+
+#include "filament_draw.inl"
 static std::vector<int> g_drawn;       /* slots drawn this frame, for picking */
 
 static float ray_sphere_t(V3 o, V3 d, V3 c, float R) {
@@ -2405,6 +2449,13 @@ extern "C" void engine_r3d_begin(int x, int y, int w, int h,
     add_default_lights();
     g_useVk = false;
     g_useGL = false;
+    g_useFilament = false;
+    if (glb::ready() && glb::is_filament()) {
+        glb::place_view(w, h);
+        g_useFilament = fil_frame(w, h, fov_deg, br, bg, bb) != 0;
+        if (!g_useFilament) C.valid = false;
+        return;
+    }
     if (glb::ready() && glb::is_vk()) {
         g_useVk = glb::vk_begin(w, h, fov_deg, br, bg, bb) != 0;
         if (!g_useVk) C.valid = false;
@@ -2447,6 +2498,7 @@ static void draw_entity_mesh(const Entity& e, int s, int pickable) {
     if (pickable) g_drawn.push_back(s);
     Entity tinted = e;
     env_tint_rgb(tinted.r, tinted.g, tinted.b);
+    if (g_useFilament) { fil_entity(tinted, s, 0, 0, 0, 0); return; }
     if (g_useVk) { glb::vk_entity(tinted, s); return; }
     if (g_useGL) { glb::entity(tinted, s); return; }
     float w = (float)e.w, h = (float)e.h, d = (float)depth_of(e);
@@ -2499,6 +2551,14 @@ extern "C" void engine_r3d_hitbox(int s) {
     if (e.hitbox <= 0 || e.kind != "model" || e.model.empty()) return;
     float w = (float)e.w, h = (float)e.h;
     if (w <= 0 || h <= 0) return;
+    if (g_useFilament) {
+        Entity coat = e;
+        coat.a = 72;
+        coat.r = 235; coat.g = 236; coat.b = 240;
+        coat.selected = 0;
+        fil_entity(coat, s, 0, 0, 0, 0);
+        return;
+    }
     if (g_useGL || g_useVk) {
         /* soft white — matches modern selection chrome (not legacy lime) */
         if (g_useVk) glb::vk_frame_cover_model(e, 235, 236, 240, 72);
@@ -2572,6 +2632,17 @@ extern "C" void engine_r3d_cone(double bx, double by, double bz,
     }
     int ntri = (int)verts.size() / 18;
     if (ntri <= 0) return;
+    if (g_useFilament && p_fb_tris) {
+        float id[16];
+        fil_ident(id);
+        for (int t = 0; t < ntri; ++t) {
+            const float* p = verts.data() + (size_t)t * 18;
+            float pos[9] = { p[0], p[1], p[2], p[6], p[7], p[8], p[12], p[13], p[14] };
+            int cr = (int)(p[3] * 255), cg = (int)(p[4] * 255), cb = (int)(p[5] * 255);
+            p_fb_tris(pos, nullptr, 3, id, cr, cg, cb, 255, 0, 0, 0, 0);
+        }
+        return;
+    }
     if (g_useVk) { glb::vk_frame_painted(verts.data(), ntri); return; }
     if (g_useGL) {
         glb::painted(verts.data(), ntri);
@@ -2623,6 +2694,19 @@ extern "C" void engine_r3d_sector(double cx, double cy, double cz, int axis,
         pts.push_back(at(a0 + step * (i + 1)));
     }
     int ntri = steps;
+    if (g_useFilament && p_fb_tris) {
+        std::vector<float> pos;
+        pos.reserve((size_t)ntri * 9);
+        for (int t = 0; t < ntri; ++t) {
+            V3 p0 = pts[(size_t)t * 3], p1 = pts[(size_t)t * 3 + 1], p2 = pts[(size_t)t * 3 + 2];
+            float s[9] = { p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z };
+            pos.insert(pos.end(), s, s + 9);
+        }
+        float id[16];
+        fil_ident(id);
+        p_fb_tris(pos.data(), nullptr, ntri * 3, id, r, g, b, a, 0, 0, 0, 0);
+        return;
+    }
     if (g_useVk) { glb::vk_frame_sector(pts.data(), ntri, r, g, b, a); return; }
     if (g_useGL) {
         glb::sector(pts.data(), ntri, r, g, b, a);
@@ -2655,6 +2739,14 @@ extern "C" void engine_r3d_screen_rect(int x, int y, int w, int h, int r, int g_
     if (x1 > T.w) x1 = T.w;
     if (y1 > T.h) y1 = T.h;
     if (x1 <= x0 || y1 <= y0) return;
+    if (g_useFilament && p_fb_screen) {
+        float nx0 = (float)x0 / (float)T.w * 2.0f - 1.0f;
+        float nx1 = (float)x1 / (float)T.w * 2.0f - 1.0f;
+        float ny0 = 1.0f - (float)y0 / (float)T.h * 2.0f;
+        float ny1 = 1.0f - (float)y1 / (float)T.h * 2.0f;
+        p_fb_screen(nx0, ny0, nx1, ny1, r, g_, b, a);
+        return;
+    }
     if (g_useGL || g_useVk) {
         float nx0 = (float)x0 / (float)T.w * 2.0f - 1.0f;
         float nx1 = (float)x1 / (float)T.w * 2.0f - 1.0f;
@@ -2685,6 +2777,10 @@ extern "C" void engine_r3d_line(double x1, double y1, double z1, double x2, doub
                                 int r, int g_, int b, int a) {
     using namespace r3d;
     if (!C.valid) return;
+    if (g_useFilament && p_fb_line) {
+        p_fb_line((float)x1, (float)y1, (float)z1, (float)x2, (float)y2, (float)z2, r, g_, b, a, 1);
+        return;
+    }
     if (g_useVk) {
         glb::vk_line(v3((float)x1, (float)y1, (float)z1), v3((float)x2, (float)y2, (float)z2), r, g_, b, a);
         return;
@@ -2724,6 +2820,19 @@ static HWND g_ov = nullptr;
 extern "C" void engine_r3d_end(int or_, int og, int ob) {
     using namespace r3d;
     if (!C.valid || !g.backDC) { g_viewSlot = -1; return; }
+    if (g_useFilament) {
+        fil_particles();
+        if (or_ >= 0) fil_outline(or_, og, ob);
+        round_gfx_drop();
+        SelectClipRgn(g.backDC, nullptr);
+        HBRUSH br = CreateSolidBrush(RGB(g_frameClearR, g_frameClearG, g_frameClearB));
+        RECT rc{ C.sx, C.sy, C.sx + T.w, C.sy + T.h };
+        FillRect(g.backDC, &rc, br);
+        DeleteObject(br);
+        g_glFrame = true;
+        g_viewSlot = -1;
+        return;
+    }
     if (g_useGL || g_useVk) {
         if (g_useGL) {
         glb::particles_gl();
@@ -2869,6 +2978,7 @@ extern "C" double engine_r3d_hy() { return r3d::g_hy; }
 /* 0 = not drawn yet, 1 = software rasterizer, 2 = OpenGL, 3 = Vulkan 1.4 */
 extern "C" int engine_r3d_backend() {
     if (!r3d::C.valid) return 0;
+    if (r3d::g_useFilament) return 4;
     if (r3d::g_useVk) return 3;
     return r3d::g_useGL ? 2 : 1;
 }
@@ -2889,14 +2999,17 @@ extern "C" int engine_r3d_renderer(const char* name) {
     if (n == "opengl" || n == "opengl 1.1") want = 0;
     else if (n == "opengl 3.3") want = 1;
     else if (n == "vulkan" || n == "vulkan 1.4") want = 2;
+    else if (n == "filament") want = 3;
     else return 0;
     int live = -1;
     if (r3d::glb::alive()) {
-        if (r3d::glb::is_vk()) live = 2;
+        if (r3d::glb::is_filament()) live = 3;
+        else if (r3d::glb::is_vk()) live = 2;
         else if (r3d::glb::is_core()) live = 1;
         else live = 0;
     }
     if (live >= 0 && live != want) r3d::glb::drop();
+    r3d::g_wantFilament = want == 3;
     r3d::g_want33 = want == 1;
     r3d::g_wantVk = want == 2;
     return 1;
@@ -2970,6 +3083,7 @@ extern "C" int engine_r3d_frame_copy(unsigned char* dst, int bytes) {
 
 extern "C" const char* engine_r3d_backend_name() {
     if (!r3d::C.valid) return "";
+    if (r3d::g_useFilament) return "Filament";
     if (r3d::g_useVk) return "Vulkan 1.4";
     if (r3d::g_useGL && r3d::glb::is_core()) return "OpenGL 3.3";
     if (r3d::g_useGL) return "OpenGL 1.1";

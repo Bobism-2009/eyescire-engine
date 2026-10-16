@@ -13580,7 +13580,7 @@ fn settings_apply_play_size(pw: int, ph: int) {
 }
 
 fn settings_page_graphics(x: int, y: int, w: int) {
-    y = settings_page_header(x, y, "Graphics", "Renderer, play resolution, and 3D options");
+    y = settings_page_header(x, y, "Graphics", "Renderer, Filament, play resolution, and 3D options");
     y = chrome_section(x, y, w, "RENDERER");
     let which: int = pref_int("renderer", 33);
     let k11: string = "secondary";
@@ -13589,15 +13589,19 @@ fn settings_page_graphics(x: int, y: int, w: int) {
     if (which == 11) k11 = "primary";
     else if (which == 14) kvk = "primary";
     else k33 = "primary";
-    let third: int = (w - 16) / 3;
-    if (ui_button_kind(rect(x, y, third, 28), "OpenGL 3.3", k33) == 1 && which != 33) pref_set_int("renderer", 33);
-    if (ui_button_kind(rect(x + third + 8, y, third, 28), "Vulkan 1.4", kvk) == 1 && which != 14) pref_set_int("renderer", 14);
-    if (ui_button_kind(rect(x + (third + 8) * 2, y, third, 28), "OpenGL 1.1", k11) == 1 && which != 11) pref_set_int("renderer", 11);
-    y = y + 40;
-    draw_text(x, y, "Takes effect on the next frame. This frame: " + r3d_backend_name(), col_text_dim());
-    y = y + 22;
-    draw_text(x, y, "Vulkan 1.4 draws the same view as OpenGL 3.3.", col_text_dim());
+    let half: int = (w - 8) / 2;
+    if (ui_button_kind(rect(x, y, half, 28), "OpenGL 3.3", k33) == 1 && which != 33) pref_set_int("renderer", 33);
+    if (ui_button_kind(rect(x + half + 8, y, half, 28), "Vulkan 1.4", kvk) == 1 && which != 14) pref_set_int("renderer", 14);
     y = y + 36;
+    if (ui_button_kind(rect(x, y, half, 28), "OpenGL 1.1", k11) == 1 && which != 11) pref_set_int("renderer", 11);
+    y = y + 40;
+    draw_text(x, y, "Used when Filament is off. This frame: " + r3d_backend_name(), col_text_dim());
+    y = y + 36;
+    y = chrome_section(x, y, w, "FILAMENT");
+    settings_onoff(x, y, w, "Filament", "filament", 1);
+    y = y + 36;
+    y = settings_hint(x, y, w, "Lights, shadows, and textures the 3D view. Off uses the renderer above.");
+    y = y + 14;
     y = chrome_section(x, y, w, "PLAY WINDOW");
     draw_text(x, y, "3D Play and an exported game open at this size.", col_text_dim());
     y = y + 24;

@@ -488,7 +488,7 @@ static int vk_frame_begin(int w, int h, double fov_deg, int br, int bg, int bb) 
     g_vkLineA = -1;
     nexa_vk14::set_vsync(g_vsync);
     int samples = aa_samples();
-    if (samples < 2 && g_aa) samples = 8;
+    if (samples < 2 && g_aa) samples = 4;
     if (!nexa_vk14::scene_begin(w, h, rw, rh, samples, br / 255.f, bg / 255.f, bb / 255.f)) {
         if (rw == w && rh == h) return 0;
         rw = w; rh = h;

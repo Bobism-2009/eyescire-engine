@@ -291,7 +291,8 @@ fn show_error(title: string, detail: string) {
 fn main() {
     if (eng_init(WIN_W, WIN_H, "Eyescire") == 0) return;
     let rend: int = pref_int("renderer", 33);
-    if (rend == 14) r3d_renderer("Vulkan 1.4");
+    if (pref_int("filament", 1) == 1) r3d_renderer("Filament");
+    else if (rend == 14) r3d_renderer("Vulkan 1.4");
     else if (rend == 11) r3d_renderer("OpenGL 1.1");
     else r3d_renderer("OpenGL 3.3");
     let root: string = arg(1);

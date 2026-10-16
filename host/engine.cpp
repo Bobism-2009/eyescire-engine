@@ -541,17 +541,28 @@ static std::unordered_map<std::string, HFONT> g_fontCache;
  * dropped whenever the clip or the back buffer changes, and at present. Each
  * draw flushes so later GDI calls (TextOut) land on top in call order. */
 static Gdiplus::Graphics* g_roundGfx = nullptr;
+static int g_gdipDirty = 0;
 /* GDI+ takes the DC clip when its context is built and does not put it back.
    Text and plain rectangles would then paint past a panel. This region is
    selected again before those draws. */
 static HRGN g_clipRgn = nullptr;
 
+static void gdip_flush() {
+    if (g_roundGfx && g_gdipDirty) {
+        g_roundGfx->Flush(Gdiplus::FlushIntentionSync);
+        g_gdipDirty = 0;
+    }
+}
+
 static void clip_hold() {
+    /* GDI has to see the rounded rects and icons already painted. */
+    gdip_flush();
     if (g.backDC && g_clipRgn) SelectClipRgn(g.backDC, g_clipRgn);
 }
 
 static void round_gfx_drop() {
     if (g_roundGfx) {
+        gdip_flush();
         delete g_roundGfx;
         g_roundGfx = nullptr;
     }
@@ -1648,13 +1659,26 @@ extern "C" void engine_fill_round_a(int x, int y, int w, int h, int radius, int 
     if (!g.backDC || w <= 0 || h <= 0) return;
     if (a < 0) a = 0;
     if (a > 255) a = 255;
+    /* Opaque chrome is a solid round. GDI fills it in a fraction of the time
+       an antialiased path takes, and the outline pass covers the corner. */
+    if (a >= 250) {
+        clip_hold();
+        int dia = radius * 2;
+        if (dia < 1) dia = 1;
+        HRGN rgn = CreateRoundRectRgn(x, y, x + w + 1, y + h + 1, dia, dia);
+        if (!rgn) return;
+        FillRgn(g.backDC, rgn, fill_brush(r, g_, b));
+        DeleteObject(rgn);
+        return;
+    }
     Gdiplus::Graphics* gfx = round_gfx();
     if (!gfx) return;
     Gdiplus::GraphicsPath path;
     gdip_add_round_rect(path, x, y, w, h, radius);
     Gdiplus::SolidBrush brush(Gdiplus::Color((BYTE)a, (BYTE)r, (BYTE)g_, (BYTE)b));
+    gfx->SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     gfx->FillPath(&brush, &path);
-    gfx->Flush(Gdiplus::FlushIntentionSync);
+    g_gdipDirty = 1;
 }
 
 extern "C" void engine_outline_round_a(int x, int y, int w, int h, int radius, int thickness, int r, int g_, int b, int a) {
@@ -1666,8 +1690,9 @@ extern "C" void engine_outline_round_a(int x, int y, int w, int h, int radius, i
     Gdiplus::GraphicsPath path;
     gdip_add_round_rect(path, x, y, w, h, radius);
     Gdiplus::Pen pen(Gdiplus::Color((BYTE)a, (BYTE)r, (BYTE)g_, (BYTE)b), (Gdiplus::REAL)thickness);
+    gfx->SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     gfx->DrawPath(&pen, &path);
-    gfx->Flush(Gdiplus::FlushIntentionSync);
+    g_gdipDirty = 1;
 }
 
 extern "C" void engine_text_aa(int x, int y, const char* s, int r, int g_, int b, int a) {
@@ -1758,21 +1783,89 @@ extern "C" int engine_image_h(int id) {
     return it == g.images.end() ? 0 : it->second.h;
 }
 
+static Gdiplus::Graphics* image_gfx(Gdiplus::InterpolationMode filter) {
+    Gdiplus::Graphics* gfx = round_gfx();
+    if (!gfx) return nullptr;
+    gfx->SetSmoothingMode(Gdiplus::SmoothingModeNone);
+    gfx->SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    gfx->SetInterpolationMode(filter);
+    gfx->SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+    gfx->SetCompositingQuality(Gdiplus::CompositingQualityHighSpeed);
+    g_gdipDirty = 1;
+    return gfx;
+}
+
 extern "C" void engine_image_blit(int id, int x, int y) {
     auto it = g.images.find(id);
     if (it == g.images.end() || !g.backDC || !it->second.bmp) return;
-    Gdiplus::Graphics gfx(g.backDC);
-    gfx.DrawImage(it->second.bmp, x, y, it->second.w, it->second.h);
+    Gdiplus::Graphics* gfx = image_gfx(Gdiplus::InterpolationModeNearestNeighbor);
+    if (!gfx) return;
+    gfx->DrawImage(it->second.bmp, x, y, it->second.w, it->second.h);
 }
 
 extern "C" void engine_image_blit_scaled(int id, int x, int y, int w, int h) {
     auto it = g.images.find(id);
     if (it == g.images.end() || !g.backDC || !it->second.bmp) return;
-    Gdiplus::Graphics gfx(g.backDC);
+    Gdiplus::Graphics* gfx = image_gfx(Gdiplus::InterpolationModeBilinear);
+    if (!gfx) return;
+    gfx->DrawImage(it->second.bmp, x, y, w, h);
+}
+
+/* A tinted icon is the same picture every frame. Build it once and blit the
+   result, instead of running a color-matrix scale on every toolbar icon. */
+struct TintKey {
+    int id, w, h, rgb;
+    bool operator==(const TintKey& o) const {
+        return id == o.id && w == o.w && h == o.h && rgb == o.rgb;
+    }
+};
+struct TintHash {
+    size_t operator()(const TintKey& k) const {
+        size_t h = (size_t)k.id * 1315423911u;
+        h ^= ((size_t)k.w << 16) ^ (size_t)k.h;
+        h ^= (size_t)k.rgb + 0x9e3779b9u + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+static std::unordered_map<TintKey, Gdiplus::Bitmap*, TintHash> g_tintCache;
+
+static void tint_cache_clear() {
+    for (auto& kv : g_tintCache) delete kv.second;
+    g_tintCache.clear();
+}
+
+static void tint_cache_drop_id(int id) {
+    for (auto it = g_tintCache.begin(); it != g_tintCache.end(); ) {
+        if (it->first.id == id) {
+            delete it->second;
+            it = g_tintCache.erase(it);
+        } else ++it;
+    }
+}
+
+static Gdiplus::Bitmap* tint_bitmap(int id, Gdiplus::Bitmap* src, int w, int h, int r, int g, int b) {
+    TintKey key{ id, w, h, (r << 16) | (g << 8) | b };
+    auto found = g_tintCache.find(key);
+    if (found != g_tintCache.end()) return found->second;
+    if (g_tintCache.size() > 192) tint_cache_clear();
+    auto* bmp = new Gdiplus::Bitmap(w, h, PixelFormat32bppPARGB);
+    Gdiplus::Graphics gfx(bmp);
     gfx.SetInterpolationMode(Gdiplus::InterpolationModeBilinear);
+    gfx.SetSmoothingMode(Gdiplus::SmoothingModeNone);
     gfx.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-    gfx.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
-    gfx.DrawImage(it->second.bmp, x, y, w, h);
+    gfx.Clear(Gdiplus::Color(0, 0, 0, 0));
+    Gdiplus::ColorMatrix cm{};
+    cm.m[0][0] = (Gdiplus::REAL)r / 255.0f;
+    cm.m[1][1] = (Gdiplus::REAL)g / 255.0f;
+    cm.m[2][2] = (Gdiplus::REAL)b / 255.0f;
+    cm.m[3][3] = 1.0f;
+    cm.m[4][4] = 1.0f;
+    Gdiplus::ImageAttributes attr;
+    attr.SetColorMatrix(&cm, Gdiplus::ColorMatrixFlagsDefault, Gdiplus::ColorAdjustTypeBitmap);
+    gfx.DrawImage(src, Gdiplus::Rect(0, 0, w, h), 0, 0, src->GetWidth(), src->GetHeight(),
+                  Gdiplus::UnitPixel, &attr, nullptr, nullptr);
+    g_tintCache[key] = bmp;
+    return bmp;
 }
 
 /* White glyphs recolored to a theme color. Alpha stays, so the anti-aliased
@@ -1787,33 +1880,19 @@ extern "C" void engine_image_blit_scaled_tint(int id, int x, int y, int w, int h
     if (r > 255) r = 255;
     if (g_ > 255) g_ = 255;
     if (b > 255) b = 255;
-    Gdiplus::ColorMatrix cm{};
-    cm.m[0][0] = (Gdiplus::REAL)r / 255.0f;
-    cm.m[1][1] = (Gdiplus::REAL)g_ / 255.0f;
-    cm.m[2][2] = (Gdiplus::REAL)b / 255.0f;
-    cm.m[3][3] = 1.0f;
-    cm.m[4][4] = 1.0f;
-    Gdiplus::ImageAttributes attr;
-    attr.SetColorMatrix(&cm, Gdiplus::ColorMatrixFlagsDefault, Gdiplus::ColorAdjustTypeBitmap);
-    Gdiplus::Graphics gfx(g.backDC);
-    gfx.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-    gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
-    gfx.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-    gfx.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
-    gfx.DrawImage(it->second.bmp,
-                  Gdiplus::Rect(x, y, w, h),
-                  0, 0, it->second.w, it->second.h,
-                  Gdiplus::UnitPixel, &attr, nullptr, nullptr);
+    Gdiplus::Bitmap* tinted = tint_bitmap(id, it->second.bmp, w, h, r, g_, b);
+    if (!tinted) return;
+    Gdiplus::Graphics* gfx = image_gfx(Gdiplus::InterpolationModeNearestNeighbor);
+    if (!gfx) return;
+    gfx->DrawImage(tinted, x, y, w, h);
 }
 
 extern "C" void engine_image_blit_scaled_nn(int id, int x, int y, int w, int h) {
     auto it = g.images.find(id);
     if (it == g.images.end() || !g.backDC || !it->second.bmp) return;
-    Gdiplus::Graphics gfx(g.backDC);
-    gfx.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
-    gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    gfx.SetSmoothingMode(Gdiplus::SmoothingModeNone);
-    gfx.DrawImage(it->second.bmp, x, y, w, h);
+    Gdiplus::Graphics* gfx = image_gfx(Gdiplus::InterpolationModeNearestNeighbor);
+    if (!gfx) return;
+    gfx->DrawImage(it->second.bmp, x, y, w, h);
 }
 
 extern "C" void engine_image_blit_sub_nn(int id, int src_x, int src_y, int src_w, int src_h,
@@ -1821,11 +1900,9 @@ extern "C" void engine_image_blit_sub_nn(int id, int src_x, int src_y, int src_w
     auto it = g.images.find(id);
     if (it == g.images.end() || !g.backDC || !it->second.bmp) return;
     if (src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
-    Gdiplus::Graphics gfx(g.backDC);
-    gfx.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
-    gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    gfx.SetSmoothingMode(Gdiplus::SmoothingModeNone);
-    gfx.DrawImage(it->second.bmp,
+    Gdiplus::Graphics* gfx = image_gfx(Gdiplus::InterpolationModeNearestNeighbor);
+    if (!gfx) return;
+    gfx->DrawImage(it->second.bmp,
                   Gdiplus::Rect(dst_x, dst_y, dst_w, dst_h),
                   src_x, src_y, src_w, src_h,
                   Gdiplus::UnitPixel);
@@ -1851,11 +1928,9 @@ extern "C" void engine_image_blit_sub_nn_tint(int id, int src_x, int src_y, int 
     cm.m[4][4] = 1.0f;
     Gdiplus::ImageAttributes attr;
     attr.SetColorMatrix(&cm, Gdiplus::ColorMatrixFlagsDefault, Gdiplus::ColorAdjustTypeBitmap);
-    Gdiplus::Graphics gfx(g.backDC);
-    gfx.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
-    gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    gfx.SetSmoothingMode(Gdiplus::SmoothingModeNone);
-    gfx.DrawImage(it->second.bmp,
+    Gdiplus::Graphics* gfx = image_gfx(Gdiplus::InterpolationModeNearestNeighbor);
+    if (!gfx) return;
+    gfx->DrawImage(it->second.bmp,
                   Gdiplus::Rect(dst_x, dst_y, dst_w, dst_h),
                   src_x, src_y, src_w, src_h,
                   Gdiplus::UnitPixel, &attr, nullptr, nullptr);
@@ -1881,6 +1956,7 @@ extern "C" void engine_image_blit_pan_nn(int id, double scroll_x, int view_w, in
 
     image_ensure_dib(img);
     if (img.hdc) {
+        gdip_flush();
         BitBlt(g.backDC, 0, 0, first_w, view_h, img.hdc, ox, 0, SRCCOPY);
         const int second_w = view_w - first_w;
         if (second_w > 0) {
@@ -1890,17 +1966,15 @@ extern "C" void engine_image_blit_pan_nn(int id, double scroll_x, int view_w, in
     }
 
     if (!img.bmp) return;
-    Gdiplus::Graphics gfx(g.backDC);
-    gfx.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
-    gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    gfx.SetSmoothingMode(Gdiplus::SmoothingModeNone);
-    gfx.DrawImage(img.bmp,
+    Gdiplus::Graphics* gfx = image_gfx(Gdiplus::InterpolationModeNearestNeighbor);
+    if (!gfx) return;
+    gfx->DrawImage(img.bmp,
                   Gdiplus::Rect(0, 0, first_w, view_h),
                   ox, 0, first_w, view_h,
                   Gdiplus::UnitPixel);
     const int second_w = view_w - first_w;
     if (second_w > 0) {
-        gfx.DrawImage(img.bmp,
+        gfx->DrawImage(img.bmp,
                       Gdiplus::Rect(first_w, 0, second_w, view_h),
                       0, 0, second_w, view_h,
                       Gdiplus::UnitPixel);
@@ -2087,6 +2161,7 @@ extern "C" void engine_image_free(int id) {
     image_release_dib(it->second);
     delete it->second.bmp;
     g.images.erase(it);
+    tint_cache_drop_id(id);
 }
 
 /* Cache by path: editor thumbnails redraw the same paths every frame, so
@@ -2113,6 +2188,7 @@ extern "C" void engine_image_cache_clear() {
         }
     }
     g.imageByPath.clear();
+    tint_cache_clear();
 }
 
 /* ============================================================ */
@@ -4765,12 +4841,15 @@ extern "C" void engine_physics_step(double dt) {
     if (g_gamePaused) return;
     float step = (float)dt;
     if (step <= 0.0f) step = 1.0f / 60.0f;
-    if (step > 0.05f) step = 0.05f;   /* clamp so a stall can't explode the sim */
+    /* Jolt catches up internally in fixed 1/60 slices. Box2D still gets one
+       clamped step so a stall cannot explode the 2D solver. */
+    float joltDt = step > 0.1f ? 0.1f : step;
+    if (step > 0.05f) step = 0.05f;
     env_step(step);
     tween_step(step);
 
     if (jolt_active()) {
-        jolt_step(step);
+        jolt_step(joltDt);
         return;
     }
 
@@ -7156,13 +7235,13 @@ extern "C" const char* engine_project_path_join(const char* a, const char* b) {
 }
 
 static const char* kPrefKey[] = {
-    "grid", "show_grid", "snap", "autosave", "renderer",
+    "grid", "show_grid", "snap", "autosave", "renderer", "filament",
     "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "export_open_folder", "export_protect",
     "vsync", "hd", "aa", "shadows",
     "fog", "fog_r", "fog_g", "fog_b", "fog_dist"
 };
-static const int kPrefDef[] = { 32, 1, 0, 1, 33, 100, 100, 1280, 720, 0, 1, 1, 1, 1, 0, 1, 1, 0, 168, 186, 206, 4800 };
-static const int kPrefCount = 22;
+static const int kPrefDef[] = { 32, 1, 0, 1, 33, 1, 100, 100, 1280, 720, 0, 1, 1, 1, 1, 0, 1, 1, 0, 168, 186, 206, 4800 };
+static const int kPrefCount = 23;
 
 static int pref_clamp_key(const std::string& key, int v) {
     if (key == "grid") {
@@ -7180,7 +7259,7 @@ static int pref_clamp_key(const std::string& key, int v) {
         if (v > 3) return 3;
         return v;
     }
-    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "export_open_folder" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows" || key == "fog")
+    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "export_open_folder" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows" || key == "fog" || key == "filament")
         return v != 0 ? 1 : 0;
     if (key == "fog_r" || key == "fog_g" || key == "fog_b") {
         if (v < 0) return 0;
@@ -7192,7 +7271,7 @@ static int pref_clamp_key(const std::string& key, int v) {
         if (v > 80000) return 80000;
         return v;
     }
-    if (key == "renderer") return v == 11 ? 11 : v == 14 ? 14 : 33;
+    if (key == "renderer") return (v == 11 || v == 14 || v == 33) ? v : 33;
     if (key == "music" || key == "sfx") {
         if (v < 0) return 0;
         if (v > 100) return 100;
@@ -7211,14 +7290,29 @@ static int pref_clamp_key(const std::string& key, int v) {
     return v;
 }
 
+static int pref_saved(const char* key, int def) {
+    auto it = g.prefs.find(key);
+    return it == g.prefs.end() ? def : it->second;
+}
+
+static void pref_apply_graphics_mode(int v) {
+    if (v == 11) engine_r3d_renderer("OpenGL 1.1");
+    else if (v == 14) engine_r3d_renderer("Vulkan 1.4");
+    else engine_r3d_renderer("OpenGL 3.3");
+}
+
 static void pref_apply_key(const std::string& key, int v) {
     if (key == "music") engine_music_set_volume(v);
     else if (key == "sfx") engine_sfx_set_volume(v);
     else if (key == "autosave") engine_set_autosave(v);
     else if (key == "renderer") {
-        if (v == 11) engine_r3d_renderer("OpenGL 1.1");
-        else if (v == 14) engine_r3d_renderer("Vulkan 1.4");
-        else engine_r3d_renderer("OpenGL 3.3");
+        /* Filament is its own switch. The graphics mode is remembered either way. */
+        if (pref_saved("filament", 1)) return;
+        pref_apply_graphics_mode(v);
+    }
+    else if (key == "filament") {
+        if (v) engine_r3d_renderer("Filament");
+        else pref_apply_graphics_mode(pref_saved("renderer", 33));
     }
     else if (key == "vsync") g_vsync = v ? 1 : 0;
     else if (key == "hd") g_hd = v ? 1 : 0;
@@ -7259,6 +7353,12 @@ static void pref_load_file(const std::string& path) {
         if (!known) continue;
         int v = 0;
         try { v = std::stoi(line.substr(eq + 1)); } catch (...) { continue; }
+        /* Older builds stored Filament as renderer 78. Keep that as the
+           Filament switch and put the graphics mode back on OpenGL 3.3. */
+        if (key == "renderer" && v == 78) {
+            if (g.prefs.find("filament") == g.prefs.end()) g.prefs["filament"] = 1;
+            v = 33;
+        }
         g.prefs[key] = pref_clamp_key(key, v);
     }
 }
@@ -7282,10 +7382,10 @@ static void pref_load() {
 /* Runtime-only prefs for player builds — no editor/export knobs. */
 static const char* kGamePrefKey[] = {
     "music", "sfx", "play_w", "play_h", "fullscreen",
-    "vsync", "hd", "aa", "shadows", "renderer",
+    "vsync", "hd", "aa", "shadows", "renderer", "filament",
     "fog", "fog_r", "fog_g", "fog_b", "fog_dist"
 };
-static const int kGamePrefCount = 15;
+static const int kGamePrefCount = 16;
 
 extern "C" int engine_content_ship_game_cfg(const char* dst, int encrypt) {
     if (!dst || !dst[0] || !g.projLoaded) return 0;

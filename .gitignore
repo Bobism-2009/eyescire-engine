@@ -29,3 +29,9 @@ _play_snapshot.scene
 
 # Local project for trying engine features
 /gallery/
+
+# Filament is cloned and built locally (v1.78.0); keep the bridge sources only
+/third_party/filament/
+/host/filament_bridge/out/
+/bin/
+filament_check.ppm

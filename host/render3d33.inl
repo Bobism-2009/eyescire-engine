@@ -218,7 +218,9 @@ static bool build_unit_meshes() {
         { { .5f,-.5f,-.5f},{-.5f,-.5f,-.5f},{-.5f, .5f,-.5f},{ .5f, .5f,-.5f} },
     };
     static const float N[6][3] = { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
-    const int GRID = 24;
+    /* One quad per face. Lighting is per pixel, so a grid is no longer needed
+       for light falloff, and it was thousands of triangles per box. */
+    const int GRID = 1;
     for (int f = 0; f < 6; ++f) {
         auto corner = [&](float u, float v, float* p) {
             for (int c = 0; c < 3; ++c) {
@@ -240,7 +242,7 @@ static bool build_unit_meshes() {
             }
         }
     }
-    const int SEG = 40, RING = 24;
+    const int SEG = 32, RING = 16;
     for (int j = 0; j < RING; ++j) {
         std::vector<float> strip;
         for (int i = 0; i <= SEG; ++i) {
@@ -253,7 +255,7 @@ static bool build_unit_meshes() {
         }
         push_strip(sphere, strip);
     }
-    const int CS = 48;
+    const int CS = 40;
     std::vector<float> side;
     for (int i = 0; i <= CS; ++i) {
         float a = (float)i / CS * 6.2831853f;
@@ -324,87 +326,28 @@ uniform mat4 uMvp;
 uniform mat4 uMv;
 uniform mat3 uNmat;
 uniform vec3 uColor;
-uniform vec3 uAmb;
-uniform float uFill;
-uniform float uLit;
-uniform float uTwo;
 uniform float uVert;
 uniform vec2 uNdc;
-uniform int uLN;
-uniform vec4 uLPos[16];
-uniform vec3 uLDif[16];
-uniform vec3 uLSpot[16];
-uniform vec3 uLSp[16];
-uniform int uSun;
 uniform mat4 uLightMvp;
 uniform float uFogDist;
-out vec3 vFront;
-out vec3 vBack;
-out vec3 vSunF;
-out vec3 vSunB;
+out vec3 vEye;
+out vec3 vN;
+out vec3 vMat;
 out vec4 vLight;
 out float vFog;
-vec3 shade(vec3 n, vec3 pe, vec3 mat, int skip) {
-    vec3 direct = vec3(0.0);
-    for (int i = 0; i < 16; i++) {
-        if (i >= uLN) break;
-        if (i == skip) continue;
-        vec3 toL;
-        float att = 1.0;
-        if (uLPos[i].w == 0.0) {
-            toL = normalize(uLPos[i].xyz);
-        } else {
-            vec3 d = uLPos[i].xyz - pe;
-            float dist = length(d);
-            if (dist < 1e-5) toL = vec3(0.0, 0.0, 1.0);
-            else { toL = d / dist; att = 1.0 / (1.0 + uLSp[i].z * dist * dist); }
-        }
-        float spot = 1.0;
-        if (uLSp[i].x < 1.5) {
-            float s = dot(-toL, normalize(uLSpot[i]));
-            if (s < uLSp[i].x) spot = 0.0;
-            else spot = pow(max(s, 0.0), uLSp[i].y);
-        }
-        direct += uLDif[i] * max(dot(n, toL), 0.0) * att * spot;
-    }
-    vec3 lit = uAmb + direct;
-    /* An ambient light fills whatever the sun left dark. Added on top, it
-       was clipped away on any face the sun had already lit, so intensity
-       looked like it did nothing. */
-    if (uFill > 0.5) {
-        vec3 d = clamp(direct, 0.0, 1.0);
-        lit = d + uAmb * (vec3(1.0) - d);
-    }
-    return clamp(lit * mat, 0.0, 1.0);
-}
 void main() {
     vec4 eye = uMv * vec4(aPos, 1.0);
     gl_Position = uMvp * vec4(aPos, 1.0);
     gl_Position.xy += uNdc * gl_Position.w;
+    vEye = eye.xyz;
+    vN = uNmat * aNrm;
+    vMat = (uVert > 0.5) ? aCol : uColor;
     vLight = uLightMvp * vec4(aPos, 1.0);
     vFog = 0.0;
     if (uFogDist > 0.001) {
         float dist = length(eye.xyz);
         float start = uFogDist * 0.25;
         vFog = clamp((dist - start) / max(uFogDist - start, 0.001), 0.0, 1.0);
-    }
-    if (uLit < 0.5) {
-        vec3 col = (uVert > 0.5) ? aCol : uColor;
-        vFront = col;
-        vBack = col;
-        vSunF = vec3(0.0);
-        vSunB = vec3(0.0);
-    } else {
-        vec3 n = normalize(uNmat * aNrm);
-        vFront = shade(n, eye.xyz, uColor, -1);
-        vSunF = vFront - shade(n, eye.xyz, uColor, uSun);
-        if (uTwo > 0.5) {
-            vBack = shade(-n, eye.xyz, uColor, -1);
-            vSunB = vBack - shade(-n, eye.xyz, uColor, uSun);
-        } else {
-            vBack = vFront;
-            vSunB = vSunF;
-        }
     }
 }
 )GLSL";
@@ -451,47 +394,79 @@ void main() {
 
 static const char* kFs = R"GLSL(
 #version 330
-in vec3 vFront;
-in vec3 vBack;
-in vec3 vSunF;
-in vec3 vSunB;
+in vec3 vEye;
+in vec3 vN;
+in vec3 vMat;
 in vec4 vLight;
 in float vFog;
+uniform vec3 uAmb;
+uniform float uFill;
+uniform float uLit;
+uniform float uTwo;
 uniform float uAlpha;
+uniform int uLN;
+uniform vec4 uLPos[16];
+uniform vec3 uLDif[16];
+uniform vec3 uLSpot[16];
+uniform vec3 uLSp[16];
+uniform int uSun;
 uniform float uDoShadow;
-uniform sampler2D uShadowMap;
+uniform sampler2DShadow uShadowMap;
 uniform vec3 uFogColor;
 out vec4 frag;
 float shadow_pcf(vec4 clip) {
     if (clip.w <= 0.0) return 1.0;
     vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
     if (p.z > 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) return 1.0;
-    const vec2 kOff[16] = vec2[](
-        vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725),
-        vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
-        vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464),
-        vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
-        vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420),
-        vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19048895),
-        vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),
-        vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
-    );
-    float s = 0.0;
-    float scale = 24.0 / 2048.0;
-    for (int i = 0; i < 16; i++) {
-        float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
-        s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
-    }
-    float lit = s / 16.0;
-    /* Soften the light-frustum border so it does not read as a hard triangle. */
+    /* Bias grows with the depth slope so a flat floor does not contour. */
+    float dz = length(vec2(dFdx(p.z), dFdy(p.z)));
+    float bias = clamp(0.002 + dz * 2.0, 0.002, 0.02);
+    float lit = texture(uShadowMap, vec3(p.xy, p.z - bias));
     float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
     float fade = smoothstep(0.0, 0.06, edge);
     return mix(1.0, lit, fade);
 }
+vec3 shade(vec3 n, vec3 pe, vec3 mat, int skip) {
+    vec3 direct = vec3(0.0);
+    for (int i = 0; i < 16; i++) {
+        if (i >= uLN) break;
+        if (i == skip) continue;
+        vec3 toL;
+        float att = 1.0;
+        if (uLPos[i].w == 0.0) {
+            toL = normalize(uLPos[i].xyz);
+        } else {
+            vec3 d = uLPos[i].xyz - pe;
+            float dist = length(d);
+            if (dist < 1e-5) toL = vec3(0.0, 0.0, 1.0);
+            else { toL = d / dist; att = 1.0 / (1.0 + uLSp[i].z * dist * dist); }
+        }
+        float spot = 1.0;
+        if (uLSp[i].x < 1.5) {
+            float s = dot(-toL, normalize(uLSpot[i]));
+            if (s < uLSp[i].x) spot = 0.0;
+            else spot = pow(max(s, 0.0), uLSp[i].y);
+        }
+        direct += uLDif[i] * max(dot(n, toL), 0.0) * att * spot;
+    }
+    vec3 lit = uAmb + direct;
+    if (uFill > 0.5) {
+        vec3 d = clamp(direct, 0.0, 1.0);
+        lit = d + uAmb * (vec3(1.0) - d);
+    }
+    return clamp(lit * mat, 0.0, 1.0);
+}
 void main() {
-    vec3 col = gl_FrontFacing ? vFront : vBack;
-    vec3 sun = gl_FrontFacing ? vSunF : vSunB;
-    if (uDoShadow > 0.5) col -= sun * (1.0 - shadow_pcf(vLight));
+    vec3 col = vMat;
+    if (uLit > 0.5) {
+        vec3 n = normalize(vN);
+        if (uTwo > 0.5 && !gl_FrontFacing) n = -n;
+        col = shade(n, vEye, vMat, -1);
+        if (uDoShadow > 0.5 && uSun >= 0) {
+            vec3 nosun = shade(n, vEye, vMat, uSun);
+            col -= (col - nosun) * (1.0 - shadow_pcf(vLight));
+        }
+    }
     col = mix(clamp(col, 0.0, 1.0), uFogColor, vFog);
     frag = vec4(col, uAlpha);
 }
@@ -563,29 +538,15 @@ uniform sampler2D uRough;
 uniform sampler2D uHeight;
 uniform int uSun;
 uniform float uDoShadow;
-uniform sampler2D uShadowMap;
+uniform sampler2DShadow uShadowMap;
 out vec4 frag;
 float shadow_pcf(vec4 clip) {
     if (clip.w <= 0.0) return 1.0;
     vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
     if (p.z > 1.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) return 1.0;
-    const vec2 kOff[16] = vec2[](
-        vec2(-0.94201624, -0.39906216), vec2(0.94558609, -0.76890725),
-        vec2(-0.094184101, -0.92938870), vec2(0.34495938, 0.29387760),
-        vec2(-0.91588581, 0.45771432), vec2(-0.81544232, -0.87912464),
-        vec2(-0.38277543, 0.27676845), vec2(0.97484398, 0.75648379),
-        vec2(0.44323325, -0.97511554), vec2(0.53742981, -0.47373420),
-        vec2(-0.26496911, -0.41893023), vec2(0.79197514, 0.19048895),
-        vec2(-0.24188840, 0.99706507), vec2(-0.81409955, 0.91437590),
-        vec2(0.19984126, 0.78641367), vec2(0.14383161, -0.14100790)
-    );
-    float s = 0.0;
-    float scale = 24.0 / 2048.0;
-    for (int i = 0; i < 16; i++) {
-        float d = texture(uShadowMap, p.xy + kOff[i] * scale).r;
-        s += (p.z - 0.0012 > d) ? 0.0 : 1.0;
-    }
-    float lit = s / 16.0;
+    float dz = length(vec2(dFdx(p.z), dFdy(p.z)));
+    float bias = clamp(0.002 + dz * 2.0, 0.002, 0.02);
+    float lit = texture(uShadowMap, vec3(p.xy, p.z - bias));
     float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
     float fade = smoothstep(0.0, 0.06, edge);
     return mix(1.0, lit, fade);
@@ -924,6 +885,7 @@ static bool try_core() {
 }
 
 static void drop() {
+    fil_shutdown();
     if (S.vk) nexa_vk14::shutdown();
     if (S.rc) {
         wglMakeCurrent(S.dc, S.rc);
@@ -1315,7 +1277,8 @@ using FbTexFn = void (APIENTRY *)(GLenum, GLenum, GLenum, GLuint, GLint);
 static FbTexFn g_fbTex = nullptr;
 static int g_shFailed = 0;
 
-/* 2048 is enough for soft PCF; 4096 was a large GPU fill-rate cost every frame. */
+/* 2048 keeps shadow edges from stair-stepping. The map is cheap now that
+   boxes are one quad per face instead of a 24×24 grid. */
 static constexpr int kShadowMap = 2048;
 
 static bool ensure_shadow_target() {
@@ -1326,10 +1289,14 @@ static bool ensure_shadow_target() {
     glGenTextures(1, &K.shTex);
     glBindTexture(GL_TEXTURE_2D, K.shTex);
     glTexImage2D(GL_TEXTURE_2D, 0, 0x81A6, kShadowMap, kShadowMap, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812D);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812D);
+    /* Hardware depth compare. Reading the raw depth as a color was drawing
+       contour lines across every lit face. */
+    glTexParameteri(GL_TEXTURE_2D, 0x884C, 0x884E);
+    glTexParameteri(GL_TEXTURE_2D, 0x884D, GL_LEQUAL);
     float border[4] = { 1, 1, 1, 1 };
     glTexParameterfv(GL_TEXTURE_2D, 0x1004, border);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -1485,7 +1452,7 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
     glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(1.5f, 2.0f);
+    glPolygonOffset(3.0f, 6.0f);
     glClear(GL_DEPTH_BUFFER_BIT);
     K.P.Use(K.shProg);
     for (int s = 0; s < (int)g.entities.size(); ++s) {
@@ -1496,6 +1463,10 @@ static void shadow_frame(V3 shine, int sunSlot, int viewW, int viewH) {
         GLsizei n = 0;
         float two = 0;
         if (!mesh_local(e, shape, &vbo, &n, &two, nullptr) || !vbo || n <= 0) continue;
+        float c0 = std::sqrt(shape[0] * shape[0] + shape[1] * shape[1] + shape[2] * shape[2]);
+        float c1 = std::sqrt(shape[4] * shape[4] + shape[5] * shape[5] + shape[6] * shape[6]);
+        float c2 = std::sqrt(shape[8] * shape[8] + shape[9] * shape[9] + shape[10] * shape[10]);
+        if (shadow_is_floor(c0, c1, c2)) continue;
         mul(mvp, K.lightVP, shape);
         K.P.UniMat4(K.shUMvp, 1, GL_FALSE, mvp);
         bind_mesh(vbo);

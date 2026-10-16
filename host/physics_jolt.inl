@@ -99,6 +99,9 @@ struct JoltWorld {
 
 static JoltWorld g_jolt;
 static bool g_joltTypes = false;
+/* The first frames after Play often include a shader-compile hitch. Those
+   must not fast-forward the pile, or every launch settles differently. */
+static int g_joltHold = 0;
 
 static void jolt_ensure_types() {
     if (g_joltTypes) return;
@@ -353,6 +356,7 @@ static void jolt_begin() {
     }
     g_jolt.system->OptimizeBroadPhase();
     g_jolt.inited = true;
+    g_joltHold = 2;
 }
 
 static void jolt_end() {
@@ -373,16 +377,22 @@ static void jolt_end() {
     delete g_jolt.temp;
     g_jolt.temp = nullptr;
     g_jolt.inited = false;
+    g_joltHold = 0;
 }
 
+/* One or two fixed 1/60 s slices. Frame-time jitter stays on one slice, a
+   30 fps frame gets two, and a hitch cannot run the sim ahead. */
 static void jolt_step(float dt) {
     if (!g_jolt.system) return;
-    /* Cap catch-up: many collision steps at low FPS only dig a deeper hole. */
-    float simDt = dt;
-    if (simDt > 1.f / 30.f) simDt = 1.f / 30.f;
-    int collisionSteps = 1;
-    if (simDt > 1.f / 55.f) collisionSteps = 2;
-    g_jolt.system->Update(simDt, collisionSteps, g_jolt.temp, g_jolt.jobs);
+    int steps = 1;
+    if (g_joltHold > 0) {
+        g_joltHold--;
+    } else if (dt >= 1.5f / 60.f) {
+        steps = 2;
+    }
+    const float h = 1.f / 60.f;
+    for (int i = 0; i < steps; ++i)
+        g_jolt.system->Update(h, 1, g_jolt.temp, g_jolt.jobs);
 
     float ppm = g.pixelsPerMeter;
     if (ppm < 1.f) ppm = 50.f;
@@ -413,9 +423,7 @@ static void jolt_step(float dt) {
         int dx = nx - e.x;
         int dy = ny - e.y;
         int dz = nz - e.z;
-        if (dx == 0 && dy == 0 && dz == 0) {
-            /* Still refresh rotation below when awake. */
-        } else {
+        if (dx != 0 || dy != 0 || dz != 0) {
             e.x = nx;
             e.y = ny;
             e.z = nz;
@@ -423,7 +431,8 @@ static void jolt_step(float dt) {
             if (dz != 0) entity_propagate_dz(s, dz);
         }
 
-        if (!e.fixedRotation) {
+        /* Spheres look the same at any yaw; skip expensive quat→euler. */
+        if (!e.fixedRotation && e.kind != "sphere") {
             Quat q = bi.GetRotation(id);
             int rx = 0, ry = 0, rz = 0;
             jolt_orient_to_scene(q, rx, ry, rz);
