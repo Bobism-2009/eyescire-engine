@@ -30,8 +30,8 @@ _play_snapshot.scene
 # Local project for trying engine features
 /gallery/
 
-# Filament is cloned and built locally (v1.78.0); keep the bridge sources only
-/third_party/filament/
+# Filament source is a submodule; keep local build trees out of the repo
+/third_party/filament/out-win/
 /host/filament_bridge/out/
 /bin/
 filament_check.ppm
