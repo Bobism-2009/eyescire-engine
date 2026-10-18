@@ -104,8 +104,14 @@ let context_menu_active: int = 0;
 let cm_spawn_target: int = -1;     /* entity the context menu was opened on, kept past its close */
 let context_menu_x: int = 0;
 let context_menu_y: int = 0;
-let context_menu_source: string = "viewport";   /* "viewport" or "hierarchy" */
+let context_menu_source: string = "viewport";   /* "viewport", "hierarchy", or "assets" */
 let context_menu_target: int = -1;              /* entity to parent under, or -1 for root */
+let assets_rmb_used: int = 0;                   /* 1 if a card ate the right-click this frame */
+/* Project-dock card under the assets context menu (empty = Create menu). */
+let assets_cm_kind: string = "";   /* folder / scene / script / blueprint / asset / prefab */
+let assets_cm_rel:  string = "";
+let assets_cm_path: string = "";
+let assets_cm_idx:  int = -1;
 
 /* nested context-menu state.  context_submenu is the path:
  *   ""           -> no submenu open
@@ -185,6 +191,9 @@ let drag_pending_asset_path: string = "";   /* absolute file path */
 let drag_pending_asset_rel:  string = "";   /* "assets/foo.png" stored on entity */
 let drag_asset_path:         string = "";   /* non-empty == drag is active */
 let drag_asset_rel:          string = "";
+let asset_click_path:        string = "";
+let asset_click_ms:          float = 0.0;
+let sound_listen_path:       string = "";
 
 /* folder the project panel is looking at, relative to that tab's root. "" is the root. */
 let browse_scenes:  string = "";
@@ -206,14 +215,31 @@ let drag_active:  int = 0;
 let drag_anchor_x: int = 0;
 let drag_anchor_y: int = 0;
 let drag_recorded: int = 0;
+let move_from_x: int = 0; /* position of the drag root when the drag started */
+let move_from_y: int = 0;
 let move_axis: int = 0;   /* 0=free, 1=x only, 2=y only */
 
+let insp_mods: string = ",ent,xf,"; /* inspector modules that are open */
+let insp_mod_open: int = 1;
+
 let resize_active: int = 0;
-let resize_handle: int = 0;   /* 0=TL 1=TR 2=BL 3=BR */
+let resize_handle: int = 0;   /* 0 TL, 1 TR, 2 BL, 3 BR, 4 top, 5 right, 6 bottom, 7 left */
 let resize_slot: int = -1;
 let resize_anchor_wx: int = 0; /* opposite corner held fixed while dragging */
 let resize_anchor_wy: int = 0;
 let resize_recorded: int = 0;
+let resize_fix_l: int = 0;     /* screen edges at the moment the drag started */
+let resize_fix_t: int = 0;
+let resize_fix_r: int = 0;
+let resize_fix_b: int = 0;
+let resize_orig_x: int = 0;
+let resize_orig_y: int = 0;
+let resize_orig_w: int = 0;
+let resize_orig_h: int = 0;
+let resize_lin_x: int = 0;
+let resize_lin_y: int = 0;
+let resize_lin_w: int = 0;
+let resize_lin_h: int = 0;
 
 let edit_tool: string = "move";   /* hand | move | rotate | scale */
 let xform_local: int = 0;        /* 0 world axes, 1 the object's own axes */
@@ -345,6 +371,42 @@ fn path_is_obj(p: string): int {
     return 0;
 }
 
+fn path_is_image(p: string): int {
+    let n: int = p.len();
+    if (n < 4) return 0;
+    let t4: string = p.substring(n - 4, 4);
+    if (t4 == ".png" || t4 == ".PNG" || t4 == ".jpg" || t4 == ".JPG"
+        || t4 == ".bmp" || t4 == ".BMP" || t4 == ".tga" || t4 == ".TGA"
+        || t4 == ".gif" || t4 == ".GIF") return 1;
+    if (n >= 5) {
+        let t5: string = p.substring(n - 5, 5);
+        if (t5 == ".jpeg" || t5 == ".JPEG") return 1;
+    }
+    return 0;
+}
+
+fn sound_preview(path: string) {
+    let r: int = sfx_preview(path);
+    if (r == 2) {
+        sound_listen_path = "";
+        eng_log("[sound] stopped " + path_basename(path));
+    } else if (r == 1) {
+        sound_listen_path = path;
+        eng_log("[sound] " + path_basename(path));
+    } else {
+        sound_listen_path = "";
+        eng_log("[sound] could not play " + path_basename(path));
+    }
+}
+
+fn path_is_sound(p: string): int {
+    if (path_ends_ci(p, ".wav") == 1) return 1;
+    if (path_ends_ci(p, ".mp3") == 1) return 1;
+    if (path_ends_ci(p, ".ogg") == 1) return 1;
+    if (path_ends_ci(p, ".flac") == 1) return 1;
+    return 0;
+}
+
 fn browse_abs(root_folder: string, browse: string): string {
     let base: string = proj_path_join(proj_root(), root_folder);
     if (browse.len() == 0) return base;
@@ -402,11 +464,24 @@ fn draw_subfolders(grid: Rect, abs_dir: string, browse: string, panel: string, c
             th_font(11);
             draw_text(card.x + 56, card.y + 15, "Folder", col_text_dim());
             th_font_semi(12);
-            draw_text(card.x + 56, card.y + 31, name, col_text_main());
+            let folder_rel: string = rel_join(browse, name);
+            /* Capture before rename finish clears the context — a click that
+               commits the name must not also open the folder. */
+            let renaming: int = assets_renaming_this("folder", folder_rel, full);
+            if (renaming == 1) {
+                let was: string = edit_target;
+                let got: string = ui_field("assets_rename", rect(card.x + 52, card.y + 26, card.w - 64, 22), rename_buf);
+                if (was == "assets_rename" && edit_target != "assets_rename") assets_rename_finish(got);
+            } else {
+                draw_text(card.x + 56, card.y + 31, name, col_text_main());
+            }
             th_font(14);
-            if (hover && mouse_pressed(MOUSE_LEFT)) {
+            if (hover && mouse_pressed(MOUSE_LEFT) && renaming == 0) {
                 browse_enter(panel, browse, name);
                 return -1;
+            }
+            if (hover && mouse_pressed(MOUSE_RIGHT) && renaming == 0) {
+                assets_cm_open_item("folder", folder_rel, full, -1, mx, my);
             }
             slot = slot + 1;
         }
@@ -564,6 +639,74 @@ fn chrome_section(x: int, y: int, w: int, title: string): int {
     return y + 26;
 }
 
+fn insp_mod_has(id: string): int {
+    let key: string = "," + id + ",";
+    let n: int = insp_mods.len();
+    let m: int = key.len();
+    let i: int = 0;
+    while (i + m <= n) {
+        if (insp_mods.substring(i, m) == key) return 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn insp_mod_toggle(id: string) {
+    let key: string = "," + id + ",";
+    if (insp_mod_has(id) == 0) {
+        if (insp_mods.len() == 0) insp_mods = ",";
+        insp_mods = insp_mods + id + ",";
+        return;
+    }
+    let n: int = insp_mods.len();
+    let m: int = key.len();
+    let i: int = 0;
+    let out: string = "";
+    while (i < n) {
+        if (i + m <= n && insp_mods.substring(i, m) == key) i = i + m - 1;
+        else {
+            out = out + insp_mods.substring(i, 1);
+            i = i + 1;
+        }
+    }
+    insp_mods = out;
+}
+
+/* Collapsible inspector module. Returns the y where the body starts.
+   insp_mod_open is 1 when that body should be drawn. */
+fn insp_module(x: int, y: int, w: int, id: string, title: string): int {
+    let open: int = insp_mod_has(id);
+    insp_mod_open = open;
+    let bar: Rect = rect(x - 8, y, w + 16, 28);
+    let panel: Rect = right_rect();
+    let clip: Rect = rect(panel.x, panel.y + 24, panel.w, panel.h - 24);
+    let mx: int = eng_mouse_x();
+    let my: int = eng_mouse_y();
+    let hot: int = 0;
+    if (point_in_rect(mx, my, bar) && point_in_rect(mx, my, clip)) {
+        hot = 1;
+        if (mouse_down(MOUSE_LEFT)) hot = 2;
+    }
+    if (open == 1 || hot >= 1) draw_fill_rect(bar, col_panel_med());
+    draw_fill_rect(rect(bar.x, bar.y + bar.h - 1, bar.w, 1), col_border_soft());
+    th_font_semi(12);
+    let mark: string = ">";
+    if (open == 1) mark = "v";
+    let ty: int = th_text_y(bar.y, bar.h);
+    draw_text(x, ty, mark, col_text_dim());
+    draw_text(x + 18, ty, title, col_text_main());
+    th_font(14);
+    if (hot >= 1 && mouse_pressed(MOUSE_LEFT)) {
+        insp_mod_toggle(id);
+        insp_mod_open = insp_mod_has(id);
+        if (insp_mod_open == 0 && edit_target.len() >= 5 && edit_target.substring(0, 5) == "insp_") {
+            edit_target = "";
+            edit_buf = "";
+        }
+    }
+    return y + 34;
+}
+
 fn chrome_field_label(x: int, y: int, s: string) {
     th_font(11);
     draw_text(x, y - 1, s, col_text_dim());
@@ -571,6 +714,9 @@ fn chrome_field_label(x: int, y: int, s: string) {
 }
 
 fn chrome_popup(r: Rect) {
+    /* A leftover panel clip cuts the card on the 3D view edge and lets the
+       labels run past it. Popups are the top layer, so they paint unclipped. */
+    eng_clear_clip();
     th_popup(r);
 }
 
@@ -668,6 +814,26 @@ fn ui_caret_at(r: Rect, text: string, mx: int): int {
     return n;
 }
 
+fn ui_field_fit_text(value: string, max_w: int): string {
+    if (max_w < 12) return "";
+    if (eng_text_width(value) <= max_w) return value;
+    let ell: string = "...";
+    let ew: int = eng_text_width(ell);
+    let budget: int = max_w - ew;
+    if (budget < 4) return ell;
+    let n: int = value.len();
+    let i: int = 0;
+    let w: int = 0;
+    while (i < n) {
+        let ch: string = value.substring(i, 1);
+        let cw: int = eng_text_width(ch);
+        if (w + cw > budget) break;
+        w = w + cw;
+        i = i + 1;
+    }
+    return value.substring(0, i) + ell;
+}
+
 fn ui_field_draw(r: Rect, value: string, focused: int) {
     let hover: int = 0;
     if (mouse_hover_held(r) >= 1) hover = 1;
@@ -675,6 +841,9 @@ fn ui_field_draw(r: Rect, value: string, focused: int) {
     th_font(12);
     let ty: int = th_text_y(r.y, r.h);
     let x: int = r.x + 9;
+    let max_w: int = r.w - 18;
+    if (max_w < 8) max_w = 8;
+    eng_set_clip(r.x + 4, r.y + 2, r.w - 8, r.h - 4);
     if (focused == 1 && edit_anchor != edit_caret) {
         let lo: int = edit_lo();
         let hi: int = edit_hi();
@@ -685,7 +854,9 @@ fn ui_field_draw(r: Rect, value: string, focused: int) {
         if (mid_w < 1) mid_w = 1;
         draw_fill_rect(rect(x + pre_w, r.y + 4, mid_w, r.h - 8), rgb(46, 96, 180));
     }
-    draw_text(x, ty, value, col_ui_text_value());
+    let shown: string = value;
+    if (focused == 0) shown = ui_field_fit_text(value, max_w);
+    draw_text(x, ty, shown, col_ui_text_value());
     if (focused == 1 && edit_anchor == edit_caret) {
         /* blink ~1.9 Hz; sit 2px past the glyph so the letter stays readable */
         let phase: int = eng_now_ms();
@@ -705,6 +876,7 @@ fn ui_field_draw(r: Rect, value: string, focused: int) {
             draw_fill_rect(rect(cx, cy, 1, ch), col_ui_text_value());
         }
     }
+    eng_clear_clip();
     th_font(14);
 }
 
@@ -990,11 +1162,63 @@ fn switch_active_scene(idx: int) {
 fn add_new_scene() {
     if (proj_loaded() == 0) return;
     let n: int = proj_scene_count();
-    let rel: string = "scenes/scene_" + (n + 1) + ".scene";
+    let fname: string = "scene_" + (n + 1) + ".scene";
+    let rel: string = "scenes/" + rel_join(browse_scenes, fname);
     let abs_path: string = proj_path_join(proj_root(), rel);
+    ensure_parent_dir(abs_path);
     file.write(abs_path, "EYESCIRE_SCENE 2\nNEXT_ID 1\n");
     proj_add_scene(rel);
-    switch_active_scene(n);
+    switch_active_scene(proj_scene_count() - 1);
+}
+
+fn assets_root_for_tab(): string {
+    if (app_subtab == "scenes") return "scenes";
+    if (app_subtab == "scripts") return "scripts";
+    if (app_subtab == "assets") return "assets";
+    return "prefabs";
+}
+
+fn assets_browse_for_tab(): string {
+    if (app_subtab == "scenes") return browse_scenes;
+    if (app_subtab == "scripts") return browse_scripts;
+    if (app_subtab == "assets") return browse_assets;
+    return browse_prefabs;
+}
+
+fn next_folder_name(abs_dir: string): string {
+    let base: string = "New Folder";
+    if (eng_fs_exists(proj_path_join(abs_dir, base)) == 0) return base;
+    let n: int = 2;
+    while (n < 1000) {
+        let cand: string = "New Folder " + n;
+        if (eng_fs_exists(proj_path_join(abs_dir, cand)) == 0) return cand;
+        n = n + 1;
+    }
+    return "New Folder";
+}
+
+fn create_new_folder() {
+    if (proj_loaded() == 0) return;
+    let root: string = assets_root_for_tab();
+    let browse: string = assets_browse_for_tab();
+    let abs_dir: string = browse_abs(root, browse);
+    eng_fs_make_dir(abs_dir);
+    let name: string = next_folder_name(abs_dir);
+    let full: string = proj_path_join(abs_dir, name);
+    eng_fs_make_dir(full);
+    eng_log("[folder] created " + rel_join(browse, name) + " in " + root);
+    if (root == "scenes") proj_rescan_scenes();
+    else if (root == "scripts") proj_rescan_scripts();
+    else if (root == "assets") proj_rescan_assets();
+    else proj_rescan_prefabs();
+}
+
+fn create_new_blueprint() {
+    if (proj_loaded() == 0) return;
+    let base: string = bp_pick_name("blueprint");
+    let name: string = base;
+    if (browse_scripts.len() > 0) name = browse_scripts + "/" + base;
+    if (bp_create_named(name) == 0) dock_tab = "console";
 }
 
 fn cycle_scene(dir: int) {
@@ -1737,6 +1961,9 @@ fn compile_begin(target: string) {
 }
 
 fn compile_overlay_draw() {
+    /* edit_frame already opened the 3D view this frame. Leave it up and present
+       keeps a hole there, black, until the next frame after the first script. */
+    r3d_dismiss();
     let pw: int = 560;
     let ph: int = 200;
     let px: int = (WIN_W - pw) / 2;
@@ -1935,13 +2162,13 @@ fn open_script_rel(): string {
     if (bp_is_open() == 1) {
         let i: int = 0;
         while (i < proj_bp_count()) {
-            if (proj_bp_path(i) == bp_path()) return proj_bp_script(i);
+            if (paths_same(proj_bp_path(i), bp_path()) == 1) return proj_bp_script(i);
             i = i + 1;
         }
     }
     let i: int = 0;
     while (i < proj_script_count()) {
-        if (proj_script_path(i) == te_path()) return proj_script_name(i);
+        if (paths_same(proj_script_path(i), te_path()) == 1) return proj_script_name(i);
         i = i + 1;
     }
     return "";
@@ -1970,9 +2197,9 @@ fn rename_script_rel(old_nxa: string, new_base: string): int {
     let old_ebp: string = proj_path_join(scripts, old_ebp_rel);
     let new_ebp: string = proj_path_join(scripts, new_ebp_rel);
     let had_bp: int = 0;
-    if (bp_is_open() == 1 && bp_path() == old_ebp) had_bp = 1;
+    if (bp_is_open() == 1 && paths_same(bp_path(), old_ebp) == 1) had_bp = 1;
     let had_te: int = 0;
-    if (te_path() == old_abs) had_te = 1;
+    if (te_path().len() > 0 && paths_same(te_path(), old_abs) == 1) had_te = 1;
     if (had_bp == 1 && bp_dirty() == 1) bp_save();
     if (had_te == 1 && te_dirty() == 1) te_save();
     eng_dll_unload_all();
@@ -2001,9 +2228,9 @@ fn rename_script_rel(old_nxa: string, new_base: string): int {
         i = ent_iter_next(i + 1);
     }
     proj_rescan_scripts();
-    if (had_bp == 1) {
-        bp_close();
-        bp_open_path(new_ebp);
+    if (had_bp == 1 && bp_retarget(old_ebp, new_ebp) == 1) {
+        /* Keep the graph open. Regenerating writes the new file name into the script. */
+        bp_translate_file(new_ebp, 1);
     } else if (had_te == 1) {
         te_load(new_abs);
         viewport_show("script");
@@ -2074,9 +2301,9 @@ fn delete_script_named(nxa_name: string) {
     if (proj_loaded() == 0) return;
     if (nxa_name.len() == 0) return;
     let stem: string = script_stem(nxa_name);
-    let dir: string = proj_path_join(proj_root(), "scripts");
-    let nxa: string = proj_path_join(dir, stem + ".nxa");
-    let ebp: string = proj_path_join(dir, stem + ".ebp");
+    let scripts: string = proj_path_join(proj_root(), "scripts");
+    let nxa: string = proj_path_join(scripts, stem + ".nxa");
+    let ebp: string = proj_path_join(scripts, stem + ".ebp");
     let dll: string = proj_path_join(proj_path_join(proj_root(), "bin"), stem + ".dll");
     eng_dll_unload_all();
     close_script_editor_if(nxa);
@@ -2226,7 +2453,13 @@ fn assets_grid_scenes(b: Rect) {
         th_font(11);
         draw_text(card.x + 56, card.y + 15, "Scene", col_text_dim());
         th_font_semi(12);
-        draw_text(card.x + 56, card.y + 31, path_basename(scene_rel), col_text_main());
+        if (assets_renaming_this("scene", scene_rel, "") == 1) {
+            let was: string = edit_target;
+            let got: string = ui_field("assets_rename", rect(card.x + 52, card.y + 26, card.w - 64, 22), rename_buf);
+            if (was == "assets_rename" && edit_target != "assets_rename") assets_rename_finish(got);
+        } else {
+            draw_text(card.x + 56, card.y + 31, path_basename(scene_rel), col_text_main());
+        }
         th_font(14);
         if (n > 1 && hover) {
             let del_r: Rect = rect(card.x + card.w - 24, card.y + 6, 18, 18);
@@ -2242,6 +2475,9 @@ fn assets_grid_scenes(b: Rect) {
         if (hover && mouse_pressed(MOUSE_LEFT)) {
             switch_active_scene(i);
             viewport_show("scene");
+        }
+        if (hover && mouse_pressed(MOUSE_RIGHT)) {
+            assets_cm_open_item("scene", scene_rel, proj_scene_abs(i), i, mx, my);
         }
         slot = slot + 1;
         i = i + 1;
@@ -2312,12 +2548,7 @@ fn assets_grid_scripts(b: Rect) {
                 drag_pending_y    = my;
             }
             if (ate_del == 0 && hover && mouse_pressed(MOUSE_RIGHT)) {
-                let s: int = sel_first();
-                if (s >= 0) {
-                    undo_save_modify(s);
-                    ent_set_script(s, proj_script_name(i));
-                    eng_log("[script] attached " + proj_script_name(i) + " to " + ent_name(s));
-                }
+                assets_cm_open_item("script", script_rel, proj_script_path(i), i, mx, my);
             }
             slot = slot + 1;
         }
@@ -2332,7 +2563,7 @@ fn assets_grid_scripts(b: Rect) {
         let card: Rect = rect(cx, cy, card_w, card_h);
         let hover: bool = point_in_rect(mx, my, card);
         let active: int = 0;
-        if (viewport_mode == "script" && bp_is_open() == 1 && bp_path() == proj_bp_path(bi)) active = 1;
+        if (viewport_mode == "script" && bp_is_open() == 1 && paths_same(bp_path(), proj_bp_path(bi)) == 1) active = 1;
         let card_hover: int = 0;
         if (hover) card_hover = 1;
         th_card(card, active, card_hover);
@@ -2340,7 +2571,7 @@ fn assets_grid_scripts(b: Rect) {
         asset_icon(rect(card.x + 12, card.y + 14, 34, 34), "script", rgb(90, 170, 255));
         th_font(11);
         draw_text(card.x + 56, card.y + 15, "Blueprint", col_text_dim());
-        script_title_draw(card, proj_bp_script(bi), path_basename(bp_rel));
+        script_title_draw(card, proj_bp_script(bi), path_basename(script_stem(bp_rel)));
         th_font(14);
         let ate_del: int = 0;
         if (rename_rel == proj_bp_script(bi)) ate_del = 1;
@@ -2368,12 +2599,7 @@ fn assets_grid_scripts(b: Rect) {
             drag_pending_y    = my;
         }
         if (ate_del == 0 && hover && mouse_pressed(MOUSE_RIGHT)) {
-            let s: int = sel_first();
-            if (s >= 0) {
-                undo_save_modify(s);
-                ent_set_script(s, proj_bp_script(bi));
-                eng_log("[blueprint] attached " + proj_bp_script(bi) + " to " + ent_name(s));
-            }
+            assets_cm_open_item("blueprint", proj_bp_script(bi), proj_bp_path(bi), bi, mx, my);
         }
         slot = slot + 1;
         bi = bi + 1;
@@ -2444,7 +2670,7 @@ fn import_asset_dialog() {
        through a single Nexa string and let the C++ side use it as a
        pre-made multi-NUL buffer via embedded \0 chars. */
     /* engine.dll converts the '|'s to NULs for OPENFILENAME */
-    let filter: string = "Assets (*.png *.jpg *.obj)|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.obj|All files (*.*)|*.*";
+    let filter: string = "All files (*.*)|*.*|Sounds (*.wav *.mp3 *.ogg)|*.wav;*.mp3;*.ogg;*.flac|Images and models|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tga;*.obj";
     let initial: string = "";
     if (proj_loaded() == 1) initial = proj_path_join(proj_root(), "assets");
     let chosen: string = eng_open_file_dialog("Import Asset", filter, initial);
@@ -2457,19 +2683,129 @@ fn import_asset_dialog() {
     else         eng_log("[asset] FAILED to import " + chosen);
 }
 
+fn path_ends_ci(p: string, ext: string): int {
+    let n: int = p.len();
+    let e: int = ext.len();
+    if (n < e) return 0;
+    let a: string = p.substring(n - e, e);
+    let low: string = "";
+    inline_cpp! {
+        low = a;
+        for (char& c : low) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    }
+    if (low == ext) return 1;
+    return 0;
+}
+
+fn unique_dest_path(dir: string, name: string): string {
+    let dst: string = proj_path_join(dir, name);
+    if (eng_fs_exists(dst) == 0) return dst;
+    let stem: string = file_stem(name);
+    let ext: string = "";
+    let base: string = path_basename(name);
+    let dot: int = -1;
+    let i: int = 0;
+    while (i < base.len()) {
+        if (base.substring(i, 1) == ".") dot = i;
+        i = i + 1;
+    }
+    if (dot >= 0) ext = base.substring(dot, base.len() - dot);
+    let n: int = 1;
+    while (n < 1000) {
+        dst = proj_path_join(dir, stem + "_" + n + ext);
+        if (eng_fs_exists(dst) == 0) return dst;
+        n = n + 1;
+    }
+    return dst;
+}
+
+/* Explorer -> Project dock. Imports into the open tab/folder. */
+fn os_file_drop_handle() {
+    let n: int = eng_drop_count();
+    if (n <= 0) return;
+    let dx: int = eng_drop_x();
+    let dy: int = eng_drop_y();
+    if (proj_loaded() == 0) {
+        eng_drop_clear();
+        eng_log("[drop] open a project first");
+        return;
+    }
+    if (point_in_rect(dx, dy, dock_rect()) == 0) {
+        eng_drop_clear();
+        return;
+    }
+    dock_tab = "project";
+    let i: int = 0;
+    let imported: int = 0;
+    while (i < n) {
+        let src: string = eng_drop_path(i);
+        i = i + 1;
+        if (src.len() == 0) continue;
+        if (app_subtab == "scripts" && path_ends_ci(src, ".nxa") == 1) {
+            let dir: string = browse_abs("scripts", browse_scripts);
+            eng_fs_make_dir(dir);
+            let dst: string = unique_dest_path(dir, path_basename(src));
+            if (eng_fs_copy_file(src, dst) == 1) {
+                proj_rescan_scripts();
+                imported = imported + 1;
+                eng_log("[drop] script " + path_basename(dst));
+            } else eng_log("[drop] failed " + src);
+            continue;
+        }
+        if (app_subtab == "scenes" && path_ends_ci(src, ".scene") == 1) {
+            let dir: string = browse_abs("scenes", browse_scenes);
+            eng_fs_make_dir(dir);
+            let dst: string = unique_dest_path(dir, path_basename(src));
+            if (eng_fs_copy_file(src, dst) == 1) {
+                let rel: string = "scenes/" + rel_join(browse_scenes, path_basename(dst));
+                proj_add_scene(rel);
+                proj_save_manifest();
+                imported = imported + 1;
+                eng_log("[drop] scene " + rel);
+            } else eng_log("[drop] failed " + src);
+            continue;
+        }
+        if (app_subtab == "prefabs" && path_ends_ci(src, ".prefab") == 1) {
+            let dir: string = browse_abs("prefabs", browse_prefabs);
+            eng_fs_make_dir(dir);
+            let dst: string = unique_dest_path(dir, path_basename(src));
+            if (eng_fs_copy_file(src, dst) == 1) {
+                proj_rescan_prefabs();
+                imported = imported + 1;
+                eng_log("[drop] prefab " + path_basename(dst));
+            } else eng_log("[drop] failed " + src);
+            continue;
+        }
+        /* Anything else lands in Assets, including sounds, and that tab opens so it is visible. */
+        if (app_subtab != "assets") {
+            app_subtab = "assets";
+            browse_assets = "";
+        }
+        let into: string = browse_assets;
+        if (proj_import_asset_into(src, into) == 1) {
+            imported = imported + 1;
+            eng_log("[drop] " + proj_last_import());
+        } else eng_log("[drop] failed " + src);
+    }
+    eng_drop_clear();
+    if (imported > 0) eng_log("[drop] imported " + imported + " item(s)");
+}
+
 fn assets_grid_assets(b: Rect) {
+    if (sound_listen_path.len() > 0 && sfx_preview_on() == 0) sound_listen_path = "";
     proj_rescan_assets();
     let view: Rect = panel_folder_bar(b, browse_assets, "assets");
     if (browse_went_up == 1) { browse_up("assets"); return; }
     let n: int = proj_asset_count();
-    let card_w: int = 130;
-    let card_h: int = 130;
+    /* Match folder / model card size so texture thumbs are not huge tiles. */
     let pad: int = 10;
     let mx: int = eng_mouse_x();
     let my: int = eng_mouse_y();
     let side_w: int = 220;
     let folder_w: int = 180;
     let folder_h: int = 70;
+    let card_w: int = folder_w;
+    let card_h: int = folder_h;
     let folder_cols: int = (view.w - side_w - pad) / (folder_w + pad);
     if (folder_cols < 1) folder_cols = 1;
     let folders: int = draw_subfolders(view, browse_abs("assets", browse_assets), browse_assets, "assets", folder_w, folder_h, pad, folder_cols, 0);
@@ -2490,18 +2826,25 @@ fn assets_grid_assets(b: Rect) {
             th_font(11);
             draw_text(card.x + 56, card.y + 15, "Model", col_text_dim());
             th_font_semi(12);
-            draw_text(card.x + 56, card.y + 31, path_basename(model_rel), col_text_main());
+            let model_abs: string = proj_asset_path(mi);
+            let model_store: string = proj_asset_rel(mi);
+            if (assets_renaming_this("asset", model_store, model_abs) == 1) {
+                let was: string = edit_target;
+                let got: string = ui_field("assets_rename", rect(card.x + 52, card.y + 26, card.w - 64, 22), rename_buf);
+                if (was == "assets_rename" && edit_target != "assets_rename") assets_rename_finish(got);
+            } else {
+                draw_text(card.x + 56, card.y + 31, path_basename(model_rel), col_text_main());
+            }
             th_font(14);
             if (hover && mouse_pressed(MOUSE_LEFT)) {
                 drag_pending_asset_idx  = mi;
-                drag_pending_asset_path = proj_asset_path(mi);
-                drag_pending_asset_rel  = proj_asset_rel(mi);
+                drag_pending_asset_path = model_abs;
+                drag_pending_asset_rel  = model_store;
                 drag_pending_x          = mx;
                 drag_pending_y          = my;
             }
             if (hover && mouse_pressed(MOUSE_RIGHT)) {
-                let s: int = sel_first();
-                if (s >= 0) attach_asset_to(s, proj_asset_path(mi), proj_asset_rel(mi));
+                assets_cm_open_item("asset", model_store, model_abs, mi, mx, my);
             }
             row_slot = row_slot + 1;
         }
@@ -2528,44 +2871,78 @@ fn assets_grid_assets(b: Rect) {
         if (hover) card_hover = 1;
         th_card(card, 0, card_hover);
 
-        /* image preview (cached so we don't redecode the PNG every frame) */
+        /* Small left thumb — same card size as folders / models. */
         let asset_full: string = proj_asset_path(i);
-        let preview: Rect = rect(card.x + 8, card.y + 8, card.w - 16, card.h - 36);
-        th_fill(preview, 4, col_field());
-        let img_id: int = eng_image_load_cached(asset_full);
-        if (img_id != 0) {
-            let iw: int = eng_image_w(img_id);
-            let ih: int = eng_image_h(img_id);
-            if (iw > 0 && ih > 0) {
-                let scale_x: float = (preview.w - 8.0) / iw;
-                let scale_y: float = (preview.h - 8.0) / ih;
-                let sc: float = scale_x;
-                if (scale_y < sc) sc = scale_y;
-                if (sc > 1.0) sc = 1.0;
-                let dw: int = iw * sc;
-                let dh: int = ih * sc;
-                if (dw < 1) dw = 1;
-                if (dh < 1) dh = 1;
-                let dx: int = preview.x + (preview.w - dw) / 2;
-                let dy: int = preview.y + (preview.h - dh) / 2;
-                eng_image_blit_scaled(img_id, dx, dy, dw, dh);
+        let is_pic: int = path_is_image(asset_rel);
+        let is_snd: int = path_is_sound(asset_rel);
+        let kind_label: string = "File";
+        if (is_pic == 1) kind_label = "Texture";
+        else if (is_snd == 1) kind_label = "Sound";
+        if (is_snd == 1) {
+            let tone: Color = rgb(168, 196, 176);
+            if (sound_listen_path == asset_full) tone = col_accent();
+            asset_icon(rect(card.x + 12, card.y + 14, 34, 34), "sound", tone);
+        } else {
+            let preview: Rect = rect(card.x + 10, card.y + 12, 46, 46);
+            th_fill(preview, 4, col_field());
+            let img_id: int = 0;
+            if (is_pic == 1) img_id = eng_image_load_thumb(asset_full, 64);
+            if (img_id != 0) {
+                let iw: int = eng_image_w(img_id);
+                let ih: int = eng_image_h(img_id);
+                if (iw > 0 && ih > 0) {
+                    let scale_x: float = (preview.w - 4.0) / iw;
+                    let scale_y: float = (preview.h - 4.0) / ih;
+                    let sc: float = scale_x;
+                    if (scale_y < sc) sc = scale_y;
+                    if (sc > 1.0) sc = 1.0;
+                    let dw: int = iw * sc;
+                    let dh: int = ih * sc;
+                    if (dw < 1) dw = 1;
+                    if (dh < 1) dh = 1;
+                    let dx: int = preview.x + (preview.w - dw) / 2;
+                    let dy: int = preview.y + (preview.h - dh) / 2;
+                    eng_image_blit_scaled(img_id, dx, dy, dw, dh);
+                }
             }
         }
 
         th_font(11);
-        draw_text(card.x + 10, card.y + card.h - 23, path_basename(asset_rel), col_text_main());
+        draw_text(card.x + 64, card.y + 15, kind_label, col_text_dim());
+        th_font_semi(12);
+        let asset_store: string = proj_asset_rel(i);
+        if (assets_renaming_this("asset", asset_store, asset_full) == 1) {
+            let was: string = edit_target;
+            let got: string = ui_field("assets_rename", rect(card.x + 60, card.y + 30, card.w - 72, 22), rename_buf);
+            if (was == "assets_rename" && edit_target != "assets_rename") assets_rename_finish(got);
+        } else {
+            draw_text(card.x + 64, card.y + 31, ui_field_fit_text(path_basename(asset_rel), card.w - 76), col_text_main());
+        }
         th_font(14);
 
         if (hover && mouse_pressed(MOUSE_LEFT)) {
-            drag_pending_asset_idx  = i;
-            drag_pending_asset_path = proj_asset_path(i);
-            drag_pending_asset_rel  = proj_asset_rel(i);
-            drag_pending_x          = mx;
-            drag_pending_y          = my;
+            let now: float = eng_now_ms();
+            let again: int = 0;
+            if (is_snd == 1 && asset_click_path == asset_full) {
+                let gap: float = now - asset_click_ms;
+                if (gap > 40.0 && gap < 450.0) again = 1;
+            }
+            if (again == 1) {
+                sound_preview(asset_full);
+                asset_click_path = "";
+                asset_click_ms = 0.0;
+            } else {
+                asset_click_path = asset_full;
+                asset_click_ms = now;
+                drag_pending_asset_idx  = i;
+                drag_pending_asset_path = asset_full;
+                drag_pending_asset_rel  = asset_store;
+                drag_pending_x          = mx;
+                drag_pending_y          = my;
+            }
         }
         if (hover && mouse_pressed(MOUSE_RIGHT)) {
-            let s: int = sel_first();
-            if (s >= 0) attach_asset_to(s, proj_asset_path(i), proj_asset_rel(i));
+            assets_cm_open_item("asset", asset_store, asset_full, i, mx, my);
         }
 
         slot = slot + 1;
@@ -2575,7 +2952,7 @@ fn assets_grid_assets(b: Rect) {
     if (row_slot == 0 && slot == 0) {
         eng_set_font_size(12);
         draw_text(view.x + 12, view.y + 12,
-                  "No assets in this folder.",
+                  "No assets in this folder. Drop any file here to add it.",
                   col_text_dim());
         eng_set_font_size(14);
     }
@@ -2584,7 +2961,9 @@ fn assets_grid_assets(b: Rect) {
     let sx: int = view.x + view.w - side_w + 10;
     let sy: int = view.y + 10;
     eng_set_font_size(11);
-    draw_text(sx, sy, "images set the sprite, models set the mesh", col_text_dim());
+    draw_text(sx, sy, "drag onto the inspector or the game view", col_text_dim());
+    sy = sy + 14;
+    draw_text(sx, sy, "double-click a sound to listen", col_text_dim());
     sy = sy + 14;
     draw_text(sx, sy, "right-click attaches to selection", col_text_dim());
     eng_set_font_size(14);
@@ -2645,7 +3024,14 @@ fn assets_grid_prefabs(b: Rect) {
         th_font(11);
         draw_text(card.x + 56, card.y + 15, "Prefab", col_text_dim());
         th_font_semi(12);
-        draw_text(card.x + 56, card.y + 31, path_basename(prefab_rel), col_text_main());
+        let prefab_abs: string = proj_prefab_path(i);
+        if (assets_renaming_this("prefab", prefab_rel, prefab_abs) == 1) {
+            let was: string = edit_target;
+            let got: string = ui_field("assets_rename", rect(card.x + 52, card.y + 26, card.w - 64, 22), rename_buf);
+            if (was == "assets_rename" && edit_target != "assets_rename") assets_rename_finish(got);
+        } else {
+            draw_text(card.x + 56, card.y + 31, path_basename(prefab_rel), col_text_main());
+        }
         th_font(14);
         if (hover && mouse_pressed(MOUSE_LEFT)) {
             let v: Rect = viewport_rect();
@@ -2655,6 +3041,9 @@ fn assets_grid_prefabs(b: Rect) {
             let wyi: int = wyf;
             let spawned: int = proj_spawn_prefab(i, wxi, wyi);
             if (spawned >= 0) undo_save_create(spawned);
+        }
+        if (hover && mouse_pressed(MOUSE_RIGHT)) {
+            assets_cm_open_item("prefab", prefab_rel, prefab_abs, i, mx, my);
         }
         slot = slot + 1;
         i = i + 1;
@@ -2671,12 +3060,23 @@ fn project_panel_draw(r: Rect) {
     let strip: Rect = rect(r.x, r.y, r.w, TAB_H);
     assets_subtab_strip(strip);
     let body: Rect = rect(r.x, r.y + TAB_H, r.w, r.h - TAB_H);
+    assets_rmb_used = 0;
     eng_set_clip(body.x, body.y, body.w, body.h);
     if      (app_subtab == "scenes")  assets_grid_scenes(body);
     else if (app_subtab == "scripts") assets_grid_scripts(body);
     else if (app_subtab == "assets")  assets_grid_assets(body);
     else                              assets_grid_prefabs(body);
     eng_clear_clip();
+    /* Empty space in the Project dock opens Create (folder, script, …). */
+    let mx: int = eng_mouse_x();
+    let my: int = eng_mouse_y();
+    if (proj_loaded() == 1 && assets_rmb_used == 0 && point_in_rect(mx, my, body) && mouse_pressed(MOUSE_RIGHT)) {
+        assets_cm_kind = "";
+        assets_cm_rel = "";
+        assets_cm_path = "";
+        assets_cm_idx = -1;
+        context_menu_open_for("assets", mx, my);
+    }
 }
 
 fn dock_draw() {
@@ -2912,6 +3312,7 @@ let insp_buf_x:      string = "";
 let insp_buf_y:      string = "";
 let insp_buf_w:      string = "";
 let insp_buf_h:      string = "";
+let insp_buf_font:   string = "";
 let insp_buf_rot:    string = "";
 let insp_buf_rotx:   string = "";
 let insp_buf_roty:   string = "";
@@ -2922,6 +3323,16 @@ let insp_buf_l_range: string = "";
 let insp_buf_l_angle: string = "";
 let insp_buf_l_tilt:  string = "";
 let insp_buf_model:  string = "";
+let insp_buf_tex_albedo: string = "";
+let insp_buf_tex_normal: string = "";
+let insp_buf_tex_rough:  string = "";
+let insp_buf_tex_metal:  string = "";
+let insp_buf_tex_height: string = "";
+let insp_buf_tex_ao:     string = "";
+let insp_buf_mat_rough:  string = "55";
+let insp_buf_mat_metal:  string = "0";
+let insp_buf_mat_bump:   string = "100";
+let insp_buf_mat_tile:   string = "4";
 let insp_buf_sound:  string = "";
 let insp_buf_sound_range: string = "800";
 let insp_buf_emrate: string = "20";
@@ -2944,6 +3355,14 @@ let last_sprite_field_x: int = 0;
 let last_sprite_field_y: int = 0;
 let last_sprite_field_w: int = 0;
 let last_sprite_field_h: int = 0;
+
+/* MATERIALS map fields (asset drag-drop) */
+let mat_field_albedo_x: int = 0; let mat_field_albedo_y: int = 0; let mat_field_albedo_w: int = 0; let mat_field_albedo_h: int = 0;
+let mat_field_normal_x: int = 0; let mat_field_normal_y: int = 0; let mat_field_normal_w: int = 0; let mat_field_normal_h: int = 0;
+let mat_field_rough_x: int = 0; let mat_field_rough_y: int = 0; let mat_field_rough_w: int = 0; let mat_field_rough_h: int = 0;
+let mat_field_metal_x: int = 0; let mat_field_metal_y: int = 0; let mat_field_metal_w: int = 0; let mat_field_metal_h: int = 0;
+let mat_field_height_x: int = 0; let mat_field_height_y: int = 0; let mat_field_height_w: int = 0; let mat_field_height_h: int = 0;
+let mat_field_ao_x: int = 0; let mat_field_ao_y: int = 0; let mat_field_ao_w: int = 0; let mat_field_ao_h: int = 0;
 
 fn parse_int_or(s: string, def: int): int {
     if (s.len() == 0) return def;
@@ -3124,6 +3543,7 @@ fn refresh_inspector_buffers(s: int) {
         insp_buf_y      = "" + ent_y(s);
         insp_buf_w      = "" + ent_w(s);
         insp_buf_h      = "" + ent_h(s);
+        insp_buf_font   = "" + ent_font_px(s);
         insp_buf_rot    = "" + ent_rot(s);
         insp_buf_rotx   = "" + ent_rot_x(s);
         insp_buf_roty   = "" + ent_rot_y(s);
@@ -3134,6 +3554,16 @@ fn refresh_inspector_buffers(s: int) {
         insp_buf_l_angle = "" + ent_light_angle(s);
         insp_buf_l_tilt  = "" + ent_light_tilt(s);
         insp_buf_model  = ent_model(s);
+        insp_buf_tex_albedo = ent_tex_albedo(s);
+        insp_buf_tex_normal = ent_tex_normal(s);
+        insp_buf_tex_rough  = ent_tex_rough(s);
+        insp_buf_tex_metal  = ent_tex_metal(s);
+        insp_buf_tex_height = ent_tex_height(s);
+        insp_buf_tex_ao     = ent_tex_ao(s);
+        insp_buf_mat_rough  = "" + ent_mat_rough(s);
+        insp_buf_mat_metal  = "" + ent_mat_metal(s);
+        insp_buf_mat_bump   = "" + ent_mat_bump(s);
+        insp_buf_mat_tile   = "" + ent_mat_tile(s);
         insp_buf_sound  = ent_sound(s);
         insp_buf_sound_range = "" + ent_sound_range(s);
         insp_buf_emrate = "" + ent_emit_rate(s);
@@ -3524,7 +3954,6 @@ fn insp_button_action(s: int, x: int, yy: int, w: int): int {
 }
 
 fn insp_button_colors(s: int, x: int, yy: int, w: int): int {
-    yy = chrome_section(x, yy, w, "BUTTON");
     yy = insp_button_action(s, x, yy, w);
     let tog_label: string = "Toggle: off";
     if (ent_button_toggle(s) == 1) tog_label = "Toggle: on";
@@ -3546,6 +3975,147 @@ fn insp_button_colors(s: int, x: int, yy: int, w: int): int {
     return yy + 18;
 }
 
+fn insp_style_num(s: int, x: int, yy: int, w: int, label: string, field_id: string, cur: int, which: int): int {
+    chrome_field_label(x, yy, label);
+    let shown: string = "Auto";
+    if (cur >= 0) shown = "" + cur;
+    let box_w: int = w - 72;
+    let next: string = ui_field(field_id, rect(x, yy + 16, box_w, 24), shown);
+    if (next != shown) {
+        undo_save_modify(s);
+        let nv: int = -1;
+        if (next != "" && next != "Auto" && next != "auto") nv = parse_int_or(next, cur);
+        if (which == 0) ent_set_ui_radius(s, nv);
+        else ent_set_ui_border(s, nv);
+    }
+    if (ui_button(rect(x + w - 64, yy + 16, 64, 24), "Auto") == 1 && cur >= 0) {
+        undo_save_modify(s);
+        if (which == 0) ent_set_ui_radius(s, -1);
+        else ent_set_ui_border(s, -1);
+    }
+    return yy + 48;
+}
+
+fn insp_ui_style(s: int, x: int, yy: int, w: int): int {
+    let align: int = ent_ui_align(s);
+    let ha: int = align % 3;
+    let va: int = align / 3;
+    let bw: int = (w - 16) / 3;
+    let k0: string = "secondary";
+    let k1: string = "secondary";
+    let k2: string = "secondary";
+    if (ui_ent_owns_caption(s) == 0) {
+    if (ha == 0) k0 = "primary";
+    if (ha == 1) k1 = "primary";
+    if (ha == 2) k2 = "primary";
+    chrome_field_label(x, yy, "Align");
+    yy = yy + 16;
+    if (ui_button_kind(rect(x, yy, bw, 24), "Left", k0) == 1 && ha != 0) {
+        undo_save_modify(s);
+        ent_set_ui_align(s, va * 3);
+    }
+    if (ui_button_kind(rect(x + bw + 8, yy, bw, 24), "Center", k1) == 1 && ha != 1) {
+        undo_save_modify(s);
+        ent_set_ui_align(s, 1 + va * 3);
+    }
+    if (ui_button_kind(rect(x + (bw + 8) * 2, yy, bw, 24), "Right", k2) == 1 && ha != 2) {
+        undo_save_modify(s);
+        ent_set_ui_align(s, 2 + va * 3);
+    }
+    yy = yy + 30;
+    k0 = "secondary";
+    k1 = "secondary";
+    k2 = "secondary";
+    if (va == 0) k0 = "primary";
+    if (va == 1) k1 = "primary";
+    if (va == 2) k2 = "primary";
+    if (ui_button_kind(rect(x, yy, bw, 24), "Top", k0) == 1 && va != 0) {
+        undo_save_modify(s);
+        ent_set_ui_align(s, ha);
+    }
+    if (ui_button_kind(rect(x + bw + 8, yy, bw, 24), "Middle", k1) == 1 && va != 1) {
+        undo_save_modify(s);
+        ent_set_ui_align(s, ha + 3);
+    }
+    if (ui_button_kind(rect(x + (bw + 8) * 2, yy, bw, 24), "Bottom", k2) == 1 && va != 2) {
+        undo_save_modify(s);
+        ent_set_ui_align(s, ha + 6);
+    }
+    yy = yy + 32;
+    }
+
+    let kind: string = ent_kind(s);
+    let boxy: int = 1;
+    if (kind == "label" || kind == "ui_label") boxy = 0;
+    if (kind == "checkbox" || kind == "ui_checkbox") boxy = 0;
+    if (kind == "toggle" || kind == "ui_toggle") boxy = 0;
+    if (kind == "slider" || kind == "ui_slider") boxy = 0;
+    if (boxy == 1) {
+        yy = insp_style_num(s, x, yy, w, "Radius", "insp_rad", ent_ui_radius(s), 0);
+        yy = insp_style_num(s, x, yy, w, "Border", "insp_bdr", ent_ui_border(s), 1);
+        let sh: int = ent_ui_shadow(s);
+        k0 = "secondary";
+        k1 = "secondary";
+        k2 = "secondary";
+        if (sh == 0) k0 = "primary";
+        if (sh == 1) k1 = "primary";
+        if (sh == 2) k2 = "primary";
+        chrome_field_label(x, yy, "Shadow");
+        yy = yy + 16;
+        if (ui_button_kind(rect(x, yy, bw, 24), "Auto", k0) == 1 && sh != 0) {
+            undo_save_modify(s);
+            ent_set_ui_shadow(s, 0);
+        }
+        if (ui_button_kind(rect(x + bw + 8, yy, bw, 24), "Off", k1) == 1 && sh != 1) {
+            undo_save_modify(s);
+            ent_set_ui_shadow(s, 1);
+        }
+        if (ui_button_kind(rect(x + (bw + 8) * 2, yy, bw, 24), "On", k2) == 1 && sh != 2) {
+            undo_save_modify(s);
+            ent_set_ui_shadow(s, 2);
+        }
+        yy = yy + 32;
+    }
+
+    if (kind != "label" && kind != "ui_label") {
+        chrome_field_label(x, yy, "Text color");
+        let custom: int = ent_ui_text(s);
+        let cr: int = 240;
+        let cg: int = 240;
+        let cb: int = 240;
+        if (custom >= 0) {
+            cr = ui_text_chan(s, 0);
+            cg = ui_text_chan(s, 1);
+            cb = ui_text_chan(s, 2);
+        }
+        if (ui_button(rect(x + w - 64, yy - 2, 64, 22), "Auto") == 1 && custom >= 0) {
+            undo_save_modify(s);
+            ent_set_ui_text(s, -1);
+        }
+        yy = yy + 18;
+        th_fill(rect(x, yy, 22, 22), 5, rgb(cr, cg, cb));
+        let fw: int = (w - 36) / 3;
+        let rs: string = ui_field("insp_tr", rect(x + 30, yy, fw - 4, 22), "" + cr);
+        let gs: string = ui_field("insp_tg", rect(x + 30 + fw, yy, fw - 4, 22), "" + cg);
+        let bs: string = ui_field("insp_tb", rect(x + 30 + fw * 2, yy, w - 30 - fw * 2, 22), "" + cb);
+        let nr: int = parse_int_or(rs, cr);
+        let ng: int = parse_int_or(gs, cg);
+        let nb: int = parse_int_or(bs, cb);
+        if (nr < 0) nr = 0;
+        if (ng < 0) ng = 0;
+        if (nb < 0) nb = 0;
+        if (nr > 255) nr = 255;
+        if (ng > 255) ng = 255;
+        if (nb > 255) nb = 255;
+        if (nr != cr || ng != cg || nb != cb) {
+            undo_save_modify(s);
+            ent_set_ui_text(s, ui_pack_text(nr, ng, nb));
+        }
+        yy = yy + 30;
+    }
+    return yy;
+}
+
 fn insp_ui_widget(s: int, x: int, yy: int, w: int): int {
     let check: int = ui_ent_is_check(s);
     let tog: int = ui_ent_is_toggle(s);
@@ -3553,7 +4123,6 @@ fn insp_ui_widget(s: int, x: int, yy: int, w: int): int {
     let bar: int = ui_ent_is_bar(s);
     let field: int = ui_ent_is_field(s);
     if (check == 0 && tog == 0 && slider == 0 && bar == 0 && field == 0) return yy;
-    yy = chrome_section(x, yy, w, "CONTROL");
     if (check == 1 || tog == 1) {
         let lab: string = "Checked: off";
         if (ent_button_toggled(s) == 1) lab = "Checked: on";
@@ -3636,8 +4205,144 @@ fn pick_commit_chan(slot: int, id: string, box: Rect, cur: int): int {
     return nv;
 }
 
+fn mat_field_store(kind: string, r: Rect) {
+    if (kind == "albedo") { mat_field_albedo_x = r.x; mat_field_albedo_y = r.y; mat_field_albedo_w = r.w; mat_field_albedo_h = r.h; }
+    else if (kind == "normal") { mat_field_normal_x = r.x; mat_field_normal_y = r.y; mat_field_normal_w = r.w; mat_field_normal_h = r.h; }
+    else if (kind == "rough") { mat_field_rough_x = r.x; mat_field_rough_y = r.y; mat_field_rough_w = r.w; mat_field_rough_h = r.h; }
+    else if (kind == "metal") { mat_field_metal_x = r.x; mat_field_metal_y = r.y; mat_field_metal_w = r.w; mat_field_metal_h = r.h; }
+    else if (kind == "height") { mat_field_height_x = r.x; mat_field_height_y = r.y; mat_field_height_w = r.w; mat_field_height_h = r.h; }
+    else if (kind == "ao") { mat_field_ao_x = r.x; mat_field_ao_y = r.y; mat_field_ao_w = r.w; mat_field_ao_h = r.h; }
+}
+
+fn mat_field_clear_all() {
+    mat_field_albedo_w = 0; mat_field_normal_w = 0; mat_field_rough_w = 0;
+    mat_field_metal_w = 0; mat_field_height_w = 0; mat_field_ao_w = 0;
+}
+
+fn mat_drop_highlight(r: Rect) {
+    if (drag_asset_path.len() == 0) return;
+    if (path_is_image(drag_asset_path) == 0 && path_is_image(drag_asset_rel) == 0) return;
+    let hr: Rect = rect(r.x - 3, r.y - 3, r.w + 6, r.h + 6);
+    let mx: int = eng_mouse_x();
+    let my: int = eng_mouse_y();
+    if (point_in_rect(mx, my, r)) th_fill(hr, TH_RADIUS + 3, col_accent_dim());
+    th_ring(hr, TH_RADIUS + 3, 2, col_accent());
+}
+
+fn insp_mat_row(s: int, x: int, yy: int, w: int, label: string, edit_id: string, kind: string, buf: string): int {
+    chrome_field_label(x, yy, label);
+    let fr: Rect = rect(x, yy + 16, w - 90, 24);
+    mat_field_store(kind, fr);
+    mat_drop_highlight(fr);
+    let next: string = ui_field(edit_id, fr, buf);
+    if (next != buf) {
+        undo_save_modify(s);
+        if (kind == "albedo") { ent_set_tex_albedo(s, next); insp_buf_tex_albedo = ent_tex_albedo(s); }
+        else if (kind == "normal") { ent_set_tex_normal(s, next); insp_buf_tex_normal = ent_tex_normal(s); }
+        else if (kind == "rough") { ent_set_tex_rough(s, next); insp_buf_tex_rough = ent_tex_rough(s); }
+        else if (kind == "metal") { ent_set_tex_metal(s, next); insp_buf_tex_metal = ent_tex_metal(s); }
+        else if (kind == "height") { ent_set_tex_height(s, next); insp_buf_tex_height = ent_tex_height(s); }
+        else if (kind == "ao") { ent_set_tex_ao(s, next); insp_buf_tex_ao = ent_tex_ao(s); }
+    }
+    if (ui_button(rect(x + w - 84, yy + 16, 84, 24), "Browse...") == 1) {
+        let initial: string = "";
+        if (proj_loaded() == 1) initial = proj_path_join(proj_root(), "assets");
+        let chosen: string = eng_open_file_dialog("Choose " + label, "Images|*.png;*.jpg;*.jpeg;*.bmp;*.tga|All files|*.*", initial);
+        if (chosen.len() > 0) {
+            undo_save_modify(s);
+            if (kind == "albedo") { ent_set_tex_albedo(s, chosen); insp_buf_tex_albedo = ent_tex_albedo(s); }
+            else if (kind == "normal") { ent_set_tex_normal(s, chosen); insp_buf_tex_normal = ent_tex_normal(s); }
+            else if (kind == "rough") { ent_set_tex_rough(s, chosen); insp_buf_tex_rough = ent_tex_rough(s); }
+            else if (kind == "metal") { ent_set_tex_metal(s, chosen); insp_buf_tex_metal = ent_tex_metal(s); }
+            else if (kind == "height") { ent_set_tex_height(s, chosen); insp_buf_tex_height = ent_tex_height(s); }
+            else if (kind == "ao") { ent_set_tex_ao(s, chosen); insp_buf_tex_ao = ent_tex_ao(s); }
+        }
+    }
+    yy = yy + 44;
+    let cur: string = buf;
+    if (kind == "albedo") cur = insp_buf_tex_albedo;
+    else if (kind == "normal") cur = insp_buf_tex_normal;
+    else if (kind == "rough") cur = insp_buf_tex_rough;
+    else if (kind == "metal") cur = insp_buf_tex_metal;
+    else if (kind == "height") cur = insp_buf_tex_height;
+    else if (kind == "ao") cur = insp_buf_tex_ao;
+    if (cur.len() > 0) {
+        if (ui_button(rect(x, yy, 90, 22), "Clear") == 1) {
+            undo_save_modify(s);
+            if (kind == "albedo") { ent_set_tex_albedo(s, ""); insp_buf_tex_albedo = ""; }
+            else if (kind == "normal") { ent_set_tex_normal(s, ""); insp_buf_tex_normal = ""; }
+            else if (kind == "rough") { ent_set_tex_rough(s, ""); insp_buf_tex_rough = ""; }
+            else if (kind == "metal") { ent_set_tex_metal(s, ""); insp_buf_tex_metal = ""; }
+            else if (kind == "height") { ent_set_tex_height(s, ""); insp_buf_tex_height = ""; }
+            else if (kind == "ao") { ent_set_tex_ao(s, ""); insp_buf_tex_ao = ""; }
+        }
+        yy = yy + 28;
+    }
+    return yy;
+}
+
+fn insp_materials(s: int, x: int, yy: int, w: int): int {
+    th_font(11);
+    draw_text(x, yy, "PBR maps for Filament / high-quality 3D. Empty uses the model file.", col_text_dim());
+    th_font(14);
+    yy = yy + 18;
+    if (edit_target != "insp_tex_albedo" && insp_buf_tex_albedo != ent_tex_albedo(s)) insp_buf_tex_albedo = ent_tex_albedo(s);
+    if (edit_target != "insp_tex_normal" && insp_buf_tex_normal != ent_tex_normal(s)) insp_buf_tex_normal = ent_tex_normal(s);
+    if (edit_target != "insp_tex_rough" && insp_buf_tex_rough != ent_tex_rough(s)) insp_buf_tex_rough = ent_tex_rough(s);
+    if (edit_target != "insp_tex_metal" && insp_buf_tex_metal != ent_tex_metal(s)) insp_buf_tex_metal = ent_tex_metal(s);
+    if (edit_target != "insp_tex_height" && insp_buf_tex_height != ent_tex_height(s)) insp_buf_tex_height = ent_tex_height(s);
+    if (edit_target != "insp_tex_ao" && insp_buf_tex_ao != ent_tex_ao(s)) insp_buf_tex_ao = ent_tex_ao(s);
+    if (edit_target != "insp_mat_rough" && insp_buf_mat_rough != ("" + ent_mat_rough(s))) insp_buf_mat_rough = "" + ent_mat_rough(s);
+    if (edit_target != "insp_mat_metal" && insp_buf_mat_metal != ("" + ent_mat_metal(s))) insp_buf_mat_metal = "" + ent_mat_metal(s);
+    if (edit_target != "insp_mat_bump" && insp_buf_mat_bump != ("" + ent_mat_bump(s))) insp_buf_mat_bump = "" + ent_mat_bump(s);
+    if (edit_target != "insp_mat_tile" && insp_buf_mat_tile != ("" + ent_mat_tile(s))) insp_buf_mat_tile = "" + ent_mat_tile(s);
+
+    let half: int = (w - 8) / 2;
+    chrome_field_label(x, yy, "Roughness (0-100)");
+    chrome_field_label(x + half + 8, yy, "Metallic (0-100)");
+    th_font(11);
+    draw_text(x, yy + 14, "Used when that map slot is empty.", col_text_dim());
+    th_font(14);
+    let rb: string = ui_field("insp_mat_rough", rect(x, yy + 30, half, 22), insp_buf_mat_rough);
+    let mb: string = ui_field("insp_mat_metal", rect(x + half + 8, yy + 30, half, 22), insp_buf_mat_metal);
+    if (rb != insp_buf_mat_rough) {
+        undo_save_modify(s);
+        ent_set_mat_rough(s, parse_int_or(rb, ent_mat_rough(s)));
+        insp_buf_mat_rough = "" + ent_mat_rough(s);
+    }
+    if (mb != insp_buf_mat_metal) {
+        undo_save_modify(s);
+        ent_set_mat_metal(s, parse_int_or(mb, ent_mat_metal(s)));
+        insp_buf_mat_metal = "" + ent_mat_metal(s);
+    }
+    yy = yy + 60;
+    chrome_field_label(x, yy, "Bump strength (0-200)");
+    chrome_field_label(x + half + 8, yy, "Tiling (1-32)");
+    let bb: string = ui_field("insp_mat_bump", rect(x, yy + 16, half, 22), insp_buf_mat_bump);
+    let tb: string = ui_field("insp_mat_tile", rect(x + half + 8, yy + 16, half, 22), insp_buf_mat_tile);
+    if (bb != insp_buf_mat_bump) {
+        undo_save_modify(s);
+        ent_set_mat_bump(s, parse_int_or(bb, ent_mat_bump(s)));
+        insp_buf_mat_bump = "" + ent_mat_bump(s);
+    }
+    if (tb != insp_buf_mat_tile) {
+        undo_save_modify(s);
+        ent_set_mat_tile(s, parse_int_or(tb, ent_mat_tile(s)));
+        insp_buf_mat_tile = "" + ent_mat_tile(s);
+    }
+    yy = yy + 46;
+
+    yy = insp_mat_row(s, x, yy, w, "Albedo / Base Color", "insp_tex_albedo", "albedo", insp_buf_tex_albedo);
+    yy = insp_mat_row(s, x, yy, w, "Normal Map", "insp_tex_normal", "normal", insp_buf_tex_normal);
+    yy = insp_mat_row(s, x, yy, w, "Roughness Map", "insp_tex_rough", "rough", insp_buf_tex_rough);
+    yy = insp_mat_row(s, x, yy, w, "Metallic Map", "insp_tex_metal", "metal", insp_buf_tex_metal);
+    yy = insp_mat_row(s, x, yy, w, "Height / Displacement", "insp_tex_height", "height", insp_buf_tex_height);
+    yy = insp_mat_row(s, x, yy, w, "Ambient Occlusion", "insp_tex_ao", "ao", insp_buf_tex_ao);
+    return yy;
+}
+
 fn insp_albedo(s: int, x: int, yy: int, w: int): int {
-    chrome_field_label(x, yy, "Albedo");
+    chrome_field_label(x, yy, "Color");
     yy = yy + 16;
     if (w < 8) return yy;
 
@@ -3774,12 +4479,17 @@ fn inspector_draw_one(s: int) {
     let r: Rect = right_rect();
     let x: int = r.x + 12;
     let w: int = r.w - 24;
+    let half: int = (w - 8) / 2;
     chrome_header_bar(rect(r.x, r.y, r.w, 24), "Inspector");
     eng_set_clip(r.x, r.y + 24, r.w, r.h - 24);
     let top: int = r.y + 32 - insp_scroll;
     let yy: int = top;
+    last_sprite_field_w = 0;
+    last_script_field_w = 0;
+    mat_field_clear_all();
 
-    yy = chrome_section(x, yy, w, "ENTITY");
+    yy = insp_module(x, yy, w, "ent", "Entity");
+    if (insp_mod_open == 1) {
     eng_set_font_size(11);
     draw_text(x, yy, "id " + ent_id(s) + "   slot " + s + "   " + ent_kind(s), col_text_dim());
     eng_set_font_size(14);
@@ -3846,8 +4556,11 @@ fn inspector_draw_one(s: int) {
         yy = yy + 36;
     }
 
-    yy = chrome_section(x, yy, w, "TRANSFORM");
-    let half: int = (w - 8) / 2;
+    yy = yy + 8;
+    }
+
+    yy = insp_module(x, yy, w, "xf", "Transform");
+    if (insp_mod_open == 1) {
     chrome_field_label(x, yy, "X");
     chrome_field_label(x + half + 8, yy, "Y");
     let xb: string = ui_field("insp_x", rect(x, yy + 16, half, 24), insp_buf_x);
@@ -3874,6 +4587,23 @@ fn inspector_draw_one(s: int) {
     if (hb != insp_buf_h) { undo_save_modify(s); ent_set_h(s, parse_int_or(hb, ent_h(s))); insp_buf_h = hb; }
     yy = yy + 48;
 
+    if (scene_render3d() == 0 && ent_is_3d_kind(s) == 0) {
+        chrome_field_label(x, yy, "Depth");
+        if (edit_target != "insp_z" && insp_buf_z != "" + ent_z(s)) insp_buf_z = "" + ent_z(s);
+        let zb: string = ui_field("insp_z", rect(x, yy + 16, half, 24), insp_buf_z);
+        if (zb != insp_buf_z) {
+            if (ent_child_count(s) > 0) undo_save_modify_tree(s);
+            else undo_save_modify(s);
+            ent_set_z(s, parse_int_or(zb, ent_z(s)));
+            insp_buf_z = zb;
+        }
+        yy = yy + 48;
+        th_font(11);
+        draw_text(x, yy - 8, "Higher draws in front.", col_text_dim());
+        th_font(14);
+        yy = yy + 10;
+    }
+
     if (scene_render3d() == 1 || ent_is_3d_kind(s) == 1) {
         let third: int = (w - 16) / 3;
         chrome_field_label(x, yy, "Rotation");
@@ -3892,9 +4622,13 @@ fn inspector_draw_one(s: int) {
     }
     yy = yy + 48;
 
+    yy = yy + 8;
+    }
+
     /* 3D: shown for 3D scenes and 3D shapes (see engine/shape3d.nxa) */
     if (scene_render3d() == 1 || ent_is_3d_kind(s) == 1) {
-        yy = chrome_section(x, yy, w, "3D");
+        yy = insp_module(x, yy, w, "d3", "3D");
+        if (insp_mod_open == 1) {
         chrome_field_label(x, yy, "Z (into screen)");
         chrome_field_label(x + half + 8, yy, "Depth (0 = auto)");
         let zb: string = ui_field("insp_z", rect(x, yy + 16, half, 24), insp_buf_z);
@@ -3930,11 +4664,14 @@ fn inspector_draw_one(s: int) {
             }
             yy = yy + 50;
         }
+        yy = yy + 8;
+        }
     }
 
     if (ent_is_light(s) == 1) {
         let lk: string = ent_kind(s);
-        yy = chrome_section(x, yy, w, "LIGHT");
+        yy = insp_module(x, yy, w, "light", "Light");
+        if (insp_mod_open == 1) {
         chrome_field_label(x, yy, "Intensity (%)");
         let lib: string = ui_field("insp_l_int", rect(x, yy + 16, half, 24), insp_buf_l_int);
         if (lib != insp_buf_l_int) { undo_save_modify(s); ent_set_light_intensity(s, parse_int_or(lib, ent_light_intensity(s))); insp_buf_l_int = lib; }
@@ -3963,9 +4700,12 @@ fn inspector_draw_one(s: int) {
         draw_text(x, yy - 4, "Color (below) is the light's color.", col_text_dim());
         th_font(14);
         yy = yy + 18;
+        yy = yy + 8;
+        }
     }
 
-    yy = chrome_section(x, yy, w, "CAMERA");
+    yy = insp_module(x, yy, w, "cam", "Camera");
+    if (insp_mod_open == 1) {
     if (ent_camera(s) == 1) {
         th_chip(rect(x, yy + 2, 110, 20), "MAIN CAMERA", col_accent());
         th_font(11);
@@ -3982,12 +4722,27 @@ fn inspector_draw_one(s: int) {
         }
     }
     yy = yy + 36;
+    yy = yy + 8;
+    }
 
-    yy = chrome_section(x, yy, w, "APPEARANCE");
+    yy = insp_module(x, yy, w, "look", "Appearance");
+    if (insp_mod_open == 1) {
+    if (ent_kind(s) == "label" || (ent_is_ui(s) == 1 && ent_kind(s) != "sprite2d")) {
+        chrome_field_label(x, yy, "Text size");
+        if (edit_target != "insp_font") insp_buf_font = "" + ent_font_px(s);
+        let tsz: string = ui_field("insp_font", rect(x, yy + 16, (w - 8) / 2, 24), insp_buf_font);
+        if (tsz != insp_buf_font) {
+            undo_save_modify(s);
+            let sz: int = parse_int_or(tsz, ent_font_px(s));
+            if (sz < 6) sz = 6;
+            if (sz > 512) sz = 512;
+            ent_set_font_px(s, sz);
+            insp_buf_font = "" + ent_font_px(s);
+        }
+        yy = yy + 48;
+    }
     yy = insp_albedo(s, x, yy, w);
-
-    if (ui_ent_is_button(s) == 1) yy = insp_button_colors(s, x, yy, w);
-    else yy = insp_ui_widget(s, x, yy, w);
+    if (ent_is_ui(s) == 1 && ent_kind(s) != "sprite2d") yy = insp_ui_style(s, x, yy, w);
 
     chrome_field_label(x, yy, "Label / text");
     let tb: string = ui_field("insp_text", rect(x, yy + 16, w, 24), insp_buf_text);
@@ -4032,6 +4787,26 @@ fn inspector_draw_one(s: int) {
     }
     yy = yy + 50;
 
+    draw_text(x, yy + 6, "Scale", col_text_main());
+    let pix: int = ent_pixel(s);
+    let pk0: string = "secondary";
+    let pk1: string = "secondary";
+    if (pix == 1) pk1 = "primary";
+    else pk0 = "primary";
+    if (ui_button_kind(rect(x + 160, yy, 70, 28), "Smooth", pk0) == 1 && pix == 1) {
+        undo_save_modify(s);
+        ent_set_pixel(s, 0);
+    }
+    if (ui_button_kind(rect(x + 238, yy, 70, 28), "Pixel", pk1) == 1 && pix == 0) {
+        undo_save_modify(s);
+        ent_set_pixel(s, 1);
+    }
+    yy = yy + 32;
+    th_font(11);
+    draw_text(x, yy, "Pixel keeps hard edges when this picture is scaled up.", col_text_dim());
+    th_font(14);
+    yy = yy + 20;
+
     /* preview thumbnail of the assigned sprite */
     if (insp_buf_sprite.len() > 0) {
         let prev: Rect = rect(x, yy, 96, 96);
@@ -4063,8 +4838,40 @@ fn inspector_draw_one(s: int) {
         }
         yy = yy + 110;
     }
+    yy = yy + 8;
+    }
 
-    yy = chrome_section(x, yy, w, "SOUND");
+    if (ui_ent_is_button(s) == 1) {
+        yy = insp_module(x, yy, w, "btn", "Button");
+        if (insp_mod_open == 1) {
+            yy = insp_button_colors(s, x, yy, w);
+            yy = yy + 8;
+        }
+    } else {
+        let show_ctrl: int = 0;
+        if (ui_ent_is_check(s) == 1) show_ctrl = 1;
+        if (ui_ent_is_toggle(s) == 1) show_ctrl = 1;
+        if (ui_ent_is_slider(s) == 1) show_ctrl = 1;
+        if (ui_ent_is_bar(s) == 1) show_ctrl = 1;
+        if (ui_ent_is_field(s) == 1) show_ctrl = 1;
+        if (show_ctrl == 1) {
+            yy = insp_module(x, yy, w, "ctrl", "Control");
+            if (insp_mod_open == 1) {
+                yy = insp_ui_widget(s, x, yy, w);
+                yy = yy + 8;
+            }
+        }
+    }
+    if (ent_is_3d_kind(s) == 1) {
+        yy = insp_module(x, yy, w, "mat", "Materials");
+        if (insp_mod_open == 1) {
+            yy = insp_materials(s, x, yy, w);
+            yy = yy + 8;
+        }
+    }
+
+    yy = insp_module(x, yy, w, "snd", "Sound");
+    if (insp_mod_open == 1) {
     if (edit_target != "insp_sound" && insp_buf_sound != ent_sound(s)) insp_buf_sound = ent_sound(s);
     chrome_field_label(x, yy, "Sound");
     let sndb: string = ui_field("insp_sound", rect(x, yy + 16, w - 90, 24), insp_buf_sound);
@@ -4112,9 +4919,12 @@ fn inspector_draw_one(s: int) {
     draw_text(x, yy - 4, "Follows this object. Quieter with distance, and it shifts left or right.", col_text_dim());
     th_font(14);
     yy = yy + 18;
+    yy = yy + 8;
+    }
 
     if (ent_kind(s) == "emitter") {
-        yy = chrome_section(x, yy, w, "PARTICLES");
+        yy = insp_module(x, yy, w, "part", "Particles");
+        if (insp_mod_open == 1) {
         th_font(11);
         draw_text(x, yy, "The picture is the Sprite, tinted by the color above.", col_text_dim());
         th_font(14);
@@ -4189,9 +4999,12 @@ fn inspector_draw_one(s: int) {
         draw_text(x, yy, "A script can also call emit_burst.", col_text_dim());
         th_font(14);
         yy = yy + 18;
+        yy = yy + 8;
+        }
     }
 
-    yy = chrome_section(x, yy, w, "SCRIPT");
+    yy = insp_module(x, yy, w, "scr", "Script");
+    if (insp_mod_open == 1) {
     if (edit_target != "insp_script" && insp_buf_script != ent_script(s)) insp_buf_script = ent_script(s);
     chrome_field_label(x, yy, "Script (.nxa)");
     let field_w: int = w;
@@ -4227,8 +5040,11 @@ fn inspector_draw_one(s: int) {
     }
     yy = yy + 50;
     yy = inspector_draw_public(s, x, yy, w);
+    yy = yy + 8;
+    }
 
-    yy = chrome_section(x, yy, w, "RIGIDBODY");
+    yy = insp_module(x, yy, w, "body", "Physics");
+    if (insp_mod_open == 1) {
     if (ent_kind(s) == "model") {
         let hb: int = ent_hitbox(s);
         if (hb == 0) {
@@ -4338,8 +5154,11 @@ fn inspector_draw_one(s: int) {
         }
         yy = yy + 32;
     }
+    yy = yy + 8;
+    }
 
-    yy = chrome_section(x, yy, w, "ACTIONS");
+    yy = insp_module(x, yy, w, "act", "Actions");
+    if (insp_mod_open == 1) {
     if (ui_button(rect(x, yy, w, 26), "Save as Prefab") == 1) {
         let pname: string = ent_name(s);
         if (pname.len() == 0) pname = "prefab";
@@ -4354,6 +5173,8 @@ fn inspector_draw_one(s: int) {
         ent_destroy(s);
     }
     yy = yy + 40;
+    yy = yy + 8;
+    }
 
     eng_clear_clip();
 
@@ -4684,6 +5505,14 @@ fn snap_coord(v: int): int {
     return 0 - (((0 - v) + half) / g) * g;
 }
 
+/* Where the drag root should sit. delta is the total move since the grab, in
+   the same units as from. A zero delta leaves that axis where the drag began,
+   so a sideways drag does not yank the other axis onto a line. */
+fn drag_snap_target(from: int, delta: int): int {
+    if (delta == 0) return from;
+    return snap_coord(from + delta);
+}
+
 /* 1 when a selected ancestor will carry this slot (parent move propagates). */
 fn sel_is_carried(slot: int): int {
     let p: int = ent_parent(slot);
@@ -4692,6 +5521,16 @@ fn sel_is_carried(slot: int): int {
         p = ent_parent(p);
     }
     return 0;
+}
+
+/* First selected UI root. The world root below skips these on purpose. */
+fn sel_ui_move_root(): int {
+    let s: int = sel_first();
+    while (s >= 0) {
+        if (ent_is_ui(s) == 1 && sel_is_carried(s) == 0) return s;
+        s = sel_iter_next(s + 1);
+    }
+    return -1;
 }
 
 /* First selected world root (not carried by another selected parent; skips UI). */
@@ -4751,10 +5590,16 @@ fn viewport_draw_grid() {
     let v: Rect = viewport_rect();
     eng_set_clip(v.x, v.y, v.w, v.h);
     draw_fill_rect(v, col_viewport());
-    if (viewport_mode == "play") game_view_draw_letterbox();
+    if (viewport_mode == "play") {
+        game_view_draw_letterbox();
+        let gv: Rect = game_view_rect();
+        eng_set_clip(gv.x, gv.y, gv.w, gv.h);
+        eng_fill_rect(gv.x, gv.y, gv.w, gv.h, scene_clear_r(), scene_clear_g(), scene_clear_b());
+        eng_clear_clip();
+        return;
+    }
 
     let clip: Rect = v;
-    if (viewport_mode == "play") clip = game_view_rect();
     eng_set_clip(clip.x, clip.y, clip.w, clip.h);
     if (pref_int("show_grid", 1) == 0) {
         eng_clear_clip();
@@ -4800,7 +5645,6 @@ fn viewport_draw_grid() {
 fn ent_is_empty(slot: int): int {
     if (slot < 0) return 0;
     if (ent_kind(slot) == "empty") return 1;
-    if (ent_kind(slot) == "rect" && ent_name(slot) == "empty") return 1;
     return 0;
 }
 
@@ -4823,7 +5667,14 @@ fn ent_is_camera_ent(slot: int): int {
 
 fn play_snap_to_camera() {
     let cam_slot: int = ent_find_main_camera();
-    if (cam_slot < 0) return;
+    /* No camera: the desktop player shows the origin. Play must match that,
+       not whatever pan was left on the scene tab. */
+    if (cam_slot < 0) {
+        cam_x = 0.0;
+        cam_y = 0.0;
+        cam_zoom = 1.0;
+        return;
+    }
     let v: Rect = game_view_rect();
     let ex: int = ent_x(cam_slot);
     let ey: int = ent_y(cam_slot);
@@ -4918,24 +5769,34 @@ fn empty_gizmo_screen(slot: int): Rect {
 }
 
 fn viewport_hit_at(mx: int, my: int): int {
-    let s: int = ent_max() - 1;
+    let best: int = -1;
+    let best_z: int = 0;
+    let s: int = ent_iter_next(0);
     while (s >= 0) {
-        if (ent_active(s) == 1 && ent_shown(s) == 1) {
+        if (ent_active(s) == 1 && ent_shown(s) == 1 && ent_is_ui(s) == 0) {
+            let hit: int = 0;
             if (ent_is_empty(s) == 1) {
                 let gr: Rect = empty_gizmo_screen(s);
-                if (point_in_rect(mx, my, gr)) return s;
+                if (point_in_rect(mx, my, gr)) hit = 1;
             } else {
                 let wxf: float = screen_to_world_x(mx);
                 let wyf: float = screen_to_world_y(my);
                 let wxi: int = wxf;
                 let wyi: int = wyf;
                 if (wxi >= ent_x(s) && wyi >= ent_y(s) &&
-                    wxi < ent_x(s) + ent_w(s) && wyi < ent_y(s) + ent_h(s)) return s;
+                    wxi < ent_x(s) + ent_w(s) && wyi < ent_y(s) + ent_h(s)) hit = 1;
+            }
+            if (hit == 1) {
+                let z: int = ent_z(s);
+                if (best < 0 || z > best_z || (z == best_z && s > best)) {
+                    best = s;
+                    best_z = z;
+                }
             }
         }
-        s = s - 1;
+        s = ent_iter_next(s + 1);
     }
-    return -1;
+    return best;
 }
 
 fn dist_sq(ax: int, ay: int, bx: int, by: int): int {
@@ -5293,8 +6154,8 @@ fn scale_apply_uniform(mx: int, my: int) {
     if (scale_axis == 1 || scale_axis == 2) factor = scale_factor_axis(mx, my);
     let nw_f: float = scale_start_w * factor;
     let nh_f: float = scale_start_h * factor;
-    if (scale_axis == 1) nh_f = scale_start_h;
-    if (scale_axis == 2) nw_f = scale_start_w;
+    if (ctrl_held() == false && scale_axis == 1) nh_f = scale_start_h;
+    if (ctrl_held() == false && scale_axis == 2) nw_f = scale_start_w;
     let nw: int = nw_f;
     let nh: int = nh_f;
     if (nw < 4) nw = 4;
@@ -5333,7 +6194,7 @@ fn tool_help_text(): string {
     if (edit_tool == "hand") return "Drag to pan the view. Hold Space and drag, or use the middle mouse button, from any tool.";
     if (edit_tool == "move") return "Drag the arrows, or the object. L swaps local and world axes.";
     if (edit_tool == "rotate") return "Drag a ring to turn around that axis. L swaps local and world.";
-    if (edit_tool == "scale") return "Drag a handle to scale that axis. L swaps local and world. Meshes only in 3D.";
+    if (edit_tool == "scale") return "Drag a handle to scale that axis. Hold Ctrl to scale both axes together.";
     return "";
 }
 
@@ -5466,7 +6327,7 @@ fn draw_entity_body(slot: int, sx: int, sy: int, sw: int, sh: int) {
     }
     if (kind == "emitter") {
         if (viewport_mode == "play") return;
-        if (ent_sprite_id(slot) != 0) eng_image_blit_scaled_rot_a(ent_sprite_id(slot), sx, sy, sw, sh, rot, ent_a(slot));
+        if (ent_sprite_id(slot) != 0) eng_image_blit_scaled_rot_px(ent_sprite_id(slot), sx, sy, sw, sh, rot, ent_a(slot), ent_pixel(slot));
         else eng_fill_rect_a(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot));
         return;
     }
@@ -5475,27 +6336,30 @@ fn draw_entity_body(slot: int, sx: int, sy: int, sw: int, sh: int) {
     if (kind == "label") {
         let txt: string = ent_text(slot);
         if (txt.len() == 0) txt = ent_name(slot);
-        ui_draw_label(sx, sy, sw, sh, txt, ent_r(slot), ent_g(slot), ent_b(slot), ent_sprite(slot));
+        ui_draw_label(sx, sy, sw, sh, txt, ent_r(slot), ent_g(slot), ent_b(slot), ent_sprite(slot), ent_font_px(slot), ent_font_ox(slot), ent_font_oy(slot), ui_ha(slot), ui_va(slot));
         th_font(14);
     } else if (ent_is_3d_kind(slot) == 1) {
         shape3d_draw_flat(slot, sx, sy, sw, sh);
+    } else if (ent_is_ui(slot) == 1 && kind != "sprite2d") {
+        /* A picture on a panel or button stays inside the widget. It does not
+           replace the widget with a world sprite. */
+        if (rot != 0) eng_fill_rect_rot_a(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot), rot);
+        else          ui_draw_box(slot, sx, sy, sw, sh);
+        let txt: string = ent_text(slot);
+        if (txt.len() > 0 && sw > 10 && sh > 8 && rot == 0 && ui_ent_owns_caption(slot) == 0) {
+            ui_draw_caption(sx, sy, sw, sh, txt, ent_font_px(slot), ent_font_ox(slot), ent_font_oy(slot), ui_text_chan(slot, 0), ui_text_chan(slot, 1), ui_text_chan(slot, 2), ui_ha(slot), ui_va(slot));
+            th_font(14);
+        }
     } else if (ent_sprite_id(slot) != 0) {
-        eng_image_blit_scaled_rot_a(ent_sprite_id(slot), sx, sy, sw, sh, rot, ent_a(slot));
+        eng_image_blit_scaled_rot_px(ent_sprite_id(slot), sx, sy, sw, sh, rot, ent_a(slot), ent_pixel(slot));
     } else {
         if (rot != 0)                 eng_fill_rect_rot_a(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot), rot);
         else if (ent_is_ui(slot) == 1) ui_draw_box(slot, sx, sy, sw, sh);
         else                          eng_fill_rect_a(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot));
         let txt: string = ent_text(slot);
         if (txt.len() > 0 && sw > 10 && sh > 8 && rot == 0 && ui_ent_owns_caption(slot) == 0) {
-            if (scene_render3d() == 1) {
-                let sc: int = ui_px_caption_scale(sw, sh, txt.len());
-                let tw: int = txt.len() * 6 * sc;
-                eng_text_px(sx + (sw - tw) / 2, sy + (sh - 7 * sc) / 2, txt, 240, 240, 240, sc);
-            } else {
-                th_font_mono(ui_rect_text_font_px(sh));
-                draw_text_centered(sx, sy, sw, sh, txt, rgb(240, 240, 240));
-                th_font(14);
-            }
+            ui_draw_caption(sx, sy, sw, sh, txt, ent_font_px(slot), ent_font_ox(slot), ent_font_oy(slot), ui_text_chan(slot, 0), ui_text_chan(slot, 1), ui_text_chan(slot, 2), ui_ha(slot), ui_va(slot));
+            th_font(14);
         } else if (viewport_mode != "play" && ent_is_ui(slot) == 0 && scene_render3d() == 0) {
             let nm: string = ent_name(slot);
             if (nm.len() > 0 && sw > 40 && rot == 0) {
@@ -5512,22 +6376,22 @@ fn viewport_draw_entities() {
     let clip: Rect = v;
     if (viewport_mode == "play") clip = game_view_rect();
     eng_set_clip(clip.x, clip.y, clip.w, clip.h);
-    let i: int = ent_iter_next(0);
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ent_is_empty(i) == 1) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         if (ent_is_ui(i) == 1) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         if (ent_shown(i) == 0) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         if (viewport_mode == "play" && ent_is_camera_ent(i) == 1) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         let sx: int = world_to_screen_x(ent_x(i));
@@ -5547,7 +6411,7 @@ fn viewport_draw_entities() {
             let dot: Rect = rect(er.x + er.w - 8, er.y + 2, 6, 6);
             draw_fill_rect(dot, col_play());
         }
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
     particles_draw();
     eng_clear_clip();
@@ -5563,24 +6427,60 @@ fn sel_inset_screen(slot: int): Rect {
 }
 
 fn resize_handle_hit_rect(inset: Rect, handle: int): Rect {
-    /* generous hit target so corners are easy to grab */
+    /* Corners first, then the rest of each edge. */
     let hit: int = 14;
     if (handle == 0) return rect(inset.x - hit / 2,               inset.y - hit / 2,               hit, hit);
     if (handle == 1) return rect(inset.x + inset.w - hit / 2,     inset.y - hit / 2,               hit, hit);
     if (handle == 2) return rect(inset.x - hit / 2,               inset.y + inset.h - hit / 2,   hit, hit);
-    return rect(inset.x + inset.w - hit / 2, inset.y + inset.h - hit / 2, hit, hit);
+    if (handle == 3) return rect(inset.x + inset.w - hit / 2, inset.y + inset.h - hit / 2, hit, hit);
+    let thick: int = 8;
+    if (handle == 4) {
+        let w: int = inset.w - hit;
+        if (w < 4) return rect(0, 0, 0, 0);
+        return rect(inset.x + hit / 2, inset.y - thick / 2, w, thick);
+    }
+    if (handle == 5) {
+        let h: int = inset.h - hit;
+        if (h < 4) return rect(0, 0, 0, 0);
+        return rect(inset.x + inset.w - thick / 2, inset.y + hit / 2, thick, h);
+    }
+    if (handle == 6) {
+        let w: int = inset.w - hit;
+        if (w < 4) return rect(0, 0, 0, 0);
+        return rect(inset.x + hit / 2, inset.y + inset.h - thick / 2, w, thick);
+    }
+    let h: int = inset.h - hit;
+    if (h < 4) return rect(0, 0, 0, 0);
+    return rect(inset.x - thick / 2, inset.y + hit / 2, thick, h);
+}
+
+fn draw_resize_handles(inset: Rect, col: Color) {
+    let h: int = 8;
+    draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col);
+    draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col);
+    draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col);
+    draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col);
+    draw_fill_rect(rect(inset.x + inset.w / 2 - h / 2,  inset.y - h / 2,                h, h), col);
+    draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h / 2 - h / 2,  h, h), col);
+    draw_fill_rect(rect(inset.x + inset.w / 2 - h / 2,  inset.y + inset.h - h / 2 - 1,  h, h), col);
+    draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h / 2 - h / 2,  h, h), col);
 }
 
 fn resize_handle_at(mx: int, my: int): int {
+    ui_canvas_layout_game_view(game_view_rect());
     let i: int = sel_first();
     while (i >= 0) {
         if (ent_is_empty(i) == 1) {
             i = sel_iter_next(i + 1);
             continue;
         }
+        if (ent_is_ui(i) == 1) {
+            i = sel_iter_next(i + 1);
+            continue;
+        }
         let inset: Rect = sel_inset_screen(i);
         let h: int = 0;
-        while (h < 4) {
+        while (h < 8) {
             let hr: Rect = resize_handle_hit_rect(inset, h);
             if (point_in_rect(mx, my, hr)) {
                 resize_slot = i;
@@ -5602,28 +6502,114 @@ fn resize_begin(slot: int, handle: int) {
     let ay: int = ent_y(slot);
     let aw: int = ent_w(slot);
     let ah: int = ent_h(slot);
-    if (handle == 0) {
-        resize_anchor_wx = ax + aw;
-        resize_anchor_wy = ay + ah;
-    } else if (handle == 1) {
-        resize_anchor_wx = ax;
-        resize_anchor_wy = ay + ah;
-    } else if (handle == 2) {
-        resize_anchor_wx = ax + aw;
-        resize_anchor_wy = ay;
-    } else {
-        resize_anchor_wx = ax;
-        resize_anchor_wy = ay;
+    resize_orig_x = ax;
+    resize_orig_y = ay;
+    resize_orig_w = aw;
+    resize_orig_h = ah;
+    if (handle == 0 || handle == 7) resize_anchor_wx = ax + aw;
+    else resize_anchor_wx = ax;
+    if (handle == 0 || handle == 1 || handle == 4) resize_anchor_wy = ay + ah;
+    else resize_anchor_wy = ay;
+    if (ent_is_ui(slot) == 1) {
+        ui_canvas_layout_game_view(game_view_rect());
+        resize_fix_l = ui_to_screen_x(ax);
+        resize_fix_t = ui_to_screen_y(ay);
+        resize_fix_r = resize_fix_l + ui_len_w(aw);
+        resize_fix_b = resize_fix_t + ui_len_h(ah);
     }
+}
+
+/* One scale for both axes. The grabbed side stays under the cursor. */
+fn resize_linear_factor(dx: float, dy: float, ow: float, oh: float, edge: int): float {
+    let s: float = 1.0;
+    if (ow < 1.0) ow = 1.0;
+    if (oh < 1.0) oh = 1.0;
+    if (edge == 1) s = dx / ow;
+    else if (edge == 2) s = dy / oh;
+    else {
+        s = dx * ow + dy * oh;
+        s = s / (ow * ow + oh * oh);
+    }
+    let smin: float = 4.0 / ow;
+    let smin_h: float = 4.0 / oh;
+    if (smin_h > smin) smin = smin_h;
+    if (s < smin) s = smin;
+    return s;
+}
+
+fn resize_linear_world(mxw: int, myw: int) {
+    let ox: int = resize_orig_x;
+    let oy: int = resize_orig_y;
+    let ow: int = resize_orig_w;
+    let oh: int = resize_orig_h;
+    if (ow < 1) ow = 1;
+    if (oh < 1) oh = 1;
+    let ow_f: float = ow;
+    let oh_f: float = oh;
+    let dx: float = 0.0;
+    let dy: float = 0.0;
+    let edge: int = 0;
+    let h: int = resize_handle;
+    if (h == 5 || h == 7) edge = 1;
+    if (h == 4 || h == 6) edge = 2;
+    if (h == 0 || h == 7) dx = (ox + ow) - mxw;
+    else dx = mxw - ox;
+    if (h == 0 || h == 1 || h == 4) dy = (oy + oh) - myw;
+    else dy = myw - oy;
+    let s: float = resize_linear_factor(dx, dy, ow_f, oh_f, edge);
+    let nw_f: float = ow_f * s;
+    let nh_f: float = oh_f * s;
+    let nw: int = ui_round(nw_f);
+    let nh: int = ui_round(nh_f);
+    if (nw < 4) nw = 4;
+    if (nh < 4) nh = 4;
+    let cx: float = ox + ow_f / 2.0;
+    let cy: float = oy + oh_f / 2.0;
+    let nx: int = ox;
+    let ny: int = oy;
+    if (h == 0) {
+        nx = ox + ow - nw;
+        ny = oy + oh - nh;
+    } else if (h == 1) {
+        nx = ox;
+        ny = oy + oh - nh;
+    } else if (h == 2) {
+        nx = ox + ow - nw;
+        ny = oy;
+    } else if (h == 3) {
+        nx = ox;
+        ny = oy;
+    } else if (h == 4) {
+        nx = ui_round(cx - nw / 2.0);
+        ny = oy + oh - nh;
+    } else if (h == 5) {
+        nx = ox;
+        ny = ui_round(cy - nh / 2.0);
+    } else if (h == 6) {
+        nx = ui_round(cx - nw / 2.0);
+        ny = oy;
+    } else {
+        nx = ox + ow - nw;
+        ny = ui_round(cy - nh / 2.0);
+    }
+    resize_lin_x = nx;
+    resize_lin_y = ny;
+    resize_lin_w = nw;
+    resize_lin_h = nh;
 }
 
 fn resize_apply(mx: int, my: int) {
     if (resize_active == 0 || resize_slot < 0) return;
+    if (ent_is_ui(resize_slot) == 1) {
+        ui_canvas_layout_game_view(game_view_rect());
+        ui_resize_apply(mx, my);
+        return;
+    }
     let min_sz: int = 4;
     let wxf: float = screen_to_world_x(mx);
     let wyf: float = screen_to_world_y(my);
-    let mxw: int = wxf;
-    let myw: int = wyf;
+    let mxw: int = ui_round(wxf);
+    let myw: int = ui_round(wyf);
     let ax: int = resize_anchor_wx;
     let ay: int = resize_anchor_wy;
     let nx: int = 0;
@@ -5652,13 +6638,45 @@ fn resize_apply(mx: int, my: int) {
         nh = myw - ay;
         if (nw < min_sz) { nx = ax - min_sz; nw = min_sz; }
         if (nh < min_sz) nh = min_sz;
-    } else {
+    } else if (resize_handle == 3) {
         nx = ax;
         ny = ay;
         nw = mxw - ax;
         nh = myw - ay;
         if (nw < min_sz) nw = min_sz;
         if (nh < min_sz) nh = min_sz;
+    } else if (resize_handle == 4) {
+        nx = ax;
+        ny = myw;
+        nw = ent_w(resize_slot);
+        nh = ay - myw;
+        if (nh < min_sz) { ny = ay - min_sz; nh = min_sz; }
+    } else if (resize_handle == 5) {
+        nx = ax;
+        ny = ay;
+        nw = mxw - ax;
+        nh = ent_h(resize_slot);
+        if (nw < min_sz) nw = min_sz;
+    } else if (resize_handle == 6) {
+        nx = ax;
+        ny = ay;
+        nw = ent_w(resize_slot);
+        nh = myw - ay;
+        if (nh < min_sz) nh = min_sz;
+    } else {
+        nx = mxw;
+        ny = ay;
+        nw = ax - mxw;
+        nh = ent_h(resize_slot);
+        if (nw < min_sz) { nx = ax - min_sz; nw = min_sz; }
+    }
+
+    if (ctrl_held()) {
+        resize_linear_world(mxw, myw);
+        nx = resize_lin_x;
+        ny = resize_lin_y;
+        nw = resize_lin_w;
+        nh = resize_lin_h;
     }
 
     if (resize_recorded == 0) {
@@ -5738,6 +6756,10 @@ fn viewport_draw_selection() {
     eng_set_clip(v.x, v.y, v.w, v.h);
     let i: int = sel_first();
     while (i >= 0) {
+        if (ent_is_ui(i) == 1) {
+            i = sel_iter_next(i + 1);
+            continue;
+        }
         hitbox_draw_2d(i);
         if (ent_is_camera_ent(i) == 1) {
             let col: Color = camera_gizmo_color(i);
@@ -5758,12 +6780,7 @@ fn viewport_draw_selection() {
             if (edit_tool == "rotate") {
                 draw_rotate_gizmo(i);
             } else if (edit_tool == "scale") {
-                let inset: Rect = sel_inset_screen(i);
-                let h: int = 8;
-                draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col);
-                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col);
-                draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col);
-                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col);
+                draw_resize_handles(sel_inset_screen(i), col);
             } else if (edit_tool == "move") {
                 draw_move_gizmo(i);
             }
@@ -5793,11 +6810,7 @@ fn viewport_draw_selection() {
                 let ly: float = world_len(ent_h(i)) / 2.0 + 18.0;
                 draw_scale_axes_at(px, py, lx, ly, gizmo_rot(i));
             } else {
-                let h: int = 8;
-                draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col_accent());
-                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col_accent());
-                draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
-                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
+                draw_resize_handles(inset, col_accent());
             }
         } else if (edit_tool == "move") {
             draw_outline_rect(inset, 2, col_accent());
@@ -5905,7 +6918,9 @@ fn ui_move_gizmo_pick_selection(mx: int, my: int): int {
 }
 
 fn ui_viewport_hit_at(mx: int, my: int): int {
-    let s: int = ent_max() - 1;
+    let best: int = -1;
+    let best_z: int = 0;
+    let s: int = ent_iter_next(0);
     while (s >= 0) {
         if (ent_active(s) == 1 && ent_is_ui(s) == 1 && ent_shown(s) == 1) {
             let uxf: float = screen_to_ui_x(mx);
@@ -5913,11 +6928,17 @@ fn ui_viewport_hit_at(mx: int, my: int): int {
             let uxi: int = uxf;
             let uyi: int = uyf;
             if (uxi >= ent_x(s) && uyi >= ent_y(s) &&
-                uxi < ent_x(s) + ent_w(s) && uyi < ent_y(s) + ent_h(s)) return s;
+                uxi < ent_x(s) + ent_w(s) && uyi < ent_y(s) + ent_h(s)) {
+                let z: int = ent_z(s);
+                if (best < 0 || z > best_z || (z == best_z && s > best)) {
+                    best = s;
+                    best_z = z;
+                }
+            }
         }
-        s = s - 1;
+        s = ent_iter_next(s + 1);
     }
-    return -1;
+    return best;
 }
 
 fn ui_resize_handle_at(mx: int, my: int): int {
@@ -5929,7 +6950,7 @@ fn ui_resize_handle_at(mx: int, my: int): int {
         }
         let inset: Rect = ui_sel_inset_screen(i);
         let h: int = 0;
-        while (h < 4) {
+        while (h < 8) {
             let hr: Rect = resize_handle_hit_rect(inset, h);
             if (point_in_rect(mx, my, hr)) {
                 resize_slot = i;
@@ -5942,54 +6963,186 @@ fn ui_resize_handle_at(mx: int, my: int): int {
     return -1;
 }
 
+fn ui_round(v: float): int {
+    if (v >= 0.0) return v + 0.5;
+    return v - 0.5;
+}
+
+/* Canvas length whose on-screen size is the closest to px. */
+fn ui_len_for_screen(px: int, vertical: int): int {
+    let scale: float = ui_scale_x;
+    if (vertical == 1) scale = ui_scale_y;
+    if (scale < 0.0001) scale = 0.0001;
+    if (px < 1) px = 1;
+    let guess_f: float = px;
+    let guess: int = ui_round(guess_f / scale);
+    if (guess < 1) guess = 1;
+    let best: int = guess;
+    let best_d: int = 100000;
+    let k: int = guess - 4;
+    if (k < 1) k = 1;
+    let end: int = guess + 4;
+    while (k <= end) {
+        let got: int = ui_len_w(k);
+        if (vertical == 1) got = ui_len_h(k);
+        let d: int = got - px;
+        if (d < 0) d = -d;
+        if (d < best_d) { best_d = d; best = k; }
+        k = k + 1;
+    }
+    return best;
+}
+
+fn ui_origin_for_x(target: int): int {
+    let scale: float = ui_scale_x;
+    if (scale < 0.0001) scale = 0.0001;
+    let rel: float = target - ui_cx;
+    let guess: int = ui_round(rel / scale);
+    let best: int = guess;
+    let best_d: int = 100000;
+    let k: int = guess - 4;
+    let end: int = guess + 4;
+    while (k <= end) {
+        let s: int = ui_to_screen_x(k);
+        let d: int = s - target;
+        if (d < 0) d = -d;
+        if (d < best_d) { best_d = d; best = k; }
+        k = k + 1;
+    }
+    return best;
+}
+
+fn ui_origin_for_y(target: int): int {
+    let scale: float = ui_scale_y;
+    if (scale < 0.0001) scale = 0.0001;
+    let rel: float = target - ui_cy;
+    let guess: int = ui_round(rel / scale);
+    let best: int = guess;
+    let best_d: int = 100000;
+    let k: int = guess - 4;
+    let end: int = guess + 4;
+    while (k <= end) {
+        let s: int = ui_to_screen_y(k);
+        let d: int = s - target;
+        if (d < 0) d = -d;
+        if (d < best_d) { best_d = d; best = k; }
+        k = k + 1;
+    }
+    return best;
+}
+
 fn ui_resize_apply(mx: int, my: int) {
     if (resize_active == 0 || resize_slot < 0) return;
-    let mxu: float = screen_to_ui_x(mx);
-    let myu: float = screen_to_ui_y(my);
-    let ax: int = resize_anchor_wx;
-    let ay: int = resize_anchor_wy;
-    let min_sz: int = 8;
-    let nx: int = 0;
-    let ny: int = 0;
-    let nw: int = 0;
-    let nh: int = 0;
-    if (resize_handle == 0) {
-        nx = mxu;
-        ny = myu;
-        nw = ax - nx;
-        nh = ay - ny;
-        if (nw < min_sz) { nx = ax - min_sz; nw = min_sz; }
-        if (nh < min_sz) { ny = ay - min_sz; nh = min_sz; }
-    } else if (resize_handle == 1) {
-        nx = ax;
-        ny = myu;
-        nw = mxu - ax;
-        nh = ay - ny;
-        if (nw < min_sz) nw = min_sz;
-        if (nh < min_sz) { ny = ay - min_sz; nh = min_sz; }
-    } else if (resize_handle == 2) {
-        nx = mxu;
-        ny = ay;
-        nw = ax - nx;
-        nh = myu - ay;
-        if (nw < min_sz) { nx = ax - min_sz; nw = min_sz; }
-        if (nh < min_sz) nh = min_sz;
-    } else {
-        nx = ax;
-        ny = ay;
-        nw = mxu - ax;
-        nh = myu - ay;
-        if (nw < min_sz) nw = min_sz;
-        if (nh < min_sz) nh = min_sz;
+    let l: int = resize_fix_l;
+    let t: int = resize_fix_t;
+    let r: int = resize_fix_r;
+    let b: int = resize_fix_b;
+    let move_l: int = 0;
+    let move_t: int = 0;
+    let move_r: int = 0;
+    let move_b: int = 0;
+    if (resize_handle == 0 || resize_handle == 2 || resize_handle == 7) move_l = 1;
+    if (resize_handle == 0 || resize_handle == 1 || resize_handle == 4) move_t = 1;
+    if (resize_handle == 1 || resize_handle == 3 || resize_handle == 5) move_r = 1;
+    if (resize_handle == 2 || resize_handle == 3 || resize_handle == 6) move_b = 1;
+    if (move_l == 1) l = mx;
+    if (move_t == 1) t = my;
+    if (move_r == 1) r = mx;
+    if (move_b == 1) b = my;
+    if (ctrl_held()) {
+        let ox: int = resize_fix_l;
+        let oy: int = resize_fix_t;
+        let ow: int = resize_fix_r - resize_fix_l;
+        let oh: int = resize_fix_b - resize_fix_t;
+        if (ow < 1) ow = 1;
+        if (oh < 1) oh = 1;
+        let ow_f: float = ow;
+        let oh_f: float = oh;
+        let dx: float = 0.0;
+        let dy: float = 0.0;
+        let edge: int = 0;
+        let h: int = resize_handle;
+        if (h == 5 || h == 7) edge = 1;
+        if (h == 4 || h == 6) edge = 2;
+        if (h == 0 || h == 7) dx = (ox + ow) - mx;
+        else dx = mx - ox;
+        if (h == 0 || h == 1 || h == 4) dy = (oy + oh) - my;
+        else dy = my - oy;
+        let s: float = resize_linear_factor(dx, dy, ow_f, oh_f, edge);
+        let nw: int = ui_round(ow_f * s);
+        let nh: int = ui_round(oh_f * s);
+        if (nw < 4) nw = 4;
+        if (nh < 4) nh = 4;
+        let cx: float = ox + ow_f / 2.0;
+        let cy: float = oy + oh_f / 2.0;
+        let nx: int = ox;
+        let ny: int = oy;
+        if (h == 0) {
+            nx = ox + ow - nw;
+            ny = oy + oh - nh;
+        } else if (h == 1) {
+            nx = ox;
+            ny = oy + oh - nh;
+        } else if (h == 2) {
+            nx = ox + ow - nw;
+            ny = oy;
+        } else if (h == 3) {
+            nx = ox;
+            ny = oy;
+        } else if (h == 4) {
+            nx = ui_round(cx - nw / 2.0);
+            ny = oy + oh - nh;
+        } else if (h == 5) {
+            nx = ox;
+            ny = ui_round(cy - nh / 2.0);
+        } else if (h == 6) {
+            nx = ui_round(cx - nw / 2.0);
+            ny = oy;
+        } else {
+            nx = ox + ow - nw;
+            ny = ui_round(cy - nh / 2.0);
+        }
+        l = nx;
+        t = ny;
+        r = nx + nw;
+        b = ny + nh;
+        move_l = 1;
+        move_t = 1;
     }
+    let min_px: int = ui_len_w(8);
+    if (min_px < 4) min_px = 4;
+    if (r - l < min_px) {
+        if (move_l == 1) l = r - min_px;
+        else r = l + min_px;
+    }
+    let min_py: int = ui_len_h(8);
+    if (min_py < 4) min_py = 4;
+    if (b - t < min_py) {
+        if (move_t == 1) t = b - min_py;
+        else b = t + min_py;
+    }
+    let nw: int = ui_len_for_screen(r - l, 0);
+    let nh: int = ui_len_for_screen(b - t, 1);
+    let nx: int = ui_origin_for_x(l);
+    let ny: int = ui_origin_for_y(t);
     if (resize_recorded == 0) {
         undo_save_modify(resize_slot);
         resize_recorded = 1;
     }
-    ent_set_x(resize_slot, nx);
-    ent_set_y(resize_slot, ny);
+    let old_x: int = ent_x(resize_slot);
+    let old_y: int = ent_y(resize_slot);
+    if (move_l == 1) ent_set_x(resize_slot, nx);
+    if (move_t == 1) ent_set_y(resize_slot, ny);
     ent_set_w(resize_slot, nw);
     ent_set_h(resize_slot, nh);
+    /* Dragging the top or left moves the box origin. Shift the glyph
+       anchor the other way so the words stay on the same pixels. */
+    if (ent_kind(resize_slot) != "sprite2d") {
+        let dx: int = ent_x(resize_slot) - old_x;
+        let dy: int = ent_y(resize_slot) - old_y;
+        if (dx != 0) ent_set_font_ox(resize_slot, ent_font_ox(resize_slot) - dx);
+        if (dy != 0) ent_set_font_oy(resize_slot, ent_font_oy(resize_slot) - dy);
+    }
 }
 
 fn game_view_draw_letterbox() {
@@ -6010,6 +7163,25 @@ fn ui_viewport_draw_background() {
     game_view_draw_letterbox();
     let c: Rect = ui_canvas_area();
     draw_fill_rect(c, rgb(40, 43, 50));
+    if (pref_int("show_grid", 1) == 1) {
+        eng_set_clip(c.x, c.y, c.w, c.h);
+        let step: int = pref_int("grid", 32);
+        if (step < 1) step = 1;
+        let line_c: Color = rgb(52, 56, 64);
+        let gx: int = 0;
+        while (gx <= UI_CANVAS_W) {
+            let sx: int = ui_to_screen_x(gx);
+            eng_line(sx, c.y, sx, c.y + c.h, line_c.r, line_c.g, line_c.b);
+            gx = gx + step;
+        }
+        let gy: int = 0;
+        while (gy <= UI_CANVAS_H) {
+            let sy: int = ui_to_screen_y(gy);
+            eng_line(c.x, sy, c.x + c.w, sy, line_c.r, line_c.g, line_c.b);
+            gy = gy + step;
+        }
+        eng_clear_clip();
+    }
     draw_outline_rect(c, 1, col_ui_border());
     eng_clear_clip();
 }
@@ -6017,10 +7189,10 @@ fn ui_viewport_draw_background() {
 fn ui_viewport_draw_entities() {
     let v: Rect = viewport_rect();
     eng_set_clip(v.x, v.y, v.w, v.h);
-    let i: int = ent_iter_next(0);
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ent_is_ui(i) == 0 || ent_shown(i) == 0) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         let sx: int = ui_to_screen_x(ent_x(i));
@@ -6033,7 +7205,7 @@ fn ui_viewport_draw_entities() {
             let dot: Rect = rect(sx + sw - 8, sy + 2, 6, 6);
             draw_fill_rect(dot, col_play());
         }
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
     eng_clear_clip();
 }
@@ -6057,19 +7229,7 @@ fn ui_viewport_draw_selection() {
             draw_outline_rect(rect(px - rad, py - rad, rad * 2, rad * 2), 1, ac);
         } else if (edit_tool == "scale") {
             draw_outline_rect(inset, 2, col_accent());
-            if (xform_local == 1) {
-                let px: int = ui_ent_pivot_screen_x(i);
-                let py: int = ui_ent_pivot_screen_y(i);
-                let lx: float = ui_len_w(ent_w(i)) / 2.0 + 18.0;
-                let ly: float = ui_len_h(ent_h(i)) / 2.0 + 18.0;
-                draw_scale_axes_at(px, py, lx, ly, gizmo_rot(i));
-            } else {
-                let h: int = 8;
-                draw_fill_rect(rect(inset.x - h / 2,                inset.y - h / 2,                h, h), col_accent());
-                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y - h / 2,                h, h), col_accent());
-                draw_fill_rect(rect(inset.x - h / 2,                inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
-                draw_fill_rect(rect(inset.x + inset.w - h / 2 - 1,  inset.y + inset.h - h / 2 - 1,  h, h), col_accent());
-            }
+            draw_resize_handles(inset, col_accent());
         } else if (edit_tool == "move") {
             draw_outline_rect(inset, 2, col_accent());
             draw_move_gizmo_at(ui_ent_pivot_screen_x(i), ui_ent_pivot_screen_y(i), gizmo_rot(i));
@@ -6120,7 +7280,6 @@ fn ui_viewport_draw() {
 
 /* A ring just outside a GUI element, so a hierarchy click shows which one it is. */
 fn ui_selected_outline(slot: int, sx: int, sy: int, sw: int, sh: int) {
-    if (viewport_mode == "play") return;
     if (ent_selected(slot) == 0) return;
     let ac: Color = col_accent();
     let base: float = 10.0;
@@ -6153,14 +7312,31 @@ fn sel_view3d_slot(): int {
     return best;
 }
 
+/* Keep a widget's box on the picture. A full-canvas panel's outline sits on the
+   clip edge and would otherwise disappear. */
+fn ui_box_on_game(sx: int, sy: int, sw: int, sh: int): Rect {
+    let gv: Rect = game_view_rect();
+    let x: int = sx;
+    let y: int = sy;
+    let r: int = sx + sw;
+    let b: int = sy + sh;
+    if (x < gv.x + 2) x = gv.x + 2;
+    if (y < gv.y + 2) y = gv.y + 2;
+    if (r > gv.x + gv.w - 2) r = gv.x + gv.w - 2;
+    if (b > gv.y + gv.h - 2) b = gv.y + gv.h - 2;
+    if (r < x + 4) r = x + 4;
+    if (b < y + 4) b = y + 4;
+    return rect(x, y, r - x, b - y);
+}
+
 fn viewport_draw_ui_overlay() {
     let gv: Rect = game_view_rect();
     ui_canvas_layout_game_view(gv);
     eng_set_clip(gv.x, gv.y, gv.w, gv.h);
-    let i: int = ent_iter_next(0);
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ent_is_ui(i) == 0 || ent_shown(i) == 0) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         let sx: int = ui_to_screen_x(ent_x(i));
@@ -6168,33 +7344,41 @@ fn viewport_draw_ui_overlay() {
         let sw: int = ui_len_w(ent_w(i));
         let sh: int = ui_len_h(ent_h(i));
         draw_entity_body(i, sx, sy, sw, sh);
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
-    let ui_gizmo_drawn: int = 0;
+    eng_clear_clip();
+    if (app_state == "play") return;
     i = ent_iter_next(0);
     while (i >= 0) {
-        if (ent_is_ui(i) == 1 && ent_shown(i) == 1 && ent_selected(i) == 1) {
-            let sx: int = ui_to_screen_x(ent_x(i));
-            let sy: int = ui_to_screen_y(ent_y(i));
-            let sw: int = ui_len_w(ent_w(i));
-            let sh: int = ui_len_h(ent_h(i));
-            ui_selected_outline(i, sx, sy, sw, sh);
-            /* one 2D gizmo for the canvas selection — never 3D world arrows */
-            if (ui_gizmo_drawn == 0 && sel_view3d_slot() < 0) {
-                if (edit_tool == "move") {
-                    draw_move_gizmo_at(ui_ent_pivot_screen_x(i), ui_ent_pivot_screen_y(i), gizmo_rot(i));
-                    ui_gizmo_drawn = 1;
-                } else if (edit_tool == "scale" && xform_local == 1) {
-                    let px: int = ui_ent_pivot_screen_x(i);
-                    let py: int = ui_ent_pivot_screen_y(i);
-                    draw_scale_axes_at(px, py, sw / 2.0 + 18.0, sh / 2.0 + 18.0, gizmo_rot(i));
-                    ui_gizmo_drawn = 1;
-                }
-            }
+        if (ent_is_ui(i) == 0 || ent_shown(i) == 0) {
+            i = ent_iter_next(i + 1);
+            continue;
+        }
+        let sx: int = ui_to_screen_x(ent_x(i));
+        let sy: int = ui_to_screen_y(ent_y(i));
+        if (ent_selected(i) == 0) {
+            i = ent_iter_next(i + 1);
+            continue;
+        }
+        let box: Rect = ui_box_on_game(sx, sy, ui_len_w(ent_w(i)), ui_len_h(ent_h(i)));
+        if (edit_tool == "rotate") {
+            draw_outline_rect(box, 2, col_accent());
+            let px: int = ui_ent_pivot_screen_x(i);
+            let py: int = ui_ent_pivot_screen_y(i);
+            let ac: Color = col_accent();
+            let rad: int = 28;
+            draw_outline_rect(rect(px - rad, py - rad, rad * 2, rad * 2), 1, ac);
+        } else if (edit_tool == "scale") {
+            draw_outline_rect(box, 2, col_accent());
+            draw_resize_handles(box, col_accent());
+        } else if (edit_tool == "move") {
+            draw_outline_rect(box, 2, col_accent());
+            draw_move_gizmo_at(ui_ent_pivot_screen_x(i), ui_ent_pivot_screen_y(i), gizmo_rot(i));
+        } else {
+            draw_outline_rect(box, 2, col_accent());
         }
         i = ent_iter_next(i + 1);
     }
-    eng_clear_clip();
 }
 
 fn ui_viewport_input() {
@@ -6235,14 +7419,10 @@ fn ui_viewport_input() {
     if (edit_tool == "scale" && inside && mouse_pressed(MOUSE_LEFT) &&
         drag_active == 0 && box_select_active == 0 && rotate_active == 0 &&
         scale_uniform_active == 0 && resize_active == 0) {
-        if (xform_local == 1) {
-            if (scale_local_press_ui(mx, my) == 1) return;
-        } else {
-            let rh: int = ui_resize_handle_at(mx, my);
-            if (rh >= 0 && resize_slot >= 0) {
-                resize_begin(resize_slot, rh);
-                return;
-            }
+        let rh: int = ui_resize_handle_at(mx, my);
+        if (rh >= 0 && resize_slot >= 0) {
+            resize_begin(resize_slot, rh);
+            return;
         }
     }
 
@@ -6275,9 +7455,6 @@ fn ui_viewport_input() {
                 drag_anchor_x = mx;
                 drag_anchor_y = my;
                 drag_recorded = 0;
-            } else if (edit_tool == "scale") {
-                scale_begin_uniform_ui(hit, mx, my);
-                scale_apply_uniform_ui(mx, my);
             }
             }
         } else if (edit_tool == "move" && shift_held() == false && ctrl_held() == false && sel_pick_at(mx, my) >= 0) {
@@ -6315,33 +7492,32 @@ fn ui_viewport_input() {
                     s = sel_iter_next(s + 1);
                 }
                 undo_end_group();
+                let origin: int = sel_ui_move_root();
+                if (origin >= 0) {
+                    move_from_x = ent_x(origin);
+                    move_from_y = ent_y(origin);
+                }
                 drag_recorded = 1;
             }
-            let dxf: float = dx_screen;
-            let dyf: float = dy_screen;
-            let dx: int = dxf / ui_scale_x;
-            let dy: int = dyf / ui_scale_y;
-            move_along(dx, dy, move_axis, sel_first());
-            dx = move_out_x;
-            dy = move_out_y;
-            if (dx != 0 || dy != 0) {
-                /* UI canvas: only move selected UI roots (scene ents stay put). */
-                let root: int = sel_move_root();
-                if (root >= 0 && ent_is_ui(root) == 1) {
-                    sel_snap_delta(dx, dy, 0);
-                    dx = move_out_x;
-                    dy = move_out_y;
-                    if (dx != 0 || dy != 0) {
-                        let s2: int = sel_first();
-                        while (s2 >= 0) {
-                            if (ent_is_ui(s2) == 1 && sel_is_carried(s2) == 0) {
-                                if (dx != 0) ent_set_x(s2, ent_x(s2) + dx);
-                                if (dy != 0) ent_set_y(s2, ent_y(s2) + dy);
-                            }
-                            s2 = sel_iter_next(s2 + 1);
+            let uroot: int = sel_ui_move_root();
+            if (uroot >= 0) {
+                let dxf: float = dx_screen;
+                let dyf: float = dy_screen;
+                let dx: int = ui_round(dxf / ui_scale_x);
+                let dy: int = ui_round(dyf / ui_scale_y);
+                move_along(dx, dy, move_axis, uroot);
+                let tx: int = drag_snap_target(move_from_x, move_out_x);
+                let ty: int = drag_snap_target(move_from_y, move_out_y);
+                let adx: int = tx - ent_x(uroot);
+                let ady: int = ty - ent_y(uroot);
+                if (adx != 0 || ady != 0) {
+                    let s2: int = sel_first();
+                    while (s2 >= 0) {
+                        if (ent_is_ui(s2) == 1 && sel_is_carried(s2) == 0) {
+                            if (adx != 0) ent_set_x(s2, ent_x(s2) + adx);
+                            if (ady != 0) ent_set_y(s2, ent_y(s2) + ady);
                         }
-                        drag_anchor_x = mx;
-                        drag_anchor_y = my;
+                        s2 = sel_iter_next(s2 + 1);
                     }
                 }
             }
@@ -6406,10 +7582,10 @@ fn scale_apply_uniform_ui(mx: int, my: int) {
     if (scale_axis == 1 || scale_axis == 2) factor = scale_factor_axis(mx, my);
     let nw_f: float = scale_start_w * factor;
     let nh_f: float = scale_start_h * factor;
-    if (scale_axis == 1) nh_f = scale_start_h;
-    if (scale_axis == 2) nw_f = scale_start_w;
-    let nw: int = nw_f;
-    let nh: int = nh_f;
+    if (ctrl_held() == false && scale_axis == 1) nh_f = scale_start_h;
+    if (ctrl_held() == false && scale_axis == 2) nw_f = scale_start_w;
+    let nw: int = ui_round(nw_f);
+    let nh: int = ui_round(nh_f);
     if (nw < 4) nw = 4;
     if (nh < 4) nh = 4;
     if (scale_recorded == 0) {
@@ -6418,10 +7594,8 @@ fn scale_apply_uniform_ui(mx: int, my: int) {
     }
     let nx_f: float = scale_pivot_wx - nw / 2.0;
     let ny_f: float = scale_pivot_wy - nh / 2.0;
-    let nx: int = nx_f;
-    let ny: int = ny_f;
-    ent_set_x(scale_uniform_slot, nx);
-    ent_set_y(scale_uniform_slot, ny);
+    ent_set_x(scale_uniform_slot, ui_round(nx_f));
+    ent_set_y(scale_uniform_slot, ui_round(ny_f));
     ent_set_w(scale_uniform_slot, nw);
     ent_set_h(scale_uniform_slot, nh);
 }
@@ -6849,7 +8023,9 @@ fn view3d_draw_light_beams() {
 }
 
 fn view3d_draw_light_icons() {
-    let v: Rect = viewport_rect();
+    /* The bars beside the 16:9 picture are letterbox, not the scene. A marker
+       that lands there floats off the object it belongs to. */
+    let v: Rect = game_view_rect();
     eng_set_clip(v.x, v.y, v.w, v.h);
     let i: int = ent_iter_next(0);
     while (i >= 0) {
@@ -6866,7 +8042,7 @@ fn view3d_draw_light_icons() {
 }
 
 fn view3d_draw_camera_icons() {
-    let v: Rect = viewport_rect();
+    let v: Rect = game_view_rect();
     eng_set_clip(v.x, v.y, v.w, v.h);
     let i: int = ent_iter_next(0);
     while (i >= 0) {
@@ -7007,7 +8183,6 @@ fn viewport3d_submit() {
 }
 
 fn viewport3d_overlay() {
-    let v: Rect = viewport_rect();
     let gv: Rect = game_view_rect();
     game_view_draw_letterbox();
     /* Do NOT fill the game view here. r3d_end already painted the chroma key;
@@ -7018,12 +8193,12 @@ fn viewport3d_overlay() {
     view3d_draw_camera_icons();
     view3d_draw_gizmo();
 
-    /* empties: a small cross at their position (z plane) */
-    eng_set_clip(v.x, v.y, v.w, v.h);
+    /* empties: a small cross at their center, same point as the move gizmo */
+    eng_set_clip(gv.x, gv.y, gv.w, gv.h);
     let i: int = ent_iter_next(0);
     while (i >= 0) {
         if (ent_is_empty(i) == 1 && ent_shown(i) == 1) {
-            if (r3d_project(ent_x(i) * V3_UNIT, 0.0 - ent_y(i) * V3_UNIT, 0.0 - ent_z(i) * V3_UNIT) == 1) {
+            if (r3d_project(v3_center_x(i), v3_center_y(i), v3_center_z(i)) == 1) {
                 let px: int = r3d_px();
                 let py: int = r3d_py();
                 let c: Color = col_text_dim();
@@ -7140,14 +8315,22 @@ fn view3d_px_scale(slot: int): float {
 /* Moves the selection so it has moved (tx, ty, tz) scene px since the grab.
    A child whose parent is selected too is left to its parent, which carries it. */
 fn view3d_move_to(tx: int, ty: int, tz: int) {
-    let dx: int = tx - mv3_done_x;
-    let dy: int = ty - mv3_done_y;
-    let dz: int = tz - mv3_done_z;
-    if (dx == 0 && dy == 0 && dz == 0) return;
-    sel_snap_delta(dx, dy, dz);
-    dx = move_out_x;
-    dy = move_out_y;
-    dz = move_out_z;
+    let root: int = sel_move_root();
+    if (root < 0) return;
+    /* tx/ty/tz are the total shift since the grab. Snap that point, not the
+       leftover since the last step, or a slow drag never reaches a grid line. */
+    let wx: int = ent_x(root) - mv3_done_x + tx;
+    let wy: int = ent_y(root) - mv3_done_y + ty;
+    let wz: int = ent_z(root) - mv3_done_z + tz;
+    if (tx != 0) wx = snap_coord(wx);
+    else         wx = ent_x(root);
+    if (ty != 0) wy = snap_coord(wy);
+    else         wy = ent_y(root);
+    if (tz != 0) wz = snap_coord(wz);
+    else         wz = ent_z(root);
+    let dx: int = wx - ent_x(root);
+    let dy: int = wy - ent_y(root);
+    let dz: int = wz - ent_z(root);
     if (dx == 0 && dy == 0 && dz == 0) return;
     view3d_undo_record();
     if (sel_move_by(dx, dy, dz) == 0) return;
@@ -7341,7 +8524,9 @@ fn view3d_draw_rotate_fill() {
     r3d_sector(px, py, pz, rt3_axis, a0, sweep, view3d_ring_rad(), r, g, b, 90);
 }
 
-/* Solid cone on each axis, in the 3D picture, before the frame is shown. */
+/* Solid cone + shaft on each axis, in the 3D picture, before the frame is shown.
+   Shafts are drawn in world space (no depth) so they share the entity center with
+   the cones. A 2D overlay shaft can drift off-center under Filament. */
 fn view3d_draw_gizmo_heads() {
     if (edit_tool != "move") return;
     let s: int = sel_view3d_slot();
@@ -7368,6 +8553,7 @@ fn view3d_draw_gizmo_heads() {
         let g: int = cg[i];
         let b: int = cb[i];
         if (orb_mode == 6 && mv3_axis == i + 1) { r = 255; g = 255; b = 255; }
+        r3d_line_over(px, py, pz, bx, by, bz, r, g, b, 255);
         r3d_cone(bx, by, bz, ex, ey, ez, rad, r, g, b);
         i = i + 1;
     }
@@ -7387,8 +8573,12 @@ fn view3d_draw_gizmo() {
     gz_ox = r3d_px();
     gz_oy = r3d_py();
     gz_len = 70.0 * view3d_px_scale(s) * V3_UNIT;     /* about 70 px long at any distance */
-    let v: Rect = viewport_rect();
+    let v: Rect = game_view_rect();
     eng_set_clip(v.x, v.y, v.w, v.h);
+    /* Filament already drew shafts in view3d_draw_gizmo_heads. OpenGL/Vulkan
+       still need the 2D overlay shafts; Filament's overlay can sit off the mesh. */
+    let draw2d: int = 1;
+    if (r3d_backend() == 4) draw2d = 0;
     let cr = [240, 52, 79];
     let cg = [82, 196, 140];
     let cb = [79, 120, 255];
@@ -7404,24 +8594,25 @@ fn view3d_draw_gizmo() {
             let ty: int = r3d_py();
             gz_x1[i] = tx;
             gz_y1[i] = ty;
-            let r: int = cr[i];
-            let g: int = cg[i];
-            let b: int = cb[i];
-            if (orb_mode == 6 && mv3_axis == i + 1) { r = 255; g = 255; b = 255; }
-            /* shaft stops at the cone base; the tip stays the pick point */
-            let head: float = gz_len * 0.22;
-            let bx: float = ex - basis_x * head;
-            let by: float = ey - basis_y * head;
-            let bz: float = ez - basis_z * head;
-            let lx: int = tx;
-            let ly: int = ty;
-            if (r3d_project(bx, by, bz) == 1) {
-                lx = r3d_px();
-                ly = r3d_py();
+            if (draw2d == 1) {
+                let r: int = cr[i];
+                let g: int = cg[i];
+                let b: int = cb[i];
+                if (orb_mode == 6 && mv3_axis == i + 1) { r = 255; g = 255; b = 255; }
+                let head: float = gz_len * 0.22;
+                let bx: float = ex - basis_x * head;
+                let by: float = ey - basis_y * head;
+                let bz: float = ez - basis_z * head;
+                let lx: int = tx;
+                let ly: int = ty;
+                if (r3d_project(bx, by, bz) == 1) {
+                    lx = r3d_px();
+                    ly = r3d_py();
+                }
+                eng_line(gz_ox, gz_oy, lx, ly, r, g, b);
+                eng_line(gz_ox + 1, gz_oy, lx + 1, ly, r, g, b);
+                eng_line(gz_ox, gz_oy + 1, lx, ly + 1, r, g, b);
             }
-            eng_line(gz_ox, gz_oy, lx, ly, r, g, b);
-            eng_line(gz_ox + 1, gz_oy, lx + 1, ly, r, g, b);
-            eng_line(gz_ox, gz_oy + 1, lx, ly + 1, r, g, b);
         }
         i = i + 1;
     }
@@ -7824,7 +9015,9 @@ fn view3d_scale_apply(factor: float) {
     if (factor < 0.05) factor = 0.05;
     if (factor > 6.0) factor = 6.0;
     view3d_undo_record();
-    xform_grab_scale(factor, sc3_axis);
+    let axis: int = sc3_axis;
+    if (ctrl_held()) axis = 0;
+    xform_grab_scale(factor, axis);
 }
 
 fn view3d_clamp_pitch(v: int, limit: int): int {
@@ -8522,33 +9715,171 @@ fn attach_asset_to(slot: int, path: string, rel: string) {
             ent_set_kind(slot, "model");
         }
         eng_log("[asset] model " + rel + " -> " + ent_name(slot));
-    } else {
+    } else if (path_is_sound(rel) == 1 || path_is_sound(path) == 1) {
+        ent_set_sound(slot, path);
+        insp_buf_sound = ent_sound(slot);
+        eng_log("[asset] sound " + rel + " -> " + ent_name(slot));
+    } else if (path_is_image(rel) == 1 || path_is_image(path) == 1) {
         ent_set_sprite(slot, path);
         eng_log("[asset] " + rel + " -> " + ent_name(slot));
+    } else {
+        eng_log("[asset] " + rel + " is in the project");
     }
+}
+
+fn mat_apply_drop(s: int, kind: string, path: string) {
+    undo_save_modify(s);
+    if (kind == "albedo") { ent_set_tex_albedo(s, path); insp_buf_tex_albedo = ent_tex_albedo(s); }
+    else if (kind == "normal") { ent_set_tex_normal(s, path); insp_buf_tex_normal = ent_tex_normal(s); }
+    else if (kind == "rough") { ent_set_tex_rough(s, path); insp_buf_tex_rough = ent_tex_rough(s); }
+    else if (kind == "metal") { ent_set_tex_metal(s, path); insp_buf_tex_metal = ent_tex_metal(s); }
+    else if (kind == "height") { ent_set_tex_height(s, path); insp_buf_tex_height = ent_tex_height(s); }
+    else if (kind == "ao") { ent_set_tex_ao(s, path); insp_buf_tex_ao = ent_tex_ao(s); }
+    eng_log("[drop] map " + kind + " <- " + path);
+}
+
+fn drop_place_asset(mx: int, my: int) {
+    let path: string = drag_asset_path;
+    let rel: string = drag_asset_rel;
+    let is_model: int = 0;
+    if (path_is_obj(rel) == 1 || path_is_obj(path) == 1) is_model = 1;
+    let is_image: int = 0;
+    if (path_is_image(path) == 1 || path_is_image(rel) == 1) is_image = 1;
+    if (is_model == 0 && is_image == 0) {
+        eng_log("[drop] asset " + rel + " -> (no valid target)");
+        return;
+    }
+    let iw: int = 64;
+    let ih: int = 64;
+    if (is_image == 1) {
+        let img: int = eng_image_load_cached(path);
+        if (img != 0) {
+            let pw: int = eng_image_w(img);
+            let ph: int = eng_image_h(img);
+            if (pw > 0 && ph > 0) { iw = pw; ih = ph; }
+        }
+    }
+    let name: string = path_basename(rel);
+    if (name.len() == 0) name = path_basename(path);
+    if (name.len() == 0) name = "sprite";
+    let s: int = -1;
+    if (viewport_mode == "ui") {
+        if (is_model == 1) {
+            eng_log("[drop] models go on the scene, not the UI canvas");
+            return;
+        }
+        ui_canvas_layout_game_view(game_view_rect());
+        let scale: float = 1.0;
+        if (iw > UI_CANVAS_W) {
+            let fit: float = UI_CANVAS_W;
+            fit = fit / iw;
+            scale = fit;
+        }
+        if (ih > UI_CANVAS_H) {
+            let fit: float = UI_CANVAS_H;
+            fit = fit / ih;
+            if (fit < scale) scale = fit;
+        }
+        let fw: float = iw;
+        fw = fw * scale;
+        let fh: float = ih;
+        fh = fh * scale;
+        iw = fw;
+        ih = fh;
+        if (iw < 4) iw = 4;
+        if (ih < 4) ih = 4;
+        let uxf: float = screen_to_ui_x(mx);
+        let uyf: float = screen_to_ui_y(my);
+        let ux: int = uxf - iw / 2;
+        let uy: int = uyf - ih / 2;
+        s = ent_create("sprite2d", name, ux, uy, iw, ih, 255, 255, 255);
+        if (s >= 0) ent_set_sprite(s, path);
+    } else {
+        if (viewport_mode == "play") play_snap_to_camera();
+        let wxf: float = screen_to_world_x(mx);
+        let wyf: float = screen_to_world_y(my);
+        if (is_model == 1) {
+            let wx: int = wxf - 32.0;
+            let wy: int = wyf - 32.0;
+            if (name.len() == 0) name = "model";
+            s = ent_create("model", name, wx, wy, 64, 64, 200, 200, 210);
+            if (s >= 0) ent_set_model(s, path);
+        } else {
+            let nx: int = wxf - iw / 2.0;
+            let ny: int = wyf - ih / 2.0;
+            s = ent_create("rect", name, nx, ny, iw, ih, 255, 255, 255);
+            if (s >= 0) ent_set_sprite(s, path);
+        }
+    }
+    if (s < 0) return;
+    undo_save_create(s);
+    sel_clear();
+    ent_set_selected(s, 1);
+    last_inspector_slot = -1;
+    if (is_image == 1) insp_buf_sprite = path;
+    eng_log("[drop] placed " + rel);
 }
 
 fn drag_asset_drop_at(mx: int, my: int) {
     let target: int = -1;
     let where: string = "";
 
-    /* inspector sprite field (only when one entity selected) */
+    /* inspector sprite / MATERIALS fields (only when one entity selected) */
     let s_one: int = sel_first();
     if (s_one >= 0 && sel_count() == 1) {
-        let fr: Rect = rect(last_sprite_field_x, last_sprite_field_y,
-                            last_sprite_field_w, last_sprite_field_h);
-        if (fr.w > 0 && point_in_rect(mx, my, fr)) {
-            attach_asset_to(s_one, drag_asset_path, drag_asset_rel);
-            if (path_is_obj(drag_asset_rel) == 0) insp_buf_sprite = drag_asset_path;
-            return;
+        if (path_is_image(drag_asset_path) == 1 || path_is_image(drag_asset_rel) == 1) {
+            let drop_path: string = drag_asset_rel;
+            if (drop_path.len() == 0) drop_path = drag_asset_path;
+            let ab: Rect = rect(mat_field_albedo_x, mat_field_albedo_y, mat_field_albedo_w, mat_field_albedo_h);
+            let nm: Rect = rect(mat_field_normal_x, mat_field_normal_y, mat_field_normal_w, mat_field_normal_h);
+            let rg: Rect = rect(mat_field_rough_x, mat_field_rough_y, mat_field_rough_w, mat_field_rough_h);
+            let mt: Rect = rect(mat_field_metal_x, mat_field_metal_y, mat_field_metal_w, mat_field_metal_h);
+            let ht: Rect = rect(mat_field_height_x, mat_field_height_y, mat_field_height_w, mat_field_height_h);
+            let ao: Rect = rect(mat_field_ao_x, mat_field_ao_y, mat_field_ao_w, mat_field_ao_h);
+            if (ab.w > 0 && point_in_rect(mx, my, ab)) { mat_apply_drop(s_one, "albedo", drop_path); return; }
+            if (nm.w > 0 && point_in_rect(mx, my, nm)) { mat_apply_drop(s_one, "normal", drop_path); return; }
+            if (rg.w > 0 && point_in_rect(mx, my, rg)) { mat_apply_drop(s_one, "rough", drop_path); return; }
+            if (mt.w > 0 && point_in_rect(mx, my, mt)) { mat_apply_drop(s_one, "metal", drop_path); return; }
+            if (ht.w > 0 && point_in_rect(mx, my, ht)) { mat_apply_drop(s_one, "height", drop_path); return; }
+            if (ao.w > 0 && point_in_rect(mx, my, ao)) { mat_apply_drop(s_one, "ao", drop_path); return; }
         }
     }
 
-    /* viewport entity hit-test */
+    /* Anywhere on the inspector assigns the picture to the selection. */
+    if (point_in_rect(mx, my, right_rect()) && sel_count() > 0) {
+        let s: int = sel_first();
+        while (s >= 0) {
+            attach_asset_to(s, drag_asset_path, drag_asset_rel);
+            s = sel_iter_next(s + 1);
+        }
+        if (sel_count() == 1 && (path_is_image(drag_asset_rel) == 1 || path_is_image(drag_asset_path) == 1)) {
+            insp_buf_sprite = drag_asset_path;
+        }
+        return;
+    }
+
+    /* Scene, Play, and UI: drop on an object to assign, or on empty space to place one. */
     let v: Rect = viewport_rect();
-    if (point_in_rect(mx, my, v) && viewport_mode == "scene") {
-        let hit: int = viewport_hit_at(mx, my);
-        if (hit >= 0) { target = hit; where = "viewport"; }
+    if (viewport_mode == "play") v = game_view_rect();
+    if (point_in_rect(mx, my, v) && (viewport_mode == "scene" || viewport_mode == "play" || viewport_mode == "ui")) {
+        let hit: int = -1;
+        if (viewport_mode == "ui") {
+            ui_canvas_layout_game_view(game_view_rect());
+            hit = ui_viewport_hit_at(mx, my);
+        } else {
+            if (viewport_mode == "play") play_snap_to_camera();
+            hit = viewport_hit_at(mx, my);
+        }
+        if (hit >= 0) {
+            attach_asset_to(hit, drag_asset_path, drag_asset_rel);
+            sel_clear();
+            ent_set_selected(hit, 1);
+            last_inspector_slot = -1;
+            if (path_is_image(drag_asset_rel) == 1 || path_is_image(drag_asset_path) == 1) insp_buf_sprite = drag_asset_path;
+            return;
+        }
+        drop_place_asset(mx, my);
+        return;
     }
 
     /* hierarchy row hit-test */
@@ -8658,6 +9989,12 @@ fn drag_preview_draw() {
     draw_outline_rect(r, 1, col_accent());
     draw_text(r.x + 9, r.y + 5, label, col_text_main());
     eng_set_font_size(14);
+    if (drag_asset_path.len() > 0) {
+        if (point_in_rect(mx, my, right_rect())) draw_outline_rect(right_rect(), 2, col_accent());
+        let vr: Rect = viewport_rect();
+        if (viewport_mode == "play") vr = game_view_rect();
+        if (point_in_rect(mx, my, vr)) draw_outline_rect(vr, 2, col_accent());
+    }
 }
 
 fn context_menu_open(x: int, y: int) {
@@ -8690,6 +10027,200 @@ fn context_menu_close() {
     context_menu_active = 0;
     context_submenu     = "";
     context_menu_target = -1;
+    /* Keep the Project-dock target while an inline rename is open. */
+    if (edit_target != "assets_rename") {
+        assets_cm_kind = "";
+        assets_cm_rel = "";
+        assets_cm_path = "";
+        assets_cm_idx = -1;
+    }
+}
+
+fn assets_cm_open_item(kind: string, rel: string, path: string, idx: int, x: int, y: int) {
+    assets_rmb_used = 1;
+    assets_cm_kind = kind;
+    assets_cm_rel = rel;
+    assets_cm_path = path;
+    assets_cm_idx = idx;
+    context_menu_open_for("assets", x, y);
+}
+
+fn file_stem(name: string): string {
+    let base: string = path_basename(name);
+    let i: int = base.len() - 1;
+    while (i > 0) {
+        if (base.substring(i, 1) == ".") return base.substring(0, i);
+        i = i - 1;
+    }
+    return base;
+}
+
+fn begin_assets_rename() {
+    if (assets_cm_kind.len() == 0) return;
+    if (assets_cm_kind == "script" || assets_cm_kind == "blueprint") {
+        begin_script_rename(assets_cm_rel);
+        return;
+    }
+    edit_target = "assets_rename";
+    edit_buf = file_stem(assets_cm_rel);
+    if (assets_cm_kind == "folder") edit_buf = path_basename(assets_cm_rel);
+    edit_caret = edit_buf.len();
+    edit_anchor = edit_caret;
+    rename_buf = edit_buf;
+}
+
+fn assets_renaming_this(kind: string, rel: string, path: string): int {
+    if (edit_target != "assets_rename") return 0;
+    if (assets_cm_kind != kind) return 0;
+    if (path.len() > 0 && assets_cm_path == path) return 1;
+    if (rel.len() > 0 && assets_cm_rel == rel) return 1;
+    return 0;
+}
+
+fn assets_rename_finish(got: string) {
+    if (got == rename_buf || got.len() == 0) {
+        edit_target = "";
+        assets_cm_kind = "";
+        assets_cm_rel = "";
+        assets_cm_path = "";
+        assets_cm_idx = -1;
+        return;
+    }
+    if (script_name_ok(got) == 0) {
+        eng_log("[assets] rename needs a name without special characters");
+        edit_target = "";
+        assets_cm_kind = "";
+        assets_cm_rel = "";
+        assets_cm_path = "";
+        assets_cm_idx = -1;
+        return;
+    }
+    let kind: string = assets_cm_kind;
+    let rel: string = assets_cm_rel;
+    let path: string = assets_cm_path;
+    let idx: int = assets_cm_idx;
+    edit_target = "";
+    assets_cm_kind = "";
+    assets_cm_rel = "";
+    assets_cm_path = "";
+    assets_cm_idx = -1;
+    if (kind == "folder") {
+        let parent: string = path_dirname(path);
+        let dst: string = proj_path_join(parent, got);
+        if (eng_fs_exists(dst) == 1) { eng_log("[folder] already exists: " + got); return; }
+        if (eng_fs_copy_tree(path, dst) == 0) { eng_log("[folder] rename failed"); return; }
+        eng_fs_remove_tree(path);
+        eng_log("[folder] renamed -> " + got);
+        if (assets_root_for_tab() == "scenes") proj_rescan_scenes();
+        else if (assets_root_for_tab() == "scripts") proj_rescan_scripts();
+        else if (assets_root_for_tab() == "assets") proj_rescan_assets();
+        else proj_rescan_prefabs();
+        return;
+    }
+    if (kind == "scene") {
+        if (idx < 0 || idx >= proj_scene_count()) return;
+        let old_rel: string = proj_scene_rel(idx);
+        let old_abs: string = proj_scene_abs(idx);
+        let new_rel: string = rel_join(path_dirname(old_rel), got + ".scene");
+        if (new_rel == old_rel) return;
+        let new_abs: string = proj_path_join(proj_root(), new_rel);
+        if (eng_fs_exists(new_abs) == 1) { eng_log("[scene] already exists: " + new_rel); return; }
+        ensure_parent_dir(new_abs);
+        if (eng_fs_copy_file(old_abs, new_abs) == 0) { eng_log("[scene] rename failed"); return; }
+        /* Keep the slot. Removing the open scene refuses when it is the only
+           one, and otherwise saves its entities over whichever scene slides
+           into that index. */
+        if (proj_rename_scene(idx, new_rel) == 0) {
+            eng_fs_remove_file(new_abs);
+            eng_log("[scene] rename failed");
+            return;
+        }
+        eng_fs_remove_file(old_abs);
+        eng_log("[scene] renamed -> " + new_rel);
+        return;
+    }
+    if (kind == "asset") {
+        let parent: string = path_dirname(path);
+        let ext: string = "";
+        let base: string = path_basename(path);
+        let dot: int = -1;
+        let i: int = 0;
+        while (i < base.len()) {
+            if (base.substring(i, 1) == ".") dot = i;
+            i = i + 1;
+        }
+        if (dot >= 0) ext = base.substring(dot, base.len() - dot);
+        let dst: string = proj_path_join(parent, got + ext);
+        if (eng_fs_exists(dst) == 1) { eng_log("[asset] already exists"); return; }
+        if (eng_fs_copy_file(path, dst) == 0) { eng_log("[asset] rename failed"); return; }
+        eng_fs_remove_file(path);
+        proj_rescan_assets();
+        eng_log("[asset] renamed -> " + got + ext);
+        return;
+    }
+    if (kind == "prefab") {
+        let parent: string = path_dirname(path);
+        let dst: string = proj_path_join(parent, got + ".prefab");
+        if (eng_fs_exists(dst) == 1) { eng_log("[prefab] already exists"); return; }
+        if (eng_fs_copy_file(path, dst) == 0) { eng_log("[prefab] rename failed"); return; }
+        eng_fs_remove_file(path);
+        proj_rescan_prefabs();
+        eng_log("[prefab] renamed -> " + got + ".prefab");
+        return;
+    }
+}
+
+fn assets_delete_item() {
+    let kind: string = assets_cm_kind;
+    let rel: string = assets_cm_rel;
+    let path: string = assets_cm_path;
+    let idx: int = assets_cm_idx;
+    if (kind == "folder") {
+        if (path.len() == 0) return;
+        eng_fs_remove_tree(path);
+        eng_log("[folder] deleted " + rel);
+        if (assets_root_for_tab() == "scenes") proj_rescan_scenes();
+        else if (assets_root_for_tab() == "scripts") proj_rescan_scripts();
+        else if (assets_root_for_tab() == "assets") proj_rescan_assets();
+        else proj_rescan_prefabs();
+        return;
+    }
+    if (kind == "scene") {
+        if (idx >= 0) delete_scene_at(idx);
+        return;
+    }
+    if (kind == "script" || kind == "blueprint") {
+        delete_script_named(rel);
+        return;
+    }
+    if (kind == "asset") {
+        if (path.len() == 0) return;
+        eng_fs_remove_file(path);
+        proj_rescan_assets();
+        eng_log("[asset] deleted " + rel);
+        return;
+    }
+    if (kind == "prefab") {
+        if (path.len() == 0) return;
+        eng_fs_remove_file(path);
+        proj_rescan_prefabs();
+        eng_log("[prefab] deleted " + rel);
+        return;
+    }
+}
+
+fn assets_attach_item() {
+    let s: int = sel_first();
+    if (s < 0) return;
+    if (assets_cm_kind == "script" || assets_cm_kind == "blueprint") {
+        undo_save_modify(s);
+        ent_set_script(s, assets_cm_rel);
+        eng_log("[script] attached " + assets_cm_rel + " to " + ent_name(s));
+        return;
+    }
+    if (assets_cm_kind == "asset") {
+        attach_asset_to(s, assets_cm_path, assets_cm_rel);
+    }
 }
 
 /* Where to spawn an entity created from the context menu. Uses the
@@ -9092,8 +10623,185 @@ fn cm_draw_ui_submenu(): int {
     return any_hover;
 }
 
+fn assets_cm_draw_create_submenu() {
+    let dw: int = 180;
+    let item_h: int = 22;
+    /* Folder, Nexa Script, Blueprint, Scene, separator, Import Asset */
+    let dh: int = 8 + item_h * 5 + 8;
+    let rx: int = context_submenu_x;
+    let ry: int = context_submenu_y;
+    if (rx + dw > WIN_W) rx = context_menu_x - dw + 2;
+    if (ry + dh > WIN_H) ry = WIN_H - dh - 4;
+    context_subbox_x = rx;
+    context_subbox_y = ry;
+    context_subbox_w = dw;
+    context_subbox_h = dh;
+    chrome_popup(rect(rx, ry, dw, dh));
+    let yy: int = ry + 4;
+
+    if (menu_item(rx + 2, yy, dw - 4, "Folder", "") == 1) {
+        context_menu_close();
+        create_new_folder();
+        return;
+    }
+    yy = yy + item_h;
+    if (menu_item(rx + 2, yy, dw - 4, "Nexa Script", "") == 1) {
+        context_menu_close();
+        create_new_script("");
+        return;
+    }
+    yy = yy + item_h;
+    if (menu_item(rx + 2, yy, dw - 4, "Blueprint", "") == 1) {
+        context_menu_close();
+        create_new_blueprint();
+        return;
+    }
+    yy = yy + item_h;
+    if (menu_item(rx + 2, yy, dw - 4, "Scene", "") == 1) {
+        context_menu_close();
+        add_new_scene();
+        viewport_show("scene");
+        return;
+    }
+    yy = yy + item_h;
+    menu_separator(rx, yy + 3, dw);
+    yy = yy + 8;
+    if (menu_item(rx + 2, yy, dw - 4, "Import Asset...", "") == 1) {
+        context_menu_close();
+        import_asset_dialog();
+        return;
+    }
+}
+
+fn assets_context_menu_draw() {
+    let mx: int = eng_mouse_x();
+    let my: int = eng_mouse_y();
+    let dw: int = 220;
+    let item_h: int = 22;
+    let sep_h: int = 8;
+    let has_sel: int = 0;
+    if (sel_first() >= 0) has_sel = 1;
+    let on_item: int = 0;
+    if (assets_cm_kind.len() > 0) on_item = 1;
+
+    let n_items: int = 1; /* Cancel */
+    let n_seps: int = 1;
+    if (on_item == 1) {
+        n_items = n_items + 2; /* Rename, Delete */
+        if (has_sel == 1 && (assets_cm_kind == "script" || assets_cm_kind == "blueprint" || assets_cm_kind == "asset")) {
+            n_items = n_items + 1; /* Attach */
+            n_seps = n_seps + 1;
+        }
+    } else {
+        n_items = n_items + 1; /* Create */
+        if (has_sel == 1) {
+            n_items = n_items + 1; /* Save as Prefab */
+            n_seps = n_seps + 1;
+        }
+    }
+    let dh: int = 8 + n_items * item_h + n_seps * sep_h;
+    let rx: int = context_menu_x;
+    let ry: int = context_menu_y;
+    if (rx + dw > WIN_W) rx = WIN_W - dw - 4;
+    if (ry + dh > WIN_H) ry = WIN_H - dh - 4;
+    let main_box: Rect = rect(rx, ry, dw, dh);
+    chrome_popup(main_box);
+    let yy: int = ry + 4;
+    let main_hover_kind: string = "";
+
+    if (on_item == 1) {
+        let ren_r: Rect = rect(rx + 2, yy, dw - 4, item_h);
+        if (point_in_rect(mx, my, ren_r)) main_hover_kind = "leaf";
+        if (menu_item(ren_r.x, ren_r.y, ren_r.w, "Rename", "F2") == 1) {
+            begin_assets_rename();
+            context_menu_active = 0;
+            context_submenu = "";
+            return;
+        }
+        yy = yy + item_h;
+
+        let del_r: Rect = rect(rx + 2, yy, dw - 4, item_h);
+        if (point_in_rect(mx, my, del_r)) main_hover_kind = "leaf";
+        if (menu_item(del_r.x, del_r.y, del_r.w, "Delete", "Del") == 1) {
+            assets_delete_item();
+            context_menu_close();
+            return;
+        }
+        yy = yy + item_h;
+
+        if (has_sel == 1 && (assets_cm_kind == "script" || assets_cm_kind == "blueprint" || assets_cm_kind == "asset")) {
+            menu_separator(rx, yy + 4, dw); yy = yy + sep_h;
+            let att_r: Rect = rect(rx + 2, yy, dw - 4, item_h);
+            if (point_in_rect(mx, my, att_r)) main_hover_kind = "leaf";
+            if (menu_item(att_r.x, att_r.y, att_r.w, "Attach to Selection", "") == 1) {
+                assets_attach_item();
+                context_menu_close();
+                return;
+            }
+            yy = yy + item_h;
+        }
+    } else {
+        let opened_create: int = 0;
+        if (context_submenu == "assets_create") opened_create = 1;
+        let create_r: Rect = rect(rx + 2, yy, dw - 4, item_h);
+        if (menu_item_chevron(create_r.x, create_r.y, create_r.w, "Create", opened_create) == 1) {
+            main_hover_kind = "create";
+            context_submenu_x = rx + dw - 2;
+            context_submenu_y = create_r.y - 4;
+        }
+        yy = yy + item_h;
+
+        if (has_sel == 1) {
+            menu_separator(rx, yy + 4, dw); yy = yy + sep_h;
+            let pref_r: Rect = rect(rx + 2, yy, dw - 4, item_h);
+            if (point_in_rect(mx, my, pref_r)) main_hover_kind = "leaf";
+            if (menu_item(pref_r.x, pref_r.y, pref_r.w, "Save Selection as Prefab", "") == 1) {
+                context_menu_close();
+                let s: int = sel_first();
+                if (s >= 0) {
+                    let pname: string = ent_name(s);
+                    if (pname.len() == 0) pname = "prefab";
+                    proj_save_prefab(pname, s);
+                }
+                return;
+            }
+            yy = yy + item_h;
+        }
+    }
+
+    menu_separator(rx, yy + 4, dw); yy = yy + sep_h;
+    let cancel_r: Rect = rect(rx + 2, yy, dw - 4, item_h);
+    if (point_in_rect(mx, my, cancel_r)) main_hover_kind = "leaf";
+    if (menu_item(cancel_r.x, cancel_r.y, cancel_r.w, "Cancel", "Esc") == 1) {
+        context_menu_close();
+        return;
+    }
+
+    if (main_hover_kind == "leaf") context_submenu = "";
+    if (main_hover_kind == "create") context_submenu = "assets_create";
+
+    if (context_menu_active == 0) return;
+    if (on_item == 0 && context_submenu == "assets_create") assets_cm_draw_create_submenu();
+
+    if (mouse_pressed(MOUSE_LEFT)) {
+        let inside: bool = point_in_rect(mx, my, main_box);
+        if (inside == false && context_submenu == "assets_create") {
+            inside = point_in_rect(mx, my, rect(context_subbox_x, context_subbox_y, context_subbox_w, context_subbox_h));
+        }
+        if (inside == false) context_menu_close();
+    }
+    if (key_pressed(VK_ESCAPE)) {
+        if (context_submenu.len() > 0) context_submenu = "";
+        else context_menu_active = 0;
+    }
+}
+
 fn context_menu_draw() {
     if (context_menu_active == 0) return;
+    if (context_menu_source == "assets") {
+        assets_context_menu_draw();
+        return;
+    }
     let mx: int = eng_mouse_x();
     let my: int = eng_mouse_y();
 
@@ -9166,6 +10874,15 @@ fn context_menu_draw() {
                                          ent_r(s), ent_g(s), ent_b(s));
                 if (ns >= 0) {
                     ent_set_text(ns, ent_text(s));
+                    ent_set_font_px(ns, ent_font_px(s));
+                    ent_set_font_ox(ns, ent_font_ox(s));
+                    ent_set_font_oy(ns, ent_font_oy(s));
+                    ent_set_ui_radius(ns, ent_ui_radius(s));
+                    ent_set_ui_border(ns, ent_ui_border(s));
+                    ent_set_ui_align(ns, ent_ui_align(s));
+                    ent_set_ui_shadow(ns, ent_ui_shadow(s));
+                    ent_set_ui_text(ns, ent_ui_text(s));
+                    ent_set_pixel(ns, ent_pixel(s));
                     ent_set_script(ns, ent_script(s));
                     ent_set_sprite(ns, ent_sprite(s));
                     ent_set_parent(ns, ent_parent(s));
@@ -9375,14 +11092,13 @@ fn viewport_input() {
     if (edit_tool == "scale" && inside && mouse_pressed(MOUSE_LEFT) &&
         drag_active == 0 && box_select_active == 0 && rotate_active == 0 &&
         scale_uniform_active == 0 && resize_active == 0) {
+        let rh: int = resize_handle_at(mx, my);
+        if (rh >= 0 && resize_slot >= 0 && (ent_is_ui(resize_slot) == 1 || xform_local == 0)) {
+            resize_begin(resize_slot, rh);
+            return;
+        }
         if (xform_local == 1) {
             if (scale_local_press(mx, my) == 1) return;
-        } else {
-            let rh: int = resize_handle_at(mx, my);
-            if (rh >= 0 && resize_slot >= 0) {
-                resize_begin(resize_slot, rh);
-                return;
-            }
         }
     }
 
@@ -9420,7 +11136,7 @@ fn viewport_input() {
             } else if (edit_tool == "rotate") {
                 rotate_begin_drag(hit, mx, my);
                 rotate_apply_drag(mx, my);
-            } else if (edit_tool == "scale") {
+            } else if (edit_tool == "scale" && ent_is_ui(hit) == 0) {
                 scale_begin_uniform(hit, mx, my);
                 scale_apply_uniform(mx, my);
             }
@@ -9449,7 +11165,12 @@ fn viewport_input() {
         return;
     }
     if (scale_uniform_active == 1 && mouse_down(MOUSE_LEFT)) {
-        scale_apply_uniform(mx, my);
+        if (ent_is_ui(scale_uniform_slot) == 1) {
+            ui_canvas_layout_game_view(game_view_rect());
+            scale_apply_uniform_ui(mx, my);
+        } else {
+            scale_apply_uniform(mx, my);
+        }
         return;
     }
 
@@ -9465,23 +11186,48 @@ fn viewport_input() {
                     s = sel_iter_next(s + 1);
                 }
                 undo_end_group();
+                let origin: int = sel_move_root();
+                if (origin < 0) origin = sel_ui_move_root();
+                if (origin >= 0) {
+                    move_from_x = ent_x(origin);
+                    move_from_y = ent_y(origin);
+                }
                 drag_recorded = 1;
             }
-            let dxw: float = dx_screen;
-            let dyw: float = dy_screen;
-            let dx: int = dxw / cam_zoom;
-            let dy: int = dyw / cam_zoom;
-            move_along(dx, dy, move_axis, sel_first());
-            dx = move_out_x;
-            dy = move_out_y;
-            sel_snap_delta(dx, dy, 0);
-            dx = move_out_x;
-            dy = move_out_y;
-            if (dx != 0 || dy != 0) {
-                if (sel_move_by(dx, dy, 0) == 1) {
-                    drag_anchor_x = mx;
-                    drag_anchor_y = my;
+            if (sel_move_root() < 0 && sel_ui_move_root() >= 0) {
+                ui_canvas_layout_game_view(game_view_rect());
+                let uroot: int = sel_ui_move_root();
+                let dxf: float = dx_screen;
+                let dyf: float = dy_screen;
+                let dxu: int = ui_round(dxf / ui_scale_x);
+                let dyu: int = ui_round(dyf / ui_scale_y);
+                move_along(dxu, dyu, move_axis, uroot);
+                let tx: int = drag_snap_target(move_from_x, move_out_x);
+                let ty: int = drag_snap_target(move_from_y, move_out_y);
+                let adx: int = tx - ent_x(uroot);
+                let ady: int = ty - ent_y(uroot);
+                if (adx != 0 || ady != 0) {
+                    let us: int = sel_first();
+                    while (us >= 0) {
+                        if (ent_is_ui(us) == 1 && sel_is_carried(us) == 0) {
+                            if (adx != 0) ent_set_x(us, ent_x(us) + adx);
+                            if (ady != 0) ent_set_y(us, ent_y(us) + ady);
+                        }
+                        us = sel_iter_next(us + 1);
+                    }
                 }
+            } else if (sel_move_root() >= 0) {
+                let wroot: int = sel_move_root();
+                let dxw: float = dx_screen;
+                let dyw: float = dy_screen;
+                let dx: int = dxw / cam_zoom;
+                let dy: int = dyw / cam_zoom;
+                move_along(dx, dy, move_axis, wroot);
+                let tx: int = drag_snap_target(move_from_x, move_out_x);
+                let ty: int = drag_snap_target(move_from_y, move_out_y);
+                let adx: int = tx - ent_x(wroot);
+                let ady: int = ty - ent_y(wroot);
+                if (adx != 0 || ady != 0) sel_move_by(adx, ady, 0);
             }
         }
     }
@@ -9494,21 +11240,40 @@ fn viewport_input() {
         let y1: int = my;
         if (x1 < x0) { let t: int = x0; x0 = x1; x1 = t; }
         if (y1 < y0) { let t: int = y0; y0 = y1; y1 = t; }
+        ui_canvas_layout_game_view(game_view_rect());
         let wx0: float = screen_to_world_x(x0);
         let wy0: float = screen_to_world_y(y0);
         let wx1: float = screen_to_world_x(x1);
         let wy1: float = screen_to_world_y(y1);
+        let ux0: float = screen_to_ui_x(x0);
+        let uy0: float = screen_to_ui_y(y0);
+        let ux1: float = screen_to_ui_x(x1);
+        let uy1: float = screen_to_ui_y(y1);
         let i: int = ent_iter_next(0);
         while (i >= 0) {
+            if (ent_is_ui(i) == 1) {
+                i = ent_iter_next(i + 1);
+                continue;
+            }
             let ex0: int = ent_x(i);
             let ey0: int = ent_y(i);
             let ex1: int = ex0 + ent_w(i);
             let ey1: int = ey0 + ent_h(i);
+            let bx0: float = wx0;
+            let by0: float = wy0;
+            let bx1: float = wx1;
+            let by1: float = wy1;
+            if (ent_is_ui(i) == 1) {
+                bx0 = ux0;
+                by0 = uy0;
+                bx1 = ux1;
+                by1 = uy1;
+            }
             let overlap: int = 1;
-            if (ex1 < wx0) overlap = 0;
-            if (ex0 > wx1) overlap = 0;
-            if (ey1 < wy0) overlap = 0;
-            if (ey0 > wy1) overlap = 0;
+            if (ex1 < bx0) overlap = 0;
+            if (ex0 > bx1) overlap = 0;
+            if (ey1 < by0) overlap = 0;
+            if (ey0 > by1) overlap = 0;
             if (overlap == 1) ent_set_selected(i, 1);
             i = ent_iter_next(i + 1);
         }
@@ -10599,7 +12364,7 @@ fn spawn_ui_panel_at(x_screen: int, y_screen: int): int {
     let uyf: float = screen_to_ui_y(y_screen);
     let ux: int = uxf - 80.0;
     let uy: int = uyf - 50.0;
-    return ent_create("rect", "panel", ux, uy, 160, 100, 60, 64, 80);
+    return ent_create("panel", "Panel", ux, uy, 160, 100, 60, 64, 80);
 }
 
 /* "UI Button": rect with text. */
@@ -10618,7 +12383,7 @@ fn spawn_ui_button_at(x_screen: int, y_screen: int): int {
     let uyf: float = screen_to_ui_y(y_screen);
     let ux: int = uxf - 60.0;
     let uy: int = uyf - 14.0;
-    let s: int = ent_create("rect", "button", ux, uy, 120, 28, 80, 110, 180);
+    let s: int = ent_create("button", "Button", ux, uy, 120, 28, 80, 110, 180);
     if (s >= 0) ent_set_text(s, "Button");
     return s;
 }
@@ -10897,6 +12662,33 @@ fn web_entity_json_from_line(line: string): string {
     js = js + ",\"emitSpread\":" + emspread;
     js = js + ",\"emitSize\":" + emsize;
     js = js + ",\"emitHD\":" + emhd;
+    let efont: int = 0;
+    if (nparts > 78) efont = parse_int_or(parts[78], 0);
+    js = js + ",\"fontPx\":" + efont;
+    let eox: int = 0;
+    if (nparts > 79) eox = parse_int_or(parts[79], 0);
+    let eoy: int = 0;
+    if (nparts > 80) eoy = parse_int_or(parts[80], 0);
+    js = js + ",\"fontOx\":" + eox;
+    js = js + ",\"fontOy\":" + eoy;
+    let erad: int = -1;
+    if (nparts > 81) erad = parse_int_or(parts[81], -1);
+    let ebdr: int = -1;
+    if (nparts > 82) ebdr = parse_int_or(parts[82], -1);
+    let ealign: int = 0;
+    if (nparts > 83) ealign = parse_int_or(parts[83], 0);
+    let eshadow: int = 0;
+    if (nparts > 84) eshadow = parse_int_or(parts[84], 0);
+    let etext: int = -1;
+    if (nparts > 85) etext = parse_int_or(parts[85], -1);
+    js = js + ",\"uiRadius\":" + erad;
+    js = js + ",\"uiBorder\":" + ebdr;
+    js = js + ",\"uiAlign\":" + ealign;
+    js = js + ",\"uiShadow\":" + eshadow;
+    js = js + ",\"uiText\":" + etext;
+    let epix: int = 0;
+    if (nparts > 86) epix = parse_int_or(parts[86], 0);
+    js = js + ",\"pixel\":" + epix;
     js = js + "}";
     return js;
 }
@@ -11258,6 +13050,12 @@ fn export_draw() {
         if (prot == 3) draw_text(x, y, "Studio: dual ChaCha, triple split, keyed tamper seal.", col_text_dim());
         th_font(14);
         y = y + 32;
+        export_onoff(x, y, w, "Console window", "export_console", 0);
+        y = y + 36;
+        th_font(12);
+        draw_text(x, y, "On opens a console beside the game. Off leaves only the game window.", col_text_dim());
+        th_font(14);
+        y = y + 32;
     }
     export_onoff(x, y, w, "Open folder when done", "export_open_folder", 1);
     y = y + 40;
@@ -11419,6 +13217,7 @@ fn ext_rebuild_begin(i: int) {
 }
 
 fn ext_rebuild_overlay_draw() {
+    r3d_dismiss();
     let pw: int = 520;
     let ph: int = 180;
     let px: int = (WIN_W - pw) / 2;
@@ -12179,6 +13978,37 @@ fn export_is_source(rel: string): int {
     return 0;
 }
 
+/* 2 = windowed, 3 = console. Applied to the shipped .exe before the content key is sealed in. */
+fn export_set_console(path: string, on: int): int {
+    let ok: int = 0;
+    inline_cpp! {
+        FILE* f = fopen(path.c_str(), "r+b");
+        if (f) {
+            unsigned char mz[64];
+            int pe = 0;
+            int magic = 0;
+            if (fread(mz, 1, 64, f) == 64 && mz[0] == 'M' && mz[1] == 'Z') {
+                pe = (int)mz[0x3C] | ((int)mz[0x3D] << 8) | ((int)mz[0x3E] << 16) | ((int)mz[0x3F] << 24);
+            }
+            if (pe >= 64 && pe <= 4096 && fseek(f, pe, SEEK_SET) == 0) {
+                unsigned char sig[4];
+                if (fread(sig, 1, 4, f) == 4 && sig[0] == 'P' && sig[1] == 'E' && sig[2] == 0 && sig[3] == 0
+                    && fseek(f, pe + 24, SEEK_SET) == 0) {
+                    unsigned char mag[2];
+                    if (fread(mag, 1, 2, f) == 2) magic = (int)mag[0] | ((int)mag[1] << 8);
+                }
+            }
+            /* Optional-header magic, not the COFF machine field. Both PE32 and PE32+ keep Subsystem at +68. */
+            if ((magic == 0x10B || magic == 0x20B) && fseek(f, pe + 24 + 68, SEEK_SET) == 0) {
+                unsigned short sub = on ? 3 : 2;
+                if (fwrite(&sub, 2, 1, f) == 1) ok = 1;
+            }
+            fclose(f);
+        }
+    }
+    return ok;
+}
+
 fn export_fail(msg: string) {
     eng_log("[export] " + msg);
     dock_tab = "console";
@@ -12261,6 +14091,19 @@ fn do_export() {
     }
     if (eng_fs_copy_file(unw_src, proj_path_join(dist_dir, "libunwind.dll")) == 0) {
         export_fail("FAILED to copy libunwind.dll"); return;
+    }
+    if (pref_int("export_console", 0) == 1) {
+        if (export_set_console(runtime_dst, 1) == 1) eng_log("[export] console window on");
+        else eng_log("[export] FAILED to turn the console window on");
+    } else {
+        if (export_set_console(runtime_dst, 0) == 1) eng_log("[export] console window off");
+        else eng_log("[export] FAILED to turn the console window off");
+    }
+
+    /* Filament is the 3D renderer. A 2D build does not ship it. */
+    if (scene_render3d() == 1) {
+        let fil_src: string = export_find_runtime_dll("filament_bridge.dll");
+        if (fil_src.len() > 0) eng_fs_copy_file(fil_src, proj_path_join(dist_dir, "filament_bridge.dll"));
     }
 
     let root: string = proj_root();
@@ -12583,6 +14426,10 @@ fn edit_hotkeys() {
     if (edit_target.len() > 0) return;  /* don't fire while typing */
     if (viewport_mode == "script") {
         /* script editor handles its own input */
+        if (key_pressed(VK_F2)) {
+            let target: string = open_script_rel();
+            if (target.len() > 0) begin_script_rename(target);
+        }
         if (ctrl_held() && key_pressed(VK_P)) want_play = 1;
         if (ctrl_held() && key_pressed(VK_B)) compile_begin("idle");
         return;
@@ -12632,6 +14479,15 @@ fn edit_hotkeys() {
                                          ent_r(s), ent_g(s), ent_b(s));
                 if (ns >= 0) {
                     ent_set_text(ns, ent_text(s));
+                    ent_set_font_px(ns, ent_font_px(s));
+                    ent_set_font_ox(ns, ent_font_ox(s));
+                    ent_set_font_oy(ns, ent_font_oy(s));
+                    ent_set_ui_radius(ns, ent_ui_radius(s));
+                    ent_set_ui_border(ns, ent_ui_border(s));
+                    ent_set_ui_align(ns, ent_ui_align(s));
+                    ent_set_ui_shadow(ns, ent_ui_shadow(s));
+                    ent_set_ui_text(ns, ent_ui_text(s));
+                    ent_set_pixel(ns, ent_pixel(s));
                     ent_set_script(ns, ent_script(s));
                     ent_set_sprite(ns, ent_sprite(s));
                     ent_set_parent(ns, ent_parent(s));
@@ -13579,8 +15435,41 @@ fn settings_apply_play_size(pw: int, ph: int) {
     if (edit_target == "set_pw" || edit_target == "set_ph") edit_target = "";
 }
 
+fn scene_file_is_3d(path: string): int {
+    let r: int = 0;
+    inline_cpp! {
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f) {
+            char buf[512];
+            std::string body;
+            size_t nread = 0;
+            while ((nread = fread(buf, 1, sizeof(buf), f)) > 0) body.append(buf, nread);
+            fclose(f);
+            if (body.find("RENDER 3D") != std::string::npos) r = 1;
+        }
+    }
+    return r;
+}
+
+/* 1 when any scene in the open project plays in 3D. */
+fn project_uses_3d(): int {
+    if (scene_render3d() == 1) return 1;
+    if (proj_loaded() == 0) return 0;
+    let n: int = proj_scene_count();
+    let i: int = 0;
+    while (i < n) {
+        if (scene_file_is_3d(proj_scene_abs(i)) == 1) return 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn settings_page_graphics(x: int, y: int, w: int) {
-    y = settings_page_header(x, y, "Graphics", "Renderer, Filament, play resolution, and 3D options");
+    let use3d: int = project_uses_3d();
+    let head: string = "Play resolution and the game window";
+    if (use3d == 1) head = "Renderer, Filament, play resolution, and 3D options";
+    y = settings_page_header(x, y, "Graphics", head);
+    if (use3d == 1) {
     y = chrome_section(x, y, w, "RENDERER");
     let which: int = pref_int("renderer", 33);
     let k11: string = "secondary";
@@ -13602,8 +15491,10 @@ fn settings_page_graphics(x: int, y: int, w: int) {
     y = y + 36;
     y = settings_hint(x, y, w, "Lights, shadows, and textures the 3D view. Off uses the renderer above.");
     y = y + 14;
+    }
     y = chrome_section(x, y, w, "PLAY WINDOW");
-    draw_text(x, y, "3D Play and an exported game open at this size.", col_text_dim());
+    if (use3d == 1) draw_text(x, y, "3D Play and an exported game open at this size.", col_text_dim());
+    else draw_text(x, y, "An exported game opens at this size.", col_text_dim());
     y = y + 24;
     let bw: int = (w - 16) / 3;
     let w1280: string = "secondary";
@@ -13800,6 +15691,7 @@ fn settings_draw() {
 // =============================================================================
 
 fn edit_frame() {
+    os_file_drop_handle();
     edit_hotkeys();
     menu_dismiss_if_outside_click();
     drag_update();

@@ -671,9 +671,10 @@ fn bp_draw_tabs() {
 
 fn bp_editor_input() {
     if (bp_is_open() == 0) return;
-    /* Keys typed while no blueprint field is focused must not sit in the queue.
-       The message box is focused during draw, so a later click would dump them all. */
-    if (edit_target.len() < 3 || edit_target.substring(0, 3) != "bp_") {
+    /* Keys typed while nothing is focused must not sit in the queue.
+       A field opened later this frame (the node finder) would dump them all.
+       A rename or other field that is already focused keeps its keystrokes. */
+    if (edit_target.len() == 0) {
         let junk: int = typed_pop();
         while (junk != 0) junk = typed_pop();
     }
@@ -2165,10 +2166,27 @@ fn bp_editor_draw() {
     let strip: Rect = bp_strip();
     draw_fill_rect(strip, col_panel_dark());
     draw_fill_rect(rect(strip.x, strip.y + strip.h - 1, strip.w, 1), col_border_soft());
-    let title: string = path_basename(bp_path());
+    let title: string = path_basename(script_stem(bp_path()));
+    let open_rel: string = open_script_rel();
     th_font(14);
-    draw_text(r.x + 12, th_text_y(strip.y, strip.h), title, col_text_main());
-    if (bp_dirty() == 1) {
+    let bx0: int = r.x + r.w - 190;
+    if (bp_host_on == 1) bx0 = r.x + r.w - 96;
+    if (open_rel.len() > 0 && rename_rel == open_rel) {
+        let fw: int = bx0 - (r.x + 12) - 16;
+        if (fw < 80) fw = 80;
+        if (fw > 280) fw = 280;
+        let was: string = edit_target;
+        let got: string = ui_field("script_rename", rect(r.x + 12, strip.y + 5, fw, 22), rename_buf);
+        if (was == "script_rename" && edit_target != "script_rename") script_rename_finish(open_rel, got);
+    } else {
+        draw_text(r.x + 12, th_text_y(strip.y, strip.h), title, col_text_main());
+        let tw: int = eng_text_width(title);
+        if (tw < 24) tw = 24;
+        if (mouse_pressed(MOUSE_LEFT) && point_in_rect(eng_mouse_x(), eng_mouse_y(), rect(r.x + 8, strip.y + 2, tw + 16, strip.h - 4))) {
+            if (open_rel.len() > 0) begin_script_rename(open_rel);
+        }
+    }
+    if (bp_dirty() == 1 && (open_rel.len() == 0 || rename_rel != open_rel)) {
         let dx: int = r.x + 12 + eng_text_width(title) + 10;
         th_chip(rect(dx, strip.y + 5, 72, strip.h - 10), "UNSAVED", col_warn());
     }

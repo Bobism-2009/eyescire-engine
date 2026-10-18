@@ -29,9 +29,16 @@
 
   function rgb(r, g, b) { return `rgb(${r},${g},${b})`; }
 
+  function promoteKind(kind, name) {
+    if (kind !== 'rect') return kind;
+    if (name === 'empty' || name === 'panel' || name === 'button' || name === 'checkbox'
+        || name === 'toggle' || name === 'slider' || name === 'bar' || name === 'field') return name;
+    return kind;
+  }
+
   function entIsEmpty(e) {
     if (e.kind && e.kind.indexOf('light_') === 0) return true;   // 3D lights: nothing to draw in 2D
-    return e.kind === 'empty' || (e.kind === 'rect' && e.name === 'empty');
+    return e.kind === 'empty';
   }
 
   function entIsCamera(e) {
@@ -42,14 +49,13 @@
     if (!e) return false;
     if (e.kind === 'label' || e.kind === 'ui_label') return true;
     if (e.kind === 'ui_panel' || e.kind === 'ui_button') return true;
-    if (e.kind === 'rect' && (e.name === 'panel' || e.name === 'button')) return true;
     return uiName(e, 'panel') || uiName(e, 'button') || uiName(e, 'checkbox')
         || uiName(e, 'toggle') || uiName(e, 'slider') || uiName(e, 'bar') || uiName(e, 'field');
   }
 
   function uiName(e, want) {
     if (!e) return false;
-    return e.kind === want || e.kind === 'ui_' + want || (e.kind === 'rect' && e.name === want);
+    return e.kind === want || e.kind === 'ui_' + want;
   }
 
   function ownsCaption(e) {
@@ -129,7 +135,7 @@
         slot,
         id: raw.id,
         name: raw.name || '',
-        kind: raw.kind || 'rect',
+        kind: promoteKind(raw.kind || 'rect', raw.name || ''),
         x: raw.x | 0, y: raw.y | 0,
         w: raw.w | 0, h: raw.h | 0,
         r: raw.r | 0, g: raw.g | 0, b: raw.b | 0,
@@ -201,14 +207,88 @@
 
   function clampFont(px) {
     if (px < 6) return 6;
-    if (px > 96) return 96;
+    if (px > 512) return 512;
+    return px;
+  }
+  function fitFontPx(px, sw, text, pad) {
+    px = clampFont(Math.round(px));
+    if (!text) return px;
+    ctx.font = px + 'px ' + FONT_FACE;
+    const tw = ctx.measureText(text).width;
+    const room = Math.max(8, sw - pad);
+    if (tw > room && tw > 0) px = clampFont(Math.floor(px * room / tw));
     return px;
   }
   function labelFontPx(sh) { return clampFont(Math.round(sh)); }
   function rectTextFontPx(sh) { return clampFont(Math.round(sh * 0.6)); }
+  function textFontPx(e, sh, label) {
+    const stored = e && e.fontPx | 0;
+    if (stored > 0) return clampFont(Math.round(stored * uiScaleY));
+    return label ? labelFontPx(sh) : rectTextFontPx(sh);
+  }
+  function uiHa(e) { return ((e && e.uiAlign) || 0) % 3; }
+  function uiVa(e) { return Math.floor(((e && e.uiAlign) || 0) / 3); }
+  function uiTextRgb(e, fallback) {
+    if (!e || e.uiText == null || e.uiText < 0) return fallback;
+    const c = e.uiText | 0;
+    return [(c >> 16) & 255, (c >> 8) & 255, c & 255];
+  }
+  function uiRadius(e, sw, sh, auto) {
+    if (!e || e.uiRadius == null || e.uiRadius < 0) return auto;
+    let rad = e.uiRadius * uiScaleY;
+    if (rad < 0) rad = 0;
+    if (sh > 0 && rad * 2 > sh) rad = sh / 2;
+    if (sw > 0 && rad * 2 > sw) rad = sw / 2;
+    return rad;
+  }
+
+  function fillTextBox(text, sx, sy, sw, sh, px, color, ox, oy, ha, va) {
+    ox = ox || 0;
+    oy = oy || 0;
+    ha = ha || 0;
+    va = va || 0;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, sy, sw, sh);
+    ctx.clip();
+    ctx.fillStyle = color;
+    ctx.font = px + 'px ' + FONT_FACE;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    const wrap = (ha === 0 && va === 0) ? Math.max(1, sw - ox) : Math.max(1, sw);
+    const words = String(text || '').split(' ');
+    const lines = [];
+    let line = '';
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      const test = line ? line + ' ' + word : word;
+      if (line && ctx.measureText(test).width > wrap) {
+        lines.push(line);
+        line = word;
+      } else line = test;
+    }
+    if (line) lines.push(line);
+    const lh = px + 2;
+    const block = lines.length * lh;
+    let y = sy + (ha === 0 && va === 0 ? oy : 0);
+    if (!(ha === 0 && va === 0)) {
+      if (va === 1 && block < sh) y = sy + (sh - block) / 2;
+      if (va === 2 && block < sh) y = sy + sh - block;
+    }
+    let x = sx + (ha === 0 && va === 0 ? ox : 0);
+    ctx.textAlign = 'left';
+    if (ha === 1) { ctx.textAlign = 'center'; x = sx + sw / 2; }
+    if (ha === 2) { ctx.textAlign = 'right'; x = sx + sw; }
+    for (let i = 0; i < lines.length; i++) {
+      if (y > sy + sh) break;
+      ctx.fillText(lines[i], x, y);
+      y += lh;
+    }
+    ctx.restore();
+  }
 
   function entIsButton(e) {
-    return e.kind === 'ui_button' || (e.kind === 'rect' && e.name === 'button');
+    return e.kind === 'button' || e.kind === 'ui_button';
   }
 
   function roundRectPath(x, y, w, h, r) {
@@ -258,7 +338,7 @@
   function pollButtons() {
     if (!mousePressed) return;
     let hit = null;
-    for (const e of entities) {
+    for (const e of entitiesByDepth()) {
       if (!e || !e.active || !entShown(e) || !entIsButton(e) || !e.btnToggle) continue;
       const sx = uiToScreenX(e.x), sy = uiToScreenY(e.y);
       const sw = uiLenW(e.w), sh = uiLenH(e.h);
@@ -312,8 +392,8 @@
     ctx.fill();
   }
 
-  function widgetFont(sh) {
-    ctx.font = rectTextFontPx(sh) + 'px ' + FONT_FACE;
+  function widgetFont(e, sh) {
+    ctx.font = textFontPx(e, sh, false) + 'px ' + FONT_FACE;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
   }
@@ -337,8 +417,9 @@
       roundRectPath(sx + 0.5, sy + 0.5, bs - 1, bs - 1, rad);
       ctx.stroke();
     }
-    widgetFont(sh);
-    ctx.fillStyle = 'rgb(232,233,236)';
+    widgetFont(e, sh);
+    const tc = uiTextRgb(e, [232, 233, 236]);
+    ctx.fillStyle = rgb(tc[0], tc[1], tc[2]);
     ctx.fillText(e.text || e.name || 'Checkbox', sx + bs + 8, sy + sh / 2);
   }
 
@@ -350,13 +431,14 @@
     const ks = Math.max(4, sh - 6);
     const kx = e.btnToggled ? sx + pw - ks - 3 : sx + 3;
     roundFill(kx, sy + (sh - ks) / 2, ks, ks, ks / 2, 'rgb(236,237,240)');
-    widgetFont(sh);
-    ctx.fillStyle = 'rgb(232,233,236)';
+    widgetFont(e, sh);
+    const tc = uiTextRgb(e, [232, 233, 236]);
+    ctx.fillStyle = rgb(tc[0], tc[1], tc[2]);
     ctx.fillText(e.text || e.name || 'Toggle', sx + pw + 8, sy + sh / 2);
   }
 
   function sliderLayout(e, sx, sy, sw, sh) {
-    widgetFont(sh);
+    widgetFont(e, sh);
     const num = String(e.uiValue | 0);
     const numw = ctx.measureText(num).width + 10;
     let labw = 0;
@@ -369,8 +451,9 @@
 
   function drawSlider(e, sx, sy, sw, sh) {
     const L = sliderLayout(e, sx, sy, sw, sh);
-    widgetFont(sh);
-    ctx.fillStyle = 'rgb(210,214,220)';
+    widgetFont(e, sh);
+    const tc = uiTextRgb(e, [210, 214, 220]);
+    ctx.fillStyle = rgb(tc[0], tc[1], tc[2]);
     if (L.labw > 0) ctx.fillText(e.text, sx, sy + sh / 2);
     const trackH = Math.max(4, Math.min(sh, Math.trunc(sh / 3)));
     const ty = sy + (sh - trackH) / 2;
@@ -381,12 +464,12 @@
     const kr = Math.max(5, Math.min(12, sh / 2));
     const kx = L.tx + L.tw * v / 100 - kr;
     roundFill(kx, sy + sh / 2 - kr, kr * 2, kr * 2, kr, 'rgb(236,237,240)');
-    ctx.fillStyle = 'rgb(210,214,220)';
+    ctx.fillStyle = rgb(tc[0], tc[1], tc[2]);
     ctx.fillText(L.num, sx + sw - L.numw + 6, sy + sh / 2);
   }
 
   function drawBar(e, sx, sy, sw, sh) {
-    const rad = Math.max(2, Math.min(8, sh / 2));
+    const rad = uiRadius(e, sw, sh, Math.max(2, Math.min(8, sh / 2)));
     roundFill(sx, sy, sw, sh, rad, 'rgb(28,32,40)');
     const fw = sw * Math.max(0, Math.min(100, e.uiValue | 0)) / 100;
     if (fw > 0) roundFill(sx, sy, fw, sh, rad, rgb(e.r, e.g, e.b));
@@ -394,16 +477,17 @@
 
   function drawField(e, sx, sy, sw, sh) {
     uiBlink++;
-    const rad = Math.min(6, sh / 2);
+    const rad = uiRadius(e, sw, sh, Math.min(6, sh / 2));
     roundFill(sx, sy, sw, sh, rad, 'rgb(22,26,34)');
     ctx.strokeStyle = (uiFocus >= 0 && entities[uiFocus] === e) ? rgb(e.r, e.g, e.b) : 'rgb(70,76,88)';
     ctx.lineWidth = 1;
     roundRectPath(sx + 0.5, sy + 0.5, sw - 1, sh - 1, rad);
     ctx.stroke();
-    widgetFont(sh);
+    widgetFont(e, sh);
     const focused = uiFocus >= 0 && entities[uiFocus] === e;
     const txt = e.text || '';
-    ctx.fillStyle = txt || focused ? 'rgb(232,233,236)' : 'rgb(120,126,138)';
+    const tc = uiTextRgb(e, [232, 233, 236]);
+    ctx.fillStyle = txt || focused ? rgb(tc[0], tc[1], tc[2]) : 'rgb(120,126,138)';
     ctx.fillText(txt || (focused ? '' : 'Text'), sx + 8, sy + sh / 2);
     if (focused && Math.floor(uiBlink / 18) % 2 === 0) {
       const cx = sx + 8 + ctx.measureText(txt).width + 1;
@@ -419,23 +503,33 @@
     if (uiName(e, 'bar')) { drawBar(e, sx, sy, sw, sh); return; }
     if (uiName(e, 'field')) { drawField(e, sx, sy, sw, sh); return; }
     const button = entIsButton(e);
-    let rad = Math.trunc((button ? 6 : 10) * uiScaleY);
-    if (rad < 2) rad = 2;
-    if (rad * 2 > sh) rad = Math.trunc(sh / 2);
-    if (rad * 2 > sw) rad = Math.trunc(sw / 2);
+    let autoRad = Math.trunc((button ? 6 : 10) * uiScaleY);
+    if (autoRad < 2 && !(e.uiRadius >= 0)) autoRad = 2;
+    const rad = uiRadius(e, sw, sh, autoRad);
     let drop = Math.trunc(2 * uiScaleY);
     if (drop < 1) drop = 1;
     const fill = buttonFill(e, sx, sy, sw, sh);
-    ctx.fillStyle = 'rgba(0,0,0,0.275)';
-    roundRectPath(sx, sy + drop, sw, sh, rad);
-    ctx.fill();
+    const shadow = e.uiShadow | 0;
+    if (shadow === 0 || shadow === 2) {
+      ctx.fillStyle = 'rgba(0,0,0,0.275)';
+      roundRectPath(sx, sy + drop, sw, sh, rad);
+      ctx.fill();
+    }
     ctx.fillStyle = rgb(fill[0], fill[1], fill[2]);
     roundRectPath(sx, sy, sw, sh, rad);
     ctx.fill();
-    if (!button) {
+    const border = e.uiBorder == null ? -1 : e.uiBorder;
+    let drawEdge = false;
+    let thick = 1;
+    if (border < 0) drawEdge = !button;
+    else if (border > 0) {
+      drawEdge = true;
+      thick = Math.max(1, border * uiScaleY);
+    }
+    if (drawEdge) {
       const lift = (v) => Math.min(255, v + 22);
-      ctx.strokeStyle = rgb(lift(e.r), lift(e.g), lift(e.b));
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = rgb(lift(fill[0]), lift(fill[1]), lift(fill[2]));
+      ctx.lineWidth = thick;
       roundRectPath(sx + 0.5, sy + 0.5, sw - 1, sh - 1, rad);
       ctx.stroke();
     }
@@ -444,15 +538,14 @@
   function drawEntity(e, sx, sy, sw, sh) {
     if (e.kind === 'label') {
       const txt = e.text || e.name;
-      ctx.fillStyle = rgb(e.r, e.g, e.b);
-      ctx.font = labelFontPx(sh) + 'px ' + FONT_FACE;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText(txt, sx, sy);
+      fillTextBox(txt, sx, sy, sw, sh, textFontPx(e, sh, true), rgb(e.r, e.g, e.b),
+        uiLenW(e.fontOx || 0), uiLenH(e.fontOy || 0), uiHa(e), uiVa(e));
       return;
     }
-    if (e.img) {
+    if (e.img && !(entIsUi(e) && e.kind !== 'sprite2d')) {
       ctx.save();
+      const crisp = (e.pixel | 0) === 1;
+      ctx.imageSmoothingEnabled = !crisp;
       if (e.rot) {
         const cx = sx + sw / 2, cy = sy + sh / 2;
         ctx.translate(cx, cy);
@@ -478,13 +571,9 @@
       ctx.fillRect(sx, sy, sw, sh);
     }
     if (e.text && sw > 10 && sh > 8 && !e.rot && !ownsCaption(e)) {
-      ctx.fillStyle = 'rgb(240,240,240)';
-      ctx.font = rectTextFontPx(sh) + 'px ' + FONT_FACE;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(e.text, sx + sw / 2, sy + sh / 2);
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
+      const tc = uiTextRgb(e, [240, 240, 240]);
+      fillTextBox(e.text, sx, sy, sw, sh, textFontPx(e, sh, false), rgb(tc[0], tc[1], tc[2]),
+        uiLenW(e.fontOx || 0), uiLenH(e.fontOy || 0), uiHa(e), uiVa(e));
     }
   }
 
@@ -610,8 +699,15 @@
     }
   }
 
+  function entitiesByDepth() {
+    const list = [];
+    for (const e of entities) if (e && e.active) list.push(e);
+    list.sort((a, b) => (a.z - b.z) || (a.slot - b.slot));
+    return list;
+  }
+
   function drawWorld() {
-    for (const e of entities) {
+    for (const e of entitiesByDepth()) {
       if (!e || !e.active || !entShown(e) || entIsEmpty(e) || entIsUi(e) || entIsCamera(e) || e.kind === 'emitter') continue;
       drawEntity(e,
         worldToScreenX(e.x), worldToScreenY(e.y),
@@ -621,7 +717,7 @@
 
   function drawUi() {
     uiLayoutGameView();
-    for (const e of entities) {
+    for (const e of entitiesByDepth()) {
       if (!e || !e.active || !entShown(e) || !entIsUi(e)) continue;
       drawEntity(e,
         uiToScreenX(e.x), uiToScreenY(e.y),

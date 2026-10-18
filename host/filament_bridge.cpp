@@ -35,7 +35,9 @@
 
 #include <utils/EntityManager.h>
 
+#include <math/mat3.h>
 #include <math/mat4.h>
+#include <math/quat.h>
 #include <math/vec2.h>
 #include <math/vec3.h>
 #include <math/vec4.h>
@@ -85,6 +87,7 @@ struct App {
     Material* texFade = nullptr;
     Material* unlit = nullptr;
     Material* unlitFront = nullptr;
+    Material* hull = nullptr;
     Material* sprite = nullptr;
     Material* overlayMat = nullptr;
 
@@ -93,6 +96,7 @@ struct App {
     Texture* black = nullptr;
     TextureSampler samp;
     TextureSampler sampEdge;
+    TextureSampler sampSprite;
 
     GpuMesh unit[4];
     std::unordered_map<const void*, GpuMesh> models;
@@ -119,8 +123,11 @@ struct App {
     int capReady = 0;
 
     int shadows = 1;
+    float camNear = 0.05f;
+    float camFar = 4000.f;
     int width = 16, height = 16;
     float clearR = 0, clearG = 0, clearB = 0;
+    HWND hwnd = nullptr;
 };
 
 App* A = nullptr;
@@ -139,13 +146,15 @@ void note(const char* s) {
 
 Material* make_mat(const char* name, Shading shading, BlendingMode blend,
                    bool depthWrite, bool depthCull, VertexDomain domain,
-                   bool uv, bool sampler, const char* code) {
+                   bool uv, bool sampler, const char* code,
+                   const char* vcode = nullptr, bool objVary = false,
+                   backend::CullingMode cull = backend::CullingMode::NONE) {
     filamat::MaterialBuilder b;
     b.name(name)
         .shading(shading)
         .blending(blend)
-        .culling(backend::CullingMode::NONE)
-        .doubleSided(true)
+        .culling(cull)
+        .doubleSided(cull == backend::CullingMode::NONE)
         .depthWrite(depthWrite)
         .depthCulling(depthCull)
         .vertexDomain(domain)
@@ -153,7 +162,17 @@ Material* make_mat(const char* name, Shading shading, BlendingMode blend,
         .targetApi(filamat::MaterialBuilder::TargetApi::OPENGL)
         .optimization(filamat::MaterialBuilder::Optimization::NONE)
         .material(code);
+    if (objVary) {
+        b.variable(filamat::MaterialBuilder::Variable::CUSTOM0, "objPos");
+        b.variable(filamat::MaterialBuilder::Variable::CUSTOM1, "nMat0");
+        b.variable(filamat::MaterialBuilder::Variable::CUSTOM2, "nMat1");
+        b.variable(filamat::MaterialBuilder::Variable::CUSTOM3, "nMat2");
+    }
+    if (vcode) b.materialVertex(vcode);
     if (uv) b.require(VertexAttribute::UV0);
+    /* Custom material.normal needs a tangent frame or bumps look painted-on. */
+    if (uv && shading == Shading::LIT && sampler)
+        b.require(VertexAttribute::TANGENTS);
     if (sampler && shading != Shading::LIT)
         b.parameter("image", backend::SamplerType::SAMPLER_2D);
     if (shading == Shading::LIT && !sampler) {
@@ -169,9 +188,8 @@ Material* make_mat(const char* name, Shading shading, BlendingMode blend,
         b.parameter("baseColor", backend::UniformType::FLOAT4);
         b.parameter("roughness", backend::UniformType::FLOAT);
         b.parameter("metallic", backend::UniformType::FLOAT);
-        b.parameter("useNormal", backend::UniformType::FLOAT);
-        b.parameter("useRough", backend::UniformType::FLOAT);
-        b.parameter("useMetal", backend::UniformType::FLOAT);
+        b.parameter("bumpScale", backend::UniformType::FLOAT);
+        b.parameter("tile", backend::UniformType::FLOAT);
     } else if (!sampler) {
         b.parameter("color", backend::UniformType::FLOAT4);
     } else if (std::strcmp(name, "EyescireSprite") == 0) {
@@ -213,27 +231,60 @@ float3 norm3(float x, float y, float z) {
     return float3{ x / l, y / l, z / l };
 }
 
+/* Build tangent-space quaternions so normal maps light correctly. Prefer
+   per-triangle UV derivatives (reliable on procedural spheres); fall back to
+   Filament SurfaceOrientation when UVs are missing. */
 void build_tangents(const float* pos, const float* nrm, const float* uv, int count,
                     std::vector<quatf>& quats) {
     quats.assign((size_t)count, quatf(1, 0, 0, 0));
     if (!pos || !nrm || count < 1) return;
+    if (uv && count >= 3 && count % 3 == 0) {
+        for (int t = 0; t + 2 < count; t += 3) {
+            float3 p0{ pos[t * 3], pos[t * 3 + 1], pos[t * 3 + 2] };
+            float3 p1{ pos[(t + 1) * 3], pos[(t + 1) * 3 + 1], pos[(t + 1) * 3 + 2] };
+            float3 p2{ pos[(t + 2) * 3], pos[(t + 2) * 3 + 1], pos[(t + 2) * 3 + 2] };
+            float2 u0{ uv[t * 2], uv[t * 2 + 1] };
+            float2 u1{ uv[(t + 1) * 2], uv[(t + 1) * 2 + 1] };
+            float2 u2{ uv[(t + 2) * 2], uv[(t + 2) * 2 + 1] };
+            float3 e1 = p1 - p0, e2 = p2 - p0;
+            float2 d1 = u1 - u0, d2 = u2 - u0;
+            float det = d1.x * d2.y - d2.x * d1.y;
+            float3 T, B;
+            if (std::fabs(det) > 1e-8f) {
+                float r = 1.0f / det;
+                T = (e1 * d2.y - e2 * d1.y) * r;
+                B = (e2 * d1.x - e1 * d2.x) * r;
+            } else {
+                float3 Nf = norm3(nrm[t * 3], nrm[t * 3 + 1], nrm[t * 3 + 2]);
+                T = std::fabs(Nf.y) < 0.9f ? float3{ 0, 1, 0 } : float3{ 1, 0, 0 };
+                T = normalize(cross(Nf, T));
+                B = cross(Nf, T);
+            }
+            for (int k = 0; k < 3; ++k) {
+                int i = t + k;
+                float3 N = norm3(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]);
+                float3 tvec = T - N * dot(N, T);
+                float tl = length(tvec);
+                if (tl < 1e-8f) {
+                    tvec = std::fabs(N.y) < 0.9f ? float3{ 0, 1, 0 } : float3{ 1, 0, 0 };
+                    tvec = normalize(cross(N, tvec));
+                } else {
+                    tvec = tvec * (1.0f / tl);
+                }
+                float3 bvec = cross(N, tvec);
+                if (dot(bvec, B) < 0.f) bvec = -bvec;
+                quats[(size_t)i] = mat3f::packTangentFrame(mat3f{ tvec, bvec, N });
+            }
+        }
+        return;
+    }
     std::vector<float3> P((size_t)count), N((size_t)count);
-    std::vector<float2> U;
     for (int i = 0; i < count; ++i) {
         P[(size_t)i] = float3{ pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2] };
         N[(size_t)i] = norm3(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]);
     }
     geometry::SurfaceOrientation::Builder b;
     b.vertexCount((size_t)count).normals(N.data()).positions(P.data());
-    std::vector<uint3> tris;
-    if (uv && count >= 3 && count % 3 == 0) {
-        U.resize((size_t)count);
-        for (int i = 0; i < count; ++i) U[(size_t)i] = float2{ uv[i * 2], uv[i * 2 + 1] };
-        tris.resize((size_t)count / 3);
-        for (size_t i = 0; i < tris.size(); ++i)
-            tris[i] = uint3{ (uint32_t)(i * 3), (uint32_t)(i * 3 + 1), (uint32_t)(i * 3 + 2) };
-        b.uvs(U.data()).triangleCount(tris.size()).triangles(tris.data());
-    }
     geometry::SurfaceOrientation* so = b.build();
     if (!so) return;
     so->getQuats(quats.data(), (size_t)count);
@@ -323,23 +374,31 @@ void add_mesh(VertexBuffer* vb, IndexBuffer* ib, uint32_t count, const mat4f& xf
     }
 }
 
+/* Per-draw material scalars (set via fb_mat_params before prim/model). */
+static float g_matRough = 0.55f;
+static float g_matMetal = 0.0f;
+static float g_matBump = 1.0f;
+static float g_matTile = 4.0f;
+static float g_matTri = 0.0f;
+
 MaterialInstance* lit_mi(int r, int g, int b, int a, int textured) {
     bool fade = a < 250;
     Material* mat = textured ? (fade ? A->texFade : A->tex) : (fade ? A->litFade : A->lit);
     MaterialInstance* mi = mat->createInstance();
     float4 c{ r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f };
     mi->setParameter("baseColor", RgbaType::sRGB, c);
-    mi->setParameter("roughness", 0.72f);
-    mi->setParameter("metallic", 0.0f);
+    mi->setParameter("roughness", textured ? g_matRough : 0.72f);
+    mi->setParameter("metallic", textured ? g_matMetal : 0.0f);
     if (!textured) mi->setParameter("reflectance", 0.5f);
     else {
-        mi->setParameter("useNormal", 0.0f);
-        mi->setParameter("useRough", 0.0f);
-        mi->setParameter("useMetal", 0.0f);
+        /* White metal and roughness stand in for a missing map, so the
+           scalar factor is what you get. Flat normal is (0, 0, 1). */
+        mi->setParameter("bumpScale", g_matBump);
+        mi->setParameter("tile", g_matTile);
         mi->setParameter("albedo", A->white, A->samp);
         mi->setParameter("normalMap", A->flatN, A->samp);
         mi->setParameter("roughnessMap", A->white, A->samp);
-        mi->setParameter("metallicMap", A->black, A->samp);
+        mi->setParameter("metallicMap", A->white, A->samp);
     }
     return mi;
 }
@@ -348,6 +407,15 @@ MaterialInstance* unlit_mi(int r, int g, int b, int a, int front) {
     Material* mat = front ? A->unlitFront : A->unlit;
     MaterialInstance* mi = mat->createInstance();
     mi->setParameter("color", RgbaType::sRGB, float4{ r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f });
+    return mi;
+}
+
+/* Selection hull: opaque so it sorts before the mesh it surrounds, front faces
+   culled so only the enlarged back faces show, as a rim past the silhouette.
+   A transparent hull draws after every opaque mesh and paints over its owner. */
+MaterialInstance* hull_mi(int r, int g, int b) {
+    MaterialInstance* mi = A->hull->createInstance();
+    mi->setParameter("color", RgbaType::sRGB, float4{ r / 255.0f, g / 255.0f, b / 255.0f, 1.0f });
     return mi;
 }
 
@@ -362,15 +430,20 @@ Texture* upload_rgb(const unsigned char* rgb, int w, int h, bool srgb, bool bott
             d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
         }
     }
+    /* Without mips a tiled 2K map shimmers into speckle at grazing angles. */
+    uint8_t levels = 1;
+    for (int s = w > h ? w : h; s > 1; s >>= 1) ++levels;
     Texture* t = Texture::Builder()
-        .width((uint32_t)w).height((uint32_t)h).levels(1)
+        .width((uint32_t)w).height((uint32_t)h).levels(levels)
         .sampler(Texture::Sampler::SAMPLER_2D)
         .format(srgb ? Texture::InternalFormat::SRGB8_A8 : Texture::InternalFormat::RGBA8)
+        .usage(Texture::Usage::DEFAULT | Texture::Usage::GEN_MIPMAPPABLE)
         .build(*A->engine);
     if (!t) { delete bytes; return nullptr; }
     t->setImage(*A->engine, 0, Texture::PixelBufferDescriptor(
         bytes->data(), bytes->size(),
         Texture::Format::RGBA, Texture::Type::UBYTE, free_buf, bytes));
+    if (levels > 1) t->generateMipmaps(*A->engine);
     return t;
 }
 
@@ -383,6 +456,32 @@ Texture* cached_rgb(const void* key, const unsigned char* rgb, int w, int h, boo
     if (it != A->textures.end() && it->second.tex) A->engine->destroy(it->second.tex);
     A->textures[key] = TexRec{ t, w, h };
     return t;
+}
+
+static void apply_maps(MaterialInstance* mi,
+                       const unsigned char* albedo, int aw, int ah,
+                       const unsigned char* normal, int nw, int nh,
+                       const unsigned char* metal, int mw, int mh,
+                       const unsigned char* rough, int rw, int rh,
+                       const unsigned char* height, int hw, int hh) {
+    if (!mi) return;
+    if (albedo && aw > 0 && ah > 0) {
+        Texture* al = cached_rgb(albedo, albedo, aw, ah, true);
+        if (al) mi->setParameter("albedo", al, A->samp);
+    }
+    if (normal && nw > 0 && nh > 0) {
+        Texture* nt = cached_rgb(normal, normal, nw, nh, false);
+        if (nt) mi->setParameter("normalMap", nt, A->samp);
+    }
+    if (rough && rw > 0 && rh > 0) {
+        Texture* rt = cached_rgb(rough, rough, rw, rh, false);
+        if (rt) mi->setParameter("roughnessMap", rt, A->samp);
+    }
+    if (metal && mw > 0 && mh > 0) {
+        Texture* mt = cached_rgb(metal, metal, mw, mh, false);
+        if (mt) mi->setParameter("metallicMap", mt, A->samp);
+    }
+    (void)height; (void)hw; (void)hh;
 }
 
 void destroy_frame() {
@@ -427,9 +526,9 @@ bool cache_mesh(GpuMesh& dst, const float* pos, const float* nrm, const float* u
     return true;
 }
 
-void push9(std::vector<float>& v, float x, float y, float z, float nx, float ny, float nz) {
-    float s[6] = { x, y, z, nx, ny, nz };
-    v.insert(v.end(), s, s + 6);
+void push8(std::vector<float>& v, float x, float y, float z, float nx, float ny, float nz, float u, float vv) {
+    float s[8] = { x, y, z, nx, ny, nz, u, vv };
+    v.insert(v.end(), s, s + 8);
 }
 
 void build_units() {
@@ -443,16 +542,18 @@ void build_units() {
         { { .5f,-.5f,-.5f},{-.5f,-.5f,-.5f},{-.5f, .5f,-.5f},{ .5f, .5f,-.5f} },
     };
     static const float N[6][3] = { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
+    static const float UV[4][2] = { {0,0},{0,1},{1,1},{1,0} };
     auto tri = [&](std::vector<float>& dst, const float* a, const float* b, const float* c) {
-        push9(dst, a[0], a[1], a[2], a[3], a[4], a[5]);
-        push9(dst, b[0], b[1], b[2], b[3], b[4], b[5]);
-        push9(dst, c[0], c[1], c[2], c[3], c[4], c[5]);
+        push8(dst, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+        push8(dst, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+        push8(dst, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]);
     };
     for (int f = 0; f < 6; ++f) {
-        float q[4][6];
+        float q[4][8];
         for (int i = 0; i < 4; ++i) {
             q[i][0] = F[f][i][0]; q[i][1] = F[f][i][1]; q[i][2] = F[f][i][2];
             q[i][3] = N[f][0]; q[i][4] = N[f][1]; q[i][5] = N[f][2];
+            q[i][6] = UV[i][0]; q[i][7] = UV[i][1];
         }
         tri(box, q[0], q[1], q[2]);
         tri(box, q[0], q[2], q[3]);
@@ -468,9 +569,33 @@ void build_units() {
                 float x = std::sin(th) * std::cos(ph), y = std::cos(th), z = std::sin(th) * std::sin(ph);
                 o[0] = x * .5f; o[1] = y * .5f; o[2] = z * .5f;
                 o[3] = x; o[4] = y; o[5] = z;
+                o[6] = ph / 6.2831853f; o[7] = 1.f - th / 3.14159265f;
             };
-            float a[6], b[6], c[6], d[6];
+            float a[8], b[8], c[8], d[8];
             at(th0, ph0, a); at(th0, ph1, b); at(th1, ph1, c); at(th1, ph0, d);
+            /* One cube face for the whole quad. Latitude-longitude UVs pinch
+               every meridian into the pole, and blending the three faces
+               smears the texture into stripes between them. */
+            float fnx = a[3] + b[3] + c[3] + d[3];
+            float fny = a[4] + b[4] + c[4] + d[4];
+            float fnz = a[5] + b[5] + c[5] + d[5];
+            float ax = std::fabs(fnx), ay = std::fabs(fny), az = std::fabs(fnz);
+            auto putuv = [&](float* o) {
+                if (ax >= ay && ax >= az) {
+                    float s = fnx >= 0.f ? 1.f : -1.f;
+                    o[6] = s * o[2] + 0.5f;
+                    o[7] = o[1] + 0.5f;
+                } else if (ay >= az) {
+                    float s = fny >= 0.f ? 1.f : -1.f;
+                    o[6] = o[0] + 0.5f;
+                    o[7] = s * o[2] + 0.5f;
+                } else {
+                    float s = fnz >= 0.f ? 1.f : -1.f;
+                    o[6] = s * o[0] + 0.5f;
+                    o[7] = o[1] + 0.5f;
+                }
+            };
+            putuv(a); putuv(b); putuv(c); putuv(d);
             tri(sphere, a, b, c);
             tri(sphere, a, c, d);
         }
@@ -479,48 +604,57 @@ void build_units() {
     for (int i = 0; i < CS; ++i) {
         float a0 = (float)i / CS * 6.2831853f;
         float a1 = (float)(i + 1) / CS * 6.2831853f;
+        float u0 = (float)i / CS, u1 = (float)(i + 1) / CS;
         float x0 = std::cos(a0), z0 = std::sin(a0), x1 = std::cos(a1), z1 = std::sin(a1);
-        float p0[6] = { x0 * .5f, .5f, z0 * .5f, x0, 0, z0 };
-        float p1[6] = { x0 * .5f, -.5f, z0 * .5f, x0, 0, z0 };
-        float p2[6] = { x1 * .5f, .5f, z1 * .5f, x1, 0, z1 };
-        float p3[6] = { x1 * .5f, -.5f, z1 * .5f, x1, 0, z1 };
+        float p0[8] = { x0 * .5f, .5f, z0 * .5f, x0, 0, z0, u0, 1 };
+        float p1[8] = { x0 * .5f, -.5f, z0 * .5f, x0, 0, z0, u0, 0 };
+        float p2[8] = { x1 * .5f, .5f, z1 * .5f, x1, 0, z1, u1, 1 };
+        float p3[8] = { x1 * .5f, -.5f, z1 * .5f, x1, 0, z1, u1, 0 };
         tri(cyl, p0, p2, p3);
         tri(cyl, p0, p3, p1);
     }
     for (int cap = 0; cap < 2; ++cap) {
         float y = cap == 0 ? .5f : -.5f;
         float ny = cap == 0 ? 1.f : -1.f;
-        float center[6] = { 0, y, 0, 0, ny, 0 };
+        float center[8] = { 0, y, 0, 0, ny, 0, .5f, .5f };
         for (int i = 0; i < CS; ++i) {
             float a0 = (float)i / CS * 6.2831853f;
             float a1 = (float)(i + 1) / CS * 6.2831853f;
-            float p0[6] = { std::cos(a0) * .5f, y, std::sin(a0) * .5f, 0, ny, 0 };
-            float p1[6] = { std::cos(a1) * .5f, y, std::sin(a1) * .5f, 0, ny, 0 };
-            if (cap == 0) tri(cyl, center, p0, p1);
-            else tri(cyl, center, p1, p0);
+            float p0[8] = { std::cos(a0) * .5f, y, std::sin(a0) * .5f, 0, ny, 0,
+                            std::cos(a0) * .5f + .5f, std::sin(a0) * .5f + .5f };
+            float p1[8] = { std::cos(a1) * .5f, y, std::sin(a1) * .5f, 0, ny, 0,
+                            std::cos(a1) * .5f + .5f, std::sin(a1) * .5f + .5f };
+            if (cap == 0) tri(cyl, center, p1, p0);
+            else tri(cyl, center, p0, p1);
         }
     }
-    auto split = [](const std::vector<float>& src, std::vector<float>& p, std::vector<float>& n) {
-        int nv = (int)src.size() / 6;
+    auto split = [](const std::vector<float>& src, std::vector<float>& p, std::vector<float>& n, std::vector<float>& uv) {
+        int nv = (int)src.size() / 8;
         p.resize((size_t)nv * 3);
         n.resize((size_t)nv * 3);
+        uv.resize((size_t)nv * 2);
         for (int i = 0; i < nv; ++i) {
-            p[i * 3] = src[i * 6]; p[i * 3 + 1] = src[i * 6 + 1]; p[i * 3 + 2] = src[i * 6 + 2];
-            n[i * 3] = src[i * 6 + 3]; n[i * 3 + 1] = src[i * 6 + 4]; n[i * 3 + 2] = src[i * 6 + 5];
+            p[i * 3] = src[i * 8]; p[i * 3 + 1] = src[i * 8 + 1]; p[i * 3 + 2] = src[i * 8 + 2];
+            n[i * 3] = src[i * 8 + 3]; n[i * 3 + 1] = src[i * 8 + 4]; n[i * 3 + 2] = src[i * 8 + 5];
+            uv[i * 2] = src[i * 8 + 6]; uv[i * 2 + 1] = src[i * 8 + 7];
         }
     };
-    std::vector<float> p, n;
-    split(box, p, n); cache_mesh(A->unit[1], p.data(), n.data(), nullptr, (int)p.size() / 3);
-    split(sphere, p, n); cache_mesh(A->unit[2], p.data(), n.data(), nullptr, (int)p.size() / 3);
-    split(cyl, p, n); cache_mesh(A->unit[3], p.data(), n.data(), nullptr, (int)p.size() / 3);
+    std::vector<float> p, n, uv;
+    split(box, p, n, uv); cache_mesh(A->unit[1], p.data(), n.data(), uv.data(), (int)p.size() / 3);
+    split(sphere, p, n, uv); cache_mesh(A->unit[2], p.data(), n.data(), uv.data(), (int)p.size() / 3);
+    split(cyl, p, n, uv); cache_mesh(A->unit[3], p.data(), n.data(), uv.data(), (int)p.size() / 3);
 }
 
 void flush_lines() {
     if (A->lines.empty() || !A->unlit) return;
-    std::unordered_map<uint32_t, std::vector<float>> groups;
+    /* Depth lives in the high half. Alpha 255 already sets bit 31 of the color
+       word, so packing depth there made every shaft depth-tested and the ones
+       inside a mesh vanished. */
+    std::unordered_map<uint64_t, std::vector<float>> groups;
     for (const LineRec& L : A->lines) {
-        uint32_t key = ((uint32_t)L.r) | ((uint32_t)L.g << 8) | ((uint32_t)L.bcol << 16)
-            | ((uint32_t)L.alpha << 24) | (L.depth ? 0x80000000u : 0);
+        uint64_t key = ((uint32_t)L.r) | ((uint32_t)L.g << 8) | ((uint32_t)L.bcol << 16)
+            | ((uint32_t)L.alpha << 24);
+        if (L.depth) key |= (uint64_t)1 << 32;
         auto& v = groups[key];
         v.insert(v.end(), L.a, L.a + 3);
         v.insert(v.end(), L.b, L.b + 3);
@@ -536,9 +670,9 @@ void flush_lines() {
             if (ib) A->engine->destroy(ib);
             continue;
         }
-        uint32_t key = kv.first;
-        int front = (key & 0x80000000u) ? 0 : 1;
-        MaterialInstance* mi = unlit_mi(key & 255, (key >> 8) & 255, (key >> 16) & 255, (key >> 24) & 255, front);
+        uint32_t rgba = (uint32_t)kv.first;
+        int front = (kv.first & ((uint64_t)1 << 32)) ? 0 : 1;
+        MaterialInstance* mi = unlit_mi(rgba & 255, (rgba >> 8) & 255, (rgba >> 16) & 255, (rgba >> 24) & 255, front);
         auto& em = utils::EntityManager::get();
         utils::Entity e = em.create();
         A->engine->getTransformManager().create(e, {}, mat4f());
@@ -566,7 +700,9 @@ void draw_overlay() {
         -1, -1, 0,  1, -1, 0,  1, 1, 0,
         -1, -1, 0,  1, 1, 0,  -1, 1, 0
     };
-    float uv[12] = { 0, 1,  1, 1,  1, 0,  0, 1,  1, 0,  0, 0 };
+    /* Materials flip V (filamat flipUV), so v = 1 at the top reads row 0,
+       the top row of the HUD image. */
+    float uv[12] = { 0, 0,  1, 0,  1, 1,  0, 0,  1, 1,  0, 1 };
     struct V { float p[3]; float u, v; };
     auto* heap = new std::vector<unsigned char>(6 * sizeof(V));
     auto* v = reinterpret_cast<V*>(heap->data());
@@ -615,6 +751,14 @@ float lin(float c) {
 
 } // namespace
 
+extern "C" void fb_mat_params(float roughness, float metallic, float bump, float tile, float triplanar) {
+    g_matRough = roughness < 0.04f ? 0.04f : (roughness > 1.f ? 1.f : roughness);
+    g_matMetal = metallic < 0.f ? 0.f : (metallic > 1.f ? 1.f : metallic);
+    g_matBump = bump < 0.f ? 0.f : (bump > 4.f ? 4.f : bump);
+    g_matTile = tile < 0.25f ? 0.25f : (tile > 32.f ? 32.f : tile);
+    g_matTri = triplanar > 0.5f ? 1.f : 0.f;
+}
+
 extern "C" const char* fb_last_error(void) { return g_err.c_str(); }
 extern "C" int fb_ok(void) { return A && A->engine ? 1 : 0; }
 
@@ -623,8 +767,13 @@ extern "C" int fb_init(void* hwnd) {
     g_err.clear();
     if (!hwnd) { set_err("no window"); return 0; }
     A = new App();
-    A->samp = TextureSampler(TextureSampler::MagFilter::LINEAR, TextureSampler::WrapMode::REPEAT);
+    A->hwnd = (HWND)hwnd;
+    A->samp = TextureSampler(TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR, TextureSampler::MagFilter::LINEAR,
+                             TextureSampler::WrapMode::REPEAT);
+    A->samp.setAnisotropy(8.0f);
     A->sampEdge = TextureSampler(TextureSampler::MagFilter::NEAREST, TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    A->sampSprite = TextureSampler(TextureSampler::MinFilter::LINEAR, TextureSampler::MagFilter::LINEAR,
+                                   TextureSampler::WrapMode::CLAMP_TO_EDGE);
     try {
         filamat::MaterialBuilder::init();
         A->engine = Engine::create();
@@ -652,17 +801,21 @@ extern "C" int fb_init(void* hwnd) {
             "  material.metallic = materialParams.metallic;"
             "  material.reflectance = materialParams.reflectance;"
             "}";
+        /* Filament's lit path: tangent-space normal before prepareMaterial,
+           then the standard inputs. prepareMaterial turns that normal into the
+           shading normal with the mesh tangent frame. A missing map is a
+           white or flat texture, so the factors still apply. Height is not a
+           material input; the mesh vertices are already displaced. */
         const char* texCode =
             "void material(inout MaterialInputs material) {"
-            "  if (materialParams.useNormal > 0.5) {"
-            "    material.normal = texture(materialParams_normalMap, getUV0()).xyz * 2.0 - 1.0;"
-            "  }"
+            "  vec2 uv = getUV0() * max(materialParams.tile, 0.25);"
+            "  vec3 n = texture(materialParams_normalMap, uv).xyz * 2.0 - 1.0;"
+            "  n.xy *= materialParams.bumpScale;"
+            "  material.normal = n;"
             "  prepareMaterial(material);"
-            "  material.baseColor = texture(materialParams_albedo, getUV0()) * materialParams.baseColor;"
-            "  material.roughness = materialParams.useRough > 0.5"
-            "    ? texture(materialParams_roughnessMap, getUV0()).r : materialParams.roughness;"
-            "  material.metallic = materialParams.useMetal > 0.5"
-            "    ? texture(materialParams_metallicMap, getUV0()).r : materialParams.metallic;"
+            "  material.baseColor = texture(materialParams_albedo, uv) * materialParams.baseColor;"
+            "  material.roughness = texture(materialParams_roughnessMap, uv).r * materialParams.roughness;"
+            "  material.metallic = texture(materialParams_metallicMap, uv).r * materialParams.metallic;"
             "  material.reflectance = 0.5;"
             "}";
         const char* unlitCode =
@@ -673,7 +826,10 @@ extern "C" int fb_init(void* hwnd) {
         const char* spriteCode =
             "void material(inout MaterialInputs material) {"
             "  prepareMaterial(material);"
-            "  material.baseColor = texture(materialParams_image, getUV0()) * materialParams.color;"
+            "  vec4 c = texture(materialParams_image, getUV0()) * materialParams.color;"
+            /* Filament's transparent blend is premultiplied (src = ONE). A straight-alpha
+               sprite would add its full color on every soft edge and bloom into a blob. */
+            "  material.baseColor = vec4(c.rgb * c.a, c.a);"
             "}";
         const char* overCode =
             "void material(inout MaterialInputs material) {"
@@ -686,9 +842,11 @@ extern "C" int fb_init(void* hwnd) {
         A->texFade = make_mat("EyescireTexFade", Shading::LIT, BlendingMode::TRANSPARENT, false, true, VertexDomain::OBJECT, true, true, texCode);
         A->unlit = make_mat("EyescireUnlit", Shading::UNLIT, BlendingMode::TRANSPARENT, false, true, VertexDomain::OBJECT, false, false, unlitCode);
         A->unlitFront = make_mat("EyescireFront", Shading::UNLIT, BlendingMode::TRANSPARENT, false, false, VertexDomain::OBJECT, false, false, unlitCode);
+        A->hull = make_mat("EyescireHull", Shading::UNLIT, BlendingMode::OPAQUE, true, true, VertexDomain::OBJECT, false, false, unlitCode,
+                           nullptr, false, backend::CullingMode::FRONT);
         A->sprite = make_mat("EyescireSprite", Shading::UNLIT, BlendingMode::TRANSPARENT, false, true, VertexDomain::OBJECT, true, true, spriteCode);
         A->overlayMat = make_mat("EyescireOverlay", Shading::UNLIT, BlendingMode::TRANSPARENT, false, false, VertexDomain::DEVICE, true, true, overCode);
-        if (!A->lit || !A->litFade || !A->tex || !A->texFade || !A->unlit || !A->unlitFront || !A->sprite || !A->overlayMat) {
+        if (!A->lit || !A->litFade || !A->tex || !A->texFade || !A->unlit || !A->unlitFront || !A->hull || !A->sprite || !A->overlayMat) {
             set_err("material compile failed");
             fb_shutdown();
             return 0;
@@ -733,7 +891,7 @@ extern "C" void fb_shutdown(void) {
         if (A->skyTex) { A->engine->destroy(A->skyTex); A->skyTex = nullptr; }
         if (A->ibl) { A->scene->setIndirectLight(nullptr); A->engine->destroy(A->ibl); A->ibl = nullptr; }
         if (A->ovTex) { A->engine->destroy(A->ovTex); A->ovTex = nullptr; }
-        Material* ms[] = { A->lit, A->litFade, A->tex, A->texFade, A->unlit, A->unlitFront, A->sprite, A->overlayMat, nullptr };
+        Material* ms[] = { A->lit, A->litFade, A->tex, A->texFade, A->unlit, A->unlitFront, A->hull, A->sprite, A->overlayMat, nullptr };
         for (int i = 0; ms[i]; ++i) A->engine->destroy(ms[i]);
         Texture* ts[] = { A->white, A->flatN, A->black, nullptr };
         for (int i = 0; ts[i]; ++i) A->engine->destroy(ts[i]);
@@ -763,6 +921,16 @@ extern "C" void fb_begin(float ex, float ey, float ez,
     destroy_frame();
     if (w < 1) w = 1;
     if (h < 1) h = 1;
+    /* Keep the child window's client size exact. A mismatch stretches the
+       swap chain relative to the editor overlay and shifts every 2D gizmo. */
+    if (A->hwnd) {
+        RECT cr{};
+        GetClientRect(A->hwnd, &cr);
+        if (cr.right != w || cr.bottom != h) {
+            SetWindowPos(A->hwnd, nullptr, 0, 0, w, h,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
     A->width = w;
     A->height = h;
     A->shadows = shadows ? 1 : 0;
@@ -778,7 +946,9 @@ extern "C" void fb_begin(float ex, float ey, float ez,
     /* f/8 keeps a sun of a few tens of thousands of lux in the same range
        the editor's colors were authored for. f/16 left the view nearly black. */
     A->camera->setExposure(8.0f, 1.0f / 125.0f, 100.0f);
-    A->camera->setProjection(fov_deg, aspect, 0.05, 4000.0, Camera::Fov::VERTICAL);
+    A->camNear = 0.05f;
+    A->camFar = 4000.f;
+    A->camera->setProjection(fov_deg, aspect, (double)A->camNear, (double)A->camFar, Camera::Fov::VERTICAL);
     A->camera->lookAt(eye, target, up);
     A->view->setViewport({ 0, 0, (uint32_t)w, (uint32_t)h });
     A->view->setShadowingEnabled(shadows != 0);
@@ -812,8 +982,24 @@ extern "C" void fb_sun(float dx, float dy, float dz, float r, float g, float b, 
     utils::Entity e = em.create();
     LightManager::ShadowOptions so;
     so.mapSize = 2048;
-    so.shadowNearHint = 0.05f;
-    so.shadowFarHint = 80.0f;
+    /* One map over the whole 4000-unit view leaves close shadows as big
+       stair-steps. Four cascades each get that map; the first only covers
+       the nearest few units, where the camera actually is. */
+    so.shadowCascades = 4;
+    float zn = A->camNear;
+    float span = A->camFar - zn;
+    if (span < 1.f) span = 1.f;
+    float cuts[3] = { 8.f, 28.f, 90.f };
+    float prev = 0.001f;
+    for (int i = 0; i < 3; ++i) {
+        float t = (cuts[i] - zn) / span;
+        if (t < prev + 0.001f) t = prev + 0.001f;
+        if (t > 0.9f) t = 0.9f;
+        so.cascadeSplitPositions[i] = t;
+        prev = t;
+    }
+    so.shadowNearHint = 1.0f;
+    so.shadowFarHint = 90.0f;
     bool cast = shadows && A->shadows;
     LightManager::Builder(cast ? LightManager::Type::SUN : LightManager::Type::DIRECTIONAL)
         .color(LinearColor{ r, g, b })
@@ -865,13 +1051,19 @@ extern "C" void fb_spot(float x, float y, float z, float dx, float dy, float dz,
 
 extern "C" void fb_ambient(float r, float g, float b) {
     if (!A || !A->engine) return;
-    float3 sh[1] = { float3{ r, g, b } * 3.14159265f };
+    /* Same scale as fb_sun (32000 lux per unit of light color, Lambert 1/pi),
+       so ambient 0.42 here matches ambient 0.42 in the OpenGL path. A flat
+       ambient ignores the surface normal and leaves normal maps invisible
+       outside direct light; the y term makes it a sky above / ground below. */
+    const float scale = 32000.0f / 3.14159265f;
+    float3 base{ r, g, b };
+    float3 sh[4] = { base, base * 0.35f, float3{ 0, 0, 0 }, float3{ 0, 0, 0 } };
     if (A->ibl) {
         A->scene->setIndirectLight(nullptr);
         A->engine->destroy(A->ibl);
         A->ibl = nullptr;
     }
-    A->ibl = IndirectLight::Builder().irradiance(1, sh).intensity(1.0f).build(*A->engine);
+    A->ibl = IndirectLight::Builder().irradiance(2, sh).intensity(scale).build(*A->engine);
     A->scene->setIndirectLight(A->ibl);
 }
 
@@ -924,12 +1116,42 @@ extern "C" void fb_prim(int kind, const float xform[16], int r, int g, int b, in
                         int cast_shadow, int mode) {
     if (!A || !A->engine || kind < 1 || kind > 3 || !A->unit[kind].vb) return;
     if (a < 8) return;
-    /* mode 2 is a selection hull: depth-tested, no depth write, drawn before
-       the solid mesh so only the rim survives. mode 1 is an unlit depth-tested mesh. */
-    MaterialInstance* mi = mode == 0 ? lit_mi(r, g, b, a, 0) : unlit_mi(r, g, b, a, 0);
+    /* mode 2 is a selection hull (see hull_mi). mode 1 is an unlit depth-tested mesh. */
+    MaterialInstance* mi = mode == 0 ? lit_mi(r, g, b, a, 0) : mode == 2 ? hull_mi(r, g, b) : unlit_mi(r, g, b, a, 0);
     int cast = (mode == 0 && a >= 250) ? cast_shadow : 0;
     int pri = mode == 2 ? 3 : mode == 0 ? (a < 250 ? 5 : 4) : 6;
     add_mesh(A->unit[kind].vb, A->unit[kind].ib, A->unit[kind].count, mat_from(xform), mi, cast, pri, true);
+}
+
+extern "C" void fb_prim_maps(int kind, const float xform[16], int r, int g, int b, int a,
+                             int cast_shadow, int mode,
+                             const unsigned char* albedo, int aw, int ah,
+                             const unsigned char* normal, int nw, int nh,
+                             const unsigned char* metal, int mw, int mh,
+                             const unsigned char* rough, int rw, int rh,
+                             const unsigned char* height, int hw, int hh) {
+    if (!A || !A->engine || kind < 1 || kind > 3 || !A->unit[kind].vb) return;
+    if (a < 8) return;
+    if (mode != 0) {
+        fb_prim(kind, xform, r, g, b, a, cast_shadow, mode);
+        return;
+    }
+    bool mapped = (albedo && aw > 0 && ah > 0)
+               || (normal && nw > 0 && nh > 0)
+               || (metal && mw > 0 && mh > 0)
+               || (rough && rw > 0 && rh > 0)
+               || (height && hw > 0 && hh > 0);
+    if (!mapped) {
+        fb_prim(kind, xform, r, g, b, a, cast_shadow, mode);
+        return;
+    }
+    static const unsigned char kWhite[3] = { 255, 255, 255 };
+    if (!(albedo && aw > 0 && ah > 0)) { albedo = kWhite; aw = 1; ah = 1; }
+    MaterialInstance* mi = lit_mi(r, g, b, a, 1);
+    apply_maps(mi, albedo, aw, ah, normal, nw, nh, metal, mw, mh, rough, rw, rh, height, hw, hh);
+    int cast = a >= 250 ? cast_shadow : 0;
+    add_mesh(A->unit[kind].vb, A->unit[kind].ib, A->unit[kind].count, mat_from(xform), mi, cast,
+             a < 250 ? 5 : 4, true);
 }
 
 extern "C" void fb_model(const void* key,
@@ -938,30 +1160,32 @@ extern "C" void fb_model(const void* key,
                          const unsigned char* albedo, int aw, int ah,
                          const unsigned char* normal, int nw, int nh,
                          const unsigned char* metal, int mw, int mh,
-                         const unsigned char* rough, int rw, int rh) {
+                         const unsigned char* rough, int rw, int rh,
+                         const unsigned char* height, int hw, int hh) {
     if (!A || !A->engine || !key || count < 3 || a < 8) return;
     GpuMesh& mesh = A->models[key];
     if (!cache_mesh(mesh, pos, nrm, uv, count)) return;
-    bool mapped = albedo && aw > 0 && ah > 0;
+    bool mapped = (albedo && aw > 0 && ah > 0)
+               || (normal && nw > 0 && nh > 0)
+               || (metal && mw > 0 && mh > 0)
+               || (rough && rw > 0 && rh > 0)
+               || (height && hw > 0 && hh > 0);
+    static const unsigned char kWhite[3] = { 255, 255, 255 };
+    if (mapped && !(albedo && aw > 0 && ah > 0)) { albedo = kWhite; aw = 1; ah = 1; }
     MaterialInstance* mi = lit_mi(r, g, b, a, mapped ? 1 : 0);
-    if (mapped) {
-        Texture* al = cached_rgb(albedo, albedo, aw, ah, true);
-        if (al) mi->setParameter("albedo", al, A->samp);
-        if (normal && nw > 0 && nh > 0) {
-            Texture* nt = cached_rgb(normal, normal, nw, nh, false);
-            if (nt) { mi->setParameter("normalMap", nt, A->samp); mi->setParameter("useNormal", 1.0f); }
-        }
-        if (rough && rw > 0 && rh > 0) {
-            Texture* rt = cached_rgb(rough, rough, rw, rh, false);
-            if (rt) { mi->setParameter("roughnessMap", rt, A->samp); mi->setParameter("useRough", 1.0f); }
-        }
-        if (metal && mw > 0 && mh > 0) {
-            Texture* mt = cached_rgb(metal, metal, mw, mh, false);
-            if (mt) { mi->setParameter("metallicMap", mt, A->samp); mi->setParameter("useMetal", 1.0f); }
-        }
-    }
+    if (mapped)
+        apply_maps(mi, albedo, aw, ah, normal, nw, nh, metal, mw, mh, rough, rw, rh, height, hw, hh);
     int cast = a >= 250 ? cast_shadow : 0;
     add_mesh(mesh.vb, mesh.ib, mesh.count, mat_from(xform), mi, cast, a < 250 ? 5 : 4, true);
+}
+
+/* Drop the GPU copy cached for key so the next fb_model uploads new vertices. */
+extern "C" void fb_model_forget(const void* key) {
+    if (!A || !A->engine || !key) return;
+    auto it = A->models.find(key);
+    if (it == A->models.end()) return;
+    destroy_mesh(it->second);
+    A->models.erase(it);
 }
 
 extern "C" void fb_tris(const float* pos, const float* nrm, int count, const float xform[16],
@@ -992,7 +1216,7 @@ extern "C" void fb_tris(const float* pos, const float* nrm, int count, const flo
     }
     int front = depth_test ? 0 : 1;
     int pri = depth_test == 2 ? 3 : front ? 6 : 5;
-    MaterialInstance* mi = unlit_mi(r, g, b, a, front);
+    MaterialInstance* mi = depth_test == 2 ? hull_mi(r, g, b) : unlit_mi(r, g, b, a, front);
     add_mesh(vb, ib, (uint32_t)count, mat_from(xform), mi, 0, pri, false);
 }
 
@@ -1058,8 +1282,25 @@ extern "C" void fb_sprite(const void* key, const unsigned char* rgba, int tw, in
         heap->data(), heap->size(), free_buf, heap));
     MaterialInstance* mi = A->sprite->createInstance();
     mi->setParameter("color", RgbaType::sRGB, float4{ r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f });
-    mi->setParameter("image", tex, A->sampEdge);
+    mi->setParameter("image", tex, A->sampSprite);
     add_mesh(vb, ib, 6, mat4f(), mi, 0, 5, false);
+}
+
+extern "C" int fb_project(float wx, float wy, float wz, float* sx, float* sy) {
+    if (!A || !A->camera || A->width < 1 || A->height < 1) return 0;
+    mat4 view = A->camera->getViewMatrix();
+    mat4 proj = A->camera->getProjectionMatrix();
+    mat4 vp = proj * view;
+    double4 c = vp * double4{ wx, wy, wz, 1.0 };
+    if (c.w <= 1e-8 && c.w >= -1e-8) return 0;
+    double inv = 1.0 / c.w;
+    double ndcX = c.x * inv;
+    double ndcY = c.y * inv;
+    /* Filament's clip w is positive in front with its projection; reject behind. */
+    if (c.w < 0.0) return 0;
+    if (sx) *sx = (float)((ndcX * 0.5 + 0.5) * (double)A->width);
+    if (sy) *sy = (float)((1.0 - (ndcY * 0.5 + 0.5)) * (double)A->height);
+    return 1;
 }
 
 extern "C" void fb_screen(float x0, float y0, float x1, float y1, int r, int g, int b, int a) {
@@ -1158,7 +1399,7 @@ extern "C" void fb_overlay(const void* bgra, int w, int h) {
         A->ovTex = Texture::Builder()
             .width((uint32_t)w).height((uint32_t)h).levels(1)
             .sampler(Texture::Sampler::SAMPLER_2D)
-            .format(Texture::InternalFormat::RGBA8)
+            .format(Texture::InternalFormat::SRGB8_A8)
             .build(*A->engine);
         A->ovW = w;
         A->ovH = h;

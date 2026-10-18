@@ -11,6 +11,7 @@
 #include <objidl.h>
 #include <gdiplus.h>
 #include <shobjidl.h>
+#include <shellapi.h>
 #include <dwmapi.h>
 
 #include "engine.h"
@@ -43,6 +44,12 @@ namespace fs = std::filesystem;
 
 static int  g_rawDx = 0, g_rawDy = 0;
 static bool g_rawMouse = false;
+
+/* OS file drops (Explorer -> window). Paths are UTF-8; coords are buffer space. */
+static std::vector<std::string> g_dropPaths;
+static int g_dropX = 0;
+static int g_dropY = 0;
+static std::string g_dropTmp;
 
 static void raw_mouse_enable(HWND hwnd, bool on) {
     RAWINPUTDEVICE rid{};
@@ -202,6 +209,34 @@ struct Entity {
     int         z          = 0;
     int         depth      = 0;
     std::string model;
+    /* Optional PBR maps for high-quality 3D (Filament / GL 3.3). Relative
+       asset paths. Empty keeps the model's MTL/sidecar maps (or none).
+       Scene fields 68..73 after aa. */
+    std::string texAlbedo;
+    std::string texNormal;
+    std::string texRough;
+    std::string texMetal;
+    std::string texHeight;
+    std::string texAO;
+    /* Scalar PBR (0..100). Used when the matching map is empty. Bump scales normals. */
+    int         matRough   = 55;
+    int         matMetal   = 0;
+    int         matBump    = 100;
+    int         matTile    = 4;
+    /* Canvas font size for labels and UI captions. 0 means unset.
+       The rectangle clips the words; it does not scale them. Scene field 78. */
+    int         fontPx     = 0;
+    /* Glyph origin relative to the box. The box clips; it does not slide the words. */
+    int         fontOx     = 0;
+    int         fontOy     = 0;
+    /* UI look. -1 radius/border/text means the built-in style. */
+    int         uiRadius   = -1;
+    int         uiBorder   = -1;
+    int         uiAlign    = 0;
+    int         uiShadow   = 0;
+    int         uiText     = -1;
+    /* 0 smooth when scaled, 1 nearest so pixel art stays sharp. Scene field 86. */
+    int         pixel      = 0;
     /* A sound that follows this object. Empty means silent. Loop keeps it
        going. Range is how far away it can still be heard, in scene pixels. */
     std::string sound;
@@ -546,6 +581,19 @@ static int g_gdipDirty = 0;
    Text and plain rectangles would then paint past a panel. This region is
    selected again before those draws. */
 static HRGN g_clipRgn = nullptr;
+/* Nested clips. Each push keeps the region that was current. */
+static HRGN g_clipSaved[8];
+static int  g_clipDepth = 0;
+
+static void clip_stack_reset() {
+    while (g_clipDepth > 0) {
+        --g_clipDepth;
+        if (g_clipSaved[g_clipDepth]) {
+            DeleteObject(g_clipSaved[g_clipDepth]);
+            g_clipSaved[g_clipDepth] = nullptr;
+        }
+    }
+}
 
 static void gdip_flush() {
     if (g_roundGfx && g_gdipDirty) {
@@ -555,9 +603,13 @@ static void gdip_flush() {
 }
 
 static void clip_hold() {
-    /* GDI has to see the rounded rects and icons already painted. */
+    /* GDI has to see the rounded rects and icons already painted.
+       GDI+ drops the DC clip and does not put it back. If nothing is clipped,
+       clear that leftover region; otherwise a popup fill stops at the last
+       panel while the text, drawn after GDI+ runs, keeps going. */
     gdip_flush();
-    if (g.backDC && g_clipRgn) SelectClipRgn(g.backDC, g_clipRgn);
+    if (!g.backDC) return;
+    SelectClipRgn(g.backDC, g_clipRgn);
 }
 
 static void round_gfx_drop() {
@@ -849,6 +901,29 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_DROPFILES: {
+            HDROP drop = (HDROP)wp;
+            POINT pt{};
+            DragQueryPoint(drop, &pt);
+            map_client_mouse(pt.x, pt.y);
+            g_dropX = g.mouseX;
+            g_dropY = g.mouseY;
+            g_dropPaths.clear();
+            UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+            for (UINT i = 0; i < n; ++i) {
+                wchar_t wbuf[MAX_PATH];
+                UINT got = DragQueryFileW(drop, i, wbuf, MAX_PATH);
+                if (got == 0 || got >= MAX_PATH) continue;
+                int bytes = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, nullptr, 0, nullptr, nullptr);
+                if (bytes <= 1) continue;
+                std::string path((size_t)bytes - 1, '\0');
+                WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, path.data(), bytes, nullptr, nullptr);
+                if (!path.empty()) g_dropPaths.push_back(std::move(path));
+            }
+            DragFinish(drop);
+            return 0;
+        }
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
@@ -1121,6 +1196,7 @@ extern "C" int engine_init(int w, int h, const char* title) {
         window_icon_free();
         return 0;
     }
+    DragAcceptFiles(g.hwnd, TRUE);
 
     HDC windowDC = GetDC(g.hwnd);
     g.backDC      = CreateCompatibleDC(windowDC);
@@ -1232,7 +1308,7 @@ static void view_hole(int on, int x, int y, int w, int h) {
     g_viewH = h;
 }
 
-namespace r3d { void overlay_present(); }
+namespace r3d { void overlay_present(); void ent_maps_invalidate(); }
 
 /* 1 waits for the monitor. The 3D view uses the GL swap interval. A 2D frame
    has no GL swap, so present waits with DwmFlush instead. */
@@ -1506,6 +1582,40 @@ extern "C" void engine_text(int x, int y, const char* s, int r, int g_, int b) {
     TextOutA(g.backDC, x, y, s, (int)strlen(s));
 }
 
+extern "C" void engine_text_box(int x, int y, int w, int h, const char* s, int r, int g_, int b) {
+    if (!g.backDC || !s || w < 1 || h < 1) return;
+    clip_hold();
+    SetBkMode(g.backDC, TRANSPARENT);
+    SetTextAlign(g.backDC, TA_LEFT | TA_TOP | TA_NOUPDATECP);
+    SetTextColor(g.backDC, RGB(r, g_, b));
+    RECT box{ x, y, x + w, y + h };
+    DrawTextA(g.backDC, s, -1, &box, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+}
+
+extern "C" void engine_text_box_align(int x, int y, int w, int h, const char* s,
+                                     int r, int g_, int b, int ha, int va) {
+    if (!g.backDC || !s || w < 1 || h < 1) return;
+    clip_hold();
+    SetBkMode(g.backDC, TRANSPARENT);
+    SetTextAlign(g.backDC, TA_LEFT | TA_TOP | TA_NOUPDATECP);
+    SetTextColor(g.backDC, RGB(r, g_, b));
+    UINT horiz = DT_LEFT;
+    if (ha == 1) horiz = DT_CENTER;
+    else if (ha == 2) horiz = DT_RIGHT;
+    int yoff = 0;
+    if (va != 0) {
+        RECT measure{ 0, 0, w, h };
+        DrawTextA(g.backDC, s, -1, &measure, DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX | horiz);
+        int th = measure.bottom - measure.top;
+        if (th < h) {
+            if (va == 1) yoff = (h - th) / 2;
+            else yoff = h - th;
+        }
+    }
+    RECT box{ x, y + yoff, x + w, y + h };
+    DrawTextA(g.backDC, s, -1, &box, DT_WORDBREAK | DT_TOP | DT_NOPREFIX | horiz);
+}
+
 /* Column-major 5x7, bit 0 at the top. Copied from std/gfx so a 3D export
    and the editor draw the same letters. Advance is 6 px, a line is 8. */
 static const unsigned char kFont5x7[95][5] = {
@@ -1705,14 +1815,47 @@ extern "C" void engine_text_aa(int x, int y, const char* s, int r, int g_, int b
 extern "C" void engine_set_clip(int x, int y, int w, int h) {
     if (!g.backDC) return;
     round_gfx_drop();
+    clip_stack_reset();
     if (g_clipRgn) DeleteObject(g_clipRgn);
     g_clipRgn = CreateRectRgn(x, y, x + w, y + h);
+    SelectClipRgn(g.backDC, g_clipRgn);
+}
+
+extern "C" void engine_clip_push_rect(int x, int y, int w, int h) {
+    if (!g.backDC || w < 1 || h < 1) return;
+    if (g_clipDepth >= 8) return;
+    round_gfx_drop();
+    HRGN box = CreateRectRgn(x, y, x + w, y + h);
+    if (!box) return;
+    g_clipSaved[g_clipDepth] = g_clipRgn;
+    HRGN next = CreateRectRgn(0, 0, 1, 1);
+    if (!next) {
+        DeleteObject(box);
+        g_clipSaved[g_clipDepth] = nullptr;
+        return;
+    }
+    if (g_clipRgn) CombineRgn(next, g_clipRgn, box, RGN_AND);
+    else CombineRgn(next, box, box, RGN_COPY);
+    DeleteObject(box);
+    g_clipRgn = next;
+    ++g_clipDepth;
+    SelectClipRgn(g.backDC, g_clipRgn);
+}
+
+extern "C" void engine_clip_pop() {
+    if (!g.backDC || g_clipDepth <= 0) return;
+    round_gfx_drop();
+    --g_clipDepth;
+    if (g_clipRgn) DeleteObject(g_clipRgn);
+    g_clipRgn = g_clipSaved[g_clipDepth];
+    g_clipSaved[g_clipDepth] = nullptr;
     SelectClipRgn(g.backDC, g_clipRgn);
 }
 
 extern "C" void engine_clear_clip() {
     if (!g.backDC) return;
     round_gfx_drop();
+    clip_stack_reset();
     if (g_clipRgn) {
         DeleteObject(g_clipRgn);
         g_clipRgn = nullptr;
@@ -2110,26 +2253,28 @@ extern "C" void engine_picker_alpha(int x, int y, int w, int h, int r, int g_, i
     blit_bgra(x, y, w, h, px.data());
 }
 
-extern "C" void engine_image_blit_scaled_rot(int id, int x, int y, int w, int h, int deg) {
-    auto it = g.images.find(id);
-    if (it == g.images.end() || !g.backDC || !it->second.bmp || w <= 0 || h <= 0) return;
+static void image_blit_rot(Gdiplus::Bitmap* bmp, int bw, int bh,
+                           int x, int y, int w, int h, int deg, int a, int nearest) {
+    if (!g.backDC || !bmp || w <= 0 || h <= 0 || bw <= 0 || bh <= 0) return;
+    if (a < 0) a = 0;
+    if (a > 255) a = 255;
     Gdiplus::Graphics gfx(g.backDC);
-    gfx.SetInterpolationMode(Gdiplus::InterpolationModeBilinear);
-    gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    if (nearest) {
+        gfx.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+        gfx.SetSmoothingMode(Gdiplus::SmoothingModeNone);
+        gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    } else {
+        gfx.SetInterpolationMode(Gdiplus::InterpolationModeBilinear);
+        gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    }
     gfx.TranslateTransform((Gdiplus::REAL)(x + w * 0.5f), (Gdiplus::REAL)(y + h * 0.5f));
     gfx.RotateTransform((Gdiplus::REAL)deg);
-    gfx.DrawImage(it->second.bmp, (Gdiplus::REAL)(-w * 0.5f), (Gdiplus::REAL)(-h * 0.5f),
-                  (Gdiplus::REAL)w, (Gdiplus::REAL)h);
-}
-
-extern "C" void engine_image_blit_scaled_rot_a(int id, int x, int y, int w, int h, int deg, int a) {
+    Gdiplus::RectF dest((Gdiplus::REAL)(-w * 0.5f), (Gdiplus::REAL)(-h * 0.5f),
+                        (Gdiplus::REAL)w, (Gdiplus::REAL)h);
     if (a >= 255) {
-        engine_image_blit_scaled_rot(id, x, y, w, h, deg);
+        gfx.DrawImage(bmp, dest);
         return;
     }
-    auto it = g.images.find(id);
-    if (it == g.images.end() || !g.backDC || !it->second.bmp || w <= 0 || h <= 0) return;
-    if (a < 0) a = 0;
     Gdiplus::ColorMatrix cm{};
     cm.m[0][0] = 1.0f;
     cm.m[1][1] = 1.0f;
@@ -2138,16 +2283,22 @@ extern "C" void engine_image_blit_scaled_rot_a(int id, int x, int y, int w, int 
     cm.m[4][4] = 1.0f;
     Gdiplus::ImageAttributes attr;
     attr.SetColorMatrix(&cm, Gdiplus::ColorMatrixFlagsDefault, Gdiplus::ColorAdjustTypeBitmap);
-    Gdiplus::Graphics gfx(g.backDC);
-    gfx.SetInterpolationMode(Gdiplus::InterpolationModeBilinear);
-    gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    gfx.TranslateTransform((Gdiplus::REAL)(x + w * 0.5f), (Gdiplus::REAL)(y + h * 0.5f));
-    gfx.RotateTransform((Gdiplus::REAL)deg);
-    Gdiplus::RectF dest((Gdiplus::REAL)(-w * 0.5f), (Gdiplus::REAL)(-h * 0.5f),
-                        (Gdiplus::REAL)w, (Gdiplus::REAL)h);
-    gfx.DrawImage(it->second.bmp, dest, 0, 0,
-                  (Gdiplus::REAL)it->second.w, (Gdiplus::REAL)it->second.h,
+    gfx.DrawImage(bmp, dest, 0, 0, (Gdiplus::REAL)bw, (Gdiplus::REAL)bh,
                   Gdiplus::UnitPixel, &attr, nullptr, nullptr);
+}
+
+extern "C" void engine_image_blit_scaled_rot_px(int id, int x, int y, int w, int h, int deg, int a, int nearest) {
+    auto it = g.images.find(id);
+    if (it == g.images.end() || !it->second.bmp) return;
+    image_blit_rot(it->second.bmp, it->second.w, it->second.h, x, y, w, h, deg, a, nearest ? 1 : 0);
+}
+
+extern "C" void engine_image_blit_scaled_rot(int id, int x, int y, int w, int h, int deg) {
+    engine_image_blit_scaled_rot_px(id, x, y, w, h, deg, 255, 0);
+}
+
+extern "C" void engine_image_blit_scaled_rot_a(int id, int x, int y, int w, int h, int deg, int a) {
+    engine_image_blit_scaled_rot_px(id, x, y, w, h, deg, a, 0);
 }
 
 extern "C" void engine_image_free(int id) {
@@ -2175,6 +2326,49 @@ extern "C" int engine_image_load_cached(const char* path) {
     }
     int id = engine_image_load(path);
     if (id != 0) g.imageByPath[path] = id;
+    return id;
+}
+
+/* Downscaled preview for the assets dock. Keeps 2K maps from being blitted
+ * full-size into a 100px card every frame. */
+extern "C" int engine_image_load_thumb(const char* path, int max_side) {
+    if (!path || !*path) return 0;
+    if (max_side < 32) max_side = 32;
+    if (max_side > 256) max_side = 256;
+    std::string key = std::string(path) + "#thumb" + std::to_string(max_side);
+    auto it = g.imageByPath.find(key);
+    if (it != g.imageByPath.end()) {
+        if (g.images.find(it->second) != g.images.end()) return it->second;
+        g.imageByPath.erase(it);
+    }
+    std::string resolved = asset_resolve(path);
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, resolved.c_str(), -1, nullptr, 0);
+    if (wlen <= 0) return 0;
+    std::wstring wpath((size_t)wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, resolved.c_str(), -1, wpath.data(), wlen);
+    Gdiplus::Bitmap src(wpath.c_str());
+    if (src.GetLastStatus() != Gdiplus::Ok || src.GetWidth() < 1 || src.GetHeight() < 1) return 0;
+    int sw = (int)src.GetWidth(), sh = (int)src.GetHeight();
+    int side = sw > sh ? sw : sh;
+    int tw = sw, th = sh;
+    if (side > max_side) {
+        float s = (float)max_side / (float)side;
+        tw = std::max(1, (int)(sw * s));
+        th = std::max(1, (int)(sh * s));
+    }
+    Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap(tw, th, PixelFormat32bppARGB);
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; return 0; }
+    Gdiplus::Graphics gfx(bmp);
+    gfx.SetInterpolationMode(Gdiplus::InterpolationModeBilinear);
+    gfx.DrawImage(&src, 0, 0, tw, th);
+    int id = g.nextImageId++;
+    Image img;
+    img.bmp = bmp;
+    img.w = tw;
+    img.h = th;
+    image_ensure_dib(img);
+    g.images[id] = img;
+    g.imageByPath[key] = id;
     return id;
 }
 
@@ -2340,6 +2534,85 @@ extern "C" void engine_entity_set_h(int s, int v) {
     if (!active_slot(s)) return;
     if (v < 4) v = 4;
     g.entities[s].h = v;
+}
+extern "C" int engine_entity_font_px(int s) {
+    return active_slot(s) ? g.entities[s].fontPx : 0;
+}
+extern "C" void engine_entity_set_font_px(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 6) v = 6;
+    if (v > 512) v = 512;
+    g.entities[s].fontPx = v;
+}
+extern "C" int engine_entity_font_ox(int s) {
+    return active_slot(s) ? g.entities[s].fontOx : 0;
+}
+extern "C" int engine_entity_font_oy(int s) {
+    return active_slot(s) ? g.entities[s].fontOy : 0;
+}
+extern "C" void engine_entity_set_font_ox(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < -100000) v = -100000;
+    if (v > 100000) v = 100000;
+    g.entities[s].fontOx = v;
+}
+extern "C" void engine_entity_set_font_oy(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < -100000) v = -100000;
+    if (v > 100000) v = 100000;
+    g.entities[s].fontOy = v;
+}
+extern "C" int engine_entity_ui_radius(int s) {
+    return active_slot(s) ? g.entities[s].uiRadius : -1;
+}
+extern "C" void engine_entity_set_ui_radius(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < -1) v = -1;
+    if (v > 64) v = 64;
+    g.entities[s].uiRadius = v;
+}
+extern "C" int engine_entity_ui_border(int s) {
+    return active_slot(s) ? g.entities[s].uiBorder : -1;
+}
+extern "C" void engine_entity_set_ui_border(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < -1) v = -1;
+    if (v > 16) v = 16;
+    g.entities[s].uiBorder = v;
+}
+extern "C" int engine_entity_ui_align(int s) {
+    return active_slot(s) ? g.entities[s].uiAlign : 0;
+}
+extern "C" void engine_entity_set_ui_align(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 0) v = 0;
+    if (v > 8) v = 8;
+    g.entities[s].uiAlign = v;
+}
+extern "C" int engine_entity_ui_shadow(int s) {
+    return active_slot(s) ? g.entities[s].uiShadow : 0;
+}
+extern "C" void engine_entity_set_ui_shadow(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 0) v = 0;
+    if (v > 2) v = 2;
+    g.entities[s].uiShadow = v;
+}
+extern "C" int engine_entity_ui_text(int s) {
+    return active_slot(s) ? g.entities[s].uiText : -1;
+}
+extern "C" void engine_entity_set_ui_text(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < -1) v = -1;
+    if (v > 0xFFFFFF) v = 0xFFFFFF;
+    g.entities[s].uiText = v;
+}
+extern "C" int engine_entity_pixel(int s) {
+    return active_slot(s) ? (g.entities[s].pixel ? 1 : 0) : 0;
+}
+extern "C" void engine_entity_set_pixel(int s, int v) {
+    if (!active_slot(s)) return;
+    g.entities[s].pixel = v ? 1 : 0;
 }
 static int wrap360(int v) {
     v %= 360;
@@ -2618,9 +2891,7 @@ extern "C" void engine_entity_set_visible(int s, int on) {
 static int clamp_ch(int v) { return std::clamp(v, 0, 255); }
 
 static bool entity_is_button(const Entity& e) {
-    if (e.kind == "ui_button") return true;
-    if (e.kind == "rect" && e.name == "button") return true;
-    return false;
+    return e.kind == "button" || e.kind == "ui_button";
 }
 
 static Entity::BtnTint* button_tint(Entity& e, int which) {
@@ -2830,8 +3101,19 @@ extern "C" void engine_entity_set_alpha(int s, int a) {
     if (!active_slot(s)) return;
     g.entities[s].a = clamp_ch(a);
 }
+/* Older scenes stored the widget type in the name and left kind as "rect".
+   Lock that type onto kind before the name changes, so renaming a panel or
+   button does not turn it into a world sprite. */
+static bool legacy_widget_name(const std::string& n) {
+    return n == "empty" || n == "panel" || n == "button" || n == "checkbox"
+        || n == "toggle" || n == "slider" || n == "bar" || n == "field";
+}
+
 extern "C" void engine_entity_set_name(int s, const char* v) {
-    if (active_slot(s) && v) g.entities[s].name = v;
+    if (!active_slot(s) || !v) return;
+    Entity& e = g.entities[s];
+    if (e.kind == "rect" && legacy_widget_name(e.name)) e.kind = e.name;
+    e.name = v;
 }
 extern "C" void engine_entity_set_kind(int s, const char* v) {
     if (active_slot(s) && v) g.entities[s].kind = v;
@@ -3131,6 +3413,86 @@ extern "C" void engine_entity_set_script(int s, const char* v) {
 extern "C" void engine_entity_set_model(int s, const char* v) {
     if (active_slot(s) && v) g.entities[s].model = proj_relativise(v);
 }
+static void entity_set_tex_path(std::string& slot, const char* v) {
+    if (!v) { slot.clear(); r3d::ent_maps_invalidate(); return; }
+    std::string clean;
+    for (char c : std::string(v)) if (c != '|' && c != '\r' && c != '\n') clean.push_back(c);
+    if (clean.empty()) slot.clear();
+    else slot = proj_relativise(clean);
+    r3d::ent_maps_invalidate();
+}
+extern "C" const char* engine_entity_tex_albedo(int s) {
+    return active_slot(s) ? g.entities[s].texAlbedo.c_str() : "";
+}
+extern "C" void engine_entity_set_tex_albedo(int s, const char* v) {
+    if (active_slot(s)) entity_set_tex_path(g.entities[s].texAlbedo, v);
+}
+extern "C" const char* engine_entity_tex_normal(int s) {
+    return active_slot(s) ? g.entities[s].texNormal.c_str() : "";
+}
+extern "C" void engine_entity_set_tex_normal(int s, const char* v) {
+    if (active_slot(s)) entity_set_tex_path(g.entities[s].texNormal, v);
+}
+extern "C" const char* engine_entity_tex_rough(int s) {
+    return active_slot(s) ? g.entities[s].texRough.c_str() : "";
+}
+extern "C" void engine_entity_set_tex_rough(int s, const char* v) {
+    if (active_slot(s)) entity_set_tex_path(g.entities[s].texRough, v);
+}
+extern "C" const char* engine_entity_tex_metal(int s) {
+    return active_slot(s) ? g.entities[s].texMetal.c_str() : "";
+}
+extern "C" void engine_entity_set_tex_metal(int s, const char* v) {
+    if (active_slot(s)) entity_set_tex_path(g.entities[s].texMetal, v);
+}
+extern "C" const char* engine_entity_tex_height(int s) {
+    return active_slot(s) ? g.entities[s].texHeight.c_str() : "";
+}
+extern "C" void engine_entity_set_tex_height(int s, const char* v) {
+    if (active_slot(s)) entity_set_tex_path(g.entities[s].texHeight, v);
+}
+extern "C" const char* engine_entity_tex_ao(int s) {
+    return active_slot(s) ? g.entities[s].texAO.c_str() : "";
+}
+extern "C" void engine_entity_set_tex_ao(int s, const char* v) {
+    if (active_slot(s)) entity_set_tex_path(g.entities[s].texAO, v);
+}
+extern "C" int engine_entity_mat_rough(int s) {
+    return active_slot(s) ? g.entities[s].matRough : 55;
+}
+extern "C" void engine_entity_set_mat_rough(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    g.entities[s].matRough = v;
+}
+extern "C" int engine_entity_mat_metal(int s) {
+    return active_slot(s) ? g.entities[s].matMetal : 0;
+}
+extern "C" void engine_entity_set_mat_metal(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    g.entities[s].matMetal = v;
+}
+extern "C" int engine_entity_mat_bump(int s) {
+    return active_slot(s) ? g.entities[s].matBump : 100;
+}
+extern "C" void engine_entity_set_mat_bump(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 0) v = 0;
+    if (v > 200) v = 200;
+    g.entities[s].matBump = v;
+}
+extern "C" int engine_entity_mat_tile(int s) {
+    return active_slot(s) ? g.entities[s].matTile : 4;
+}
+extern "C" void engine_entity_set_mat_tile(int s, int v) {
+    if (!active_slot(s)) return;
+    if (v < 1) v = 1;
+    if (v > 32) v = 32;
+    g.entities[s].matTile = v;
+}
 extern "C" const char* engine_entity_sound(int s) {
     return active_slot(s) ? g.entities[s].sound.c_str() : "";
 }
@@ -3257,6 +3619,29 @@ static void destroy_subtree(int s) {
     e = Entity{};
 }
 
+static int seed_font_px(const std::string& kind, int h) {
+    if (h < 6) h = 6;
+    if (kind == "label" || kind == "ui_label") {
+        if (h > 512) h = 512;
+        return h;
+    }
+    const char* widgets[] = {
+        "button", "ui_button", "panel", "ui_panel",
+        "checkbox", "ui_checkbox", "toggle", "ui_toggle",
+        "slider", "ui_slider", "bar", "ui_bar",
+        "field", "ui_field", nullptr
+    };
+    for (int i = 0; widgets[i]; ++i) {
+        if (kind == widgets[i]) {
+            int px = h * 6 / 10;
+            if (px < 6) px = 6;
+            if (px > 512) px = 512;
+            return px;
+        }
+    }
+    return 0;
+}
+
 extern "C" int engine_entity_create(const char* kind, const char* name,
                                     int x, int y, int w, int h,
                                     int r, int g_, int b) {
@@ -3270,6 +3655,7 @@ extern "C" int engine_entity_create(const char* kind, const char* name,
             e.name   = name ? name : "entity";
             e.x = x; e.y = y; e.w = (w < 4 ? 4 : w); e.h = (h < 4 ? 4 : h);
             e.r = r; e.g = g_; e.b = b;
+            e.fontPx = seed_font_px(e.kind, e.h);
             return s;
         }
     }
@@ -5480,7 +5866,13 @@ extern "C" int engine_scene_save(const char* path) {
           << e.sound << "|" << (e.soundLoop ? 1 : 0) << "|" << e.soundRange << "|"
           << e.emitRate << "|" << e.emitLife << "|" << e.emitSpeed << "|"
           << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "|"
-          << pub_encode(e.pubs) << "|" << e.aa << "\n";
+          << pub_encode(e.pubs) << "|" << e.aa << "|"
+          << e.texAlbedo << "|" << e.texNormal << "|" << e.texRough << "|"
+          << e.texMetal << "|" << e.texHeight << "|" << e.texAO << "|"
+          << e.matRough << "|" << e.matMetal << "|" << e.matBump << "|" << e.matTile << "|"
+          << e.fontPx << "|" << e.fontOx << "|" << e.fontOy << "|"
+          << e.uiRadius << "|" << e.uiBorder << "|" << e.uiAlign << "|"
+          << e.uiShadow << "|" << e.uiText << "|" << (e.pixel ? 1 : 0) << "\n";
     }
     return 1;
 }
@@ -5573,6 +5965,18 @@ extern "C" int engine_scene_load(const char* path) {
                 try { e.id = std::stoi(parts[0]); } catch (...) { e.id = 0; }
                 e.name = parts[1];
                 e.kind = parts[2];
+                /* Older scenes stored the widget type in the name ("panel",
+                   "button", ...) with kind "rect". Promote that onto kind so
+                   a later rename does not change what the object is. */
+                if (e.kind == "rect") {
+                    const char* legacy[] = {
+                        "empty", "panel", "button", "checkbox", "toggle",
+                        "slider", "bar", "field", nullptr
+                    };
+                    for (int li = 0; legacy[li]; ++li) {
+                        if (e.name == legacy[li]) { e.kind = legacy[li]; break; }
+                    }
+                }
                 try { e.x = std::stoi(parts[3]); } catch (...) {}
                 try { e.y = std::stoi(parts[4]); } catch (...) {}
                 try { e.w = std::stoi(parts[5]); } catch (...) {}
@@ -5663,6 +6067,78 @@ extern "C" int engine_scene_load(const char* path) {
                     else if (e.aa < 0) e.aa = -1;
                     else e.aa = 0;
                 }
+                if (parts.size() >= 69) e.texAlbedo = parts[68];
+                if (parts.size() >= 70) e.texNormal = parts[69];
+                if (parts.size() >= 71) e.texRough = parts[70];
+                if (parts.size() >= 72) e.texMetal = parts[71];
+                if (parts.size() >= 73) e.texHeight = parts[72];
+                if (parts.size() >= 74) e.texAO = parts[73];
+                if (parts.size() >= 75) {
+                    try { e.matRough = std::stoi(parts[74]); } catch (...) {}
+                    if (e.matRough < 0) e.matRough = 0;
+                    if (e.matRough > 100) e.matRough = 100;
+                }
+                if (parts.size() >= 76) {
+                    try { e.matMetal = std::stoi(parts[75]); } catch (...) {}
+                    if (e.matMetal < 0) e.matMetal = 0;
+                    if (e.matMetal > 100) e.matMetal = 100;
+                }
+                if (parts.size() >= 77) {
+                    try { e.matBump = std::stoi(parts[76]); } catch (...) {}
+                    if (e.matBump < 0) e.matBump = 0;
+                    if (e.matBump > 200) e.matBump = 200;
+                }
+                if (parts.size() >= 78) {
+                    try { e.matTile = std::stoi(parts[77]); } catch (...) {}
+                    if (e.matTile < 1) e.matTile = 1;
+                    if (e.matTile > 32) e.matTile = 32;
+                }
+                if (parts.size() >= 79) {
+                    try { e.fontPx = std::stoi(parts[78]); } catch (...) {}
+                    if (e.fontPx < 0) e.fontPx = 0;
+                    if (e.fontPx > 512) e.fontPx = 512;
+                }
+                if (parts.size() >= 80) {
+                    try { e.fontOx = std::stoi(parts[79]); } catch (...) {}
+                }
+                if (parts.size() >= 81) {
+                    try { e.fontOy = std::stoi(parts[80]); } catch (...) {}
+                }
+                if (e.fontOx < -100000) e.fontOx = -100000;
+                if (e.fontOx > 100000) e.fontOx = 100000;
+                if (e.fontOy < -100000) e.fontOy = -100000;
+                if (e.fontOy > 100000) e.fontOy = 100000;
+                if (parts.size() >= 82) {
+                    try { e.uiRadius = std::stoi(parts[81]); } catch (...) {}
+                }
+                if (parts.size() >= 83) {
+                    try { e.uiBorder = std::stoi(parts[82]); } catch (...) {}
+                }
+                if (parts.size() >= 84) {
+                    try { e.uiAlign = std::stoi(parts[83]); } catch (...) {}
+                }
+                if (parts.size() >= 85) {
+                    try { e.uiShadow = std::stoi(parts[84]); } catch (...) {}
+                }
+                if (parts.size() >= 86) {
+                    try { e.uiText = std::stoi(parts[85]); } catch (...) {}
+                }
+                if (e.uiRadius < -1) e.uiRadius = -1;
+                if (e.uiRadius > 64) e.uiRadius = 64;
+                if (e.uiBorder < -1) e.uiBorder = -1;
+                if (e.uiBorder > 16) e.uiBorder = 16;
+                if (e.uiAlign < 0) e.uiAlign = 0;
+                if (e.uiAlign > 8) e.uiAlign = 8;
+                if (e.uiShadow < 0) e.uiShadow = 0;
+                if (e.uiShadow > 2) e.uiShadow = 2;
+                if (e.uiText < -1) e.uiText = -1;
+                if (parts.size() >= 87) {
+                    try { e.pixel = std::stoi(parts[86]) ? 1 : 0; } catch (...) {}
+                }
+                /* Older files stored the label size in the box height, and
+                   widget captions as 60% of that height. Keep that look, then
+                   later resizes only change the box. */
+                if (e.fontPx < 6) e.fontPx = seed_font_px(e.kind, e.h);
                 if (e.emitRate < 0) e.emitRate = 0;
                 if (e.emitRate > 200) e.emitRate = 200;
                 if (e.emitLife < 50) e.emitLife = 50;
@@ -5698,6 +6174,7 @@ extern "C" int engine_scene_load(const char* path) {
     env_apply_day();
     sfx_on_scene_loaded();
     g_gamePaused = 0;
+    r3d::ent_maps_invalidate();
     return header_ok;
 }
 
@@ -7137,9 +7614,17 @@ void proj_scan_tree(const fs::path& root,
             if (!rec && !rel.empty()) {
                 std::string lower = rel;
                 for (char& c : lower) c = (char)tolower((unsigned char)c);
-                for (const std::string& suf : suffixes_lower) {
-                    if (ends_with(lower, suf)) { out.push_back(rel); break; }
+                std::string base = lower;
+                auto slash = base.find_last_of('/');
+                if (slash != std::string::npos) base = base.substr(slash + 1);
+                bool junk = base == "desktop.ini" || base == "thumbs.db" || base == ".ds_store";
+                bool take = !junk && suffixes_lower.empty();
+                if (!junk && !take) {
+                    for (const std::string& suf : suffixes_lower) {
+                        if (ends_with(lower, suf)) { take = true; break; }
+                    }
                 }
+                if (take) out.push_back(rel);
             }
         }
         it.increment(ec);
@@ -7238,10 +7723,11 @@ static const char* kPrefKey[] = {
     "grid", "show_grid", "snap", "autosave", "renderer", "filament",
     "music", "sfx", "play_w", "play_h", "fullscreen", "export_used", "export_open_folder", "export_protect",
     "vsync", "hd", "aa", "shadows",
-    "fog", "fog_r", "fog_g", "fog_b", "fog_dist"
+    "fog", "fog_r", "fog_g", "fog_b", "fog_dist",
+    "export_console"
 };
-static const int kPrefDef[] = { 32, 1, 0, 1, 33, 1, 100, 100, 1280, 720, 0, 1, 1, 1, 1, 0, 1, 1, 0, 168, 186, 206, 4800 };
-static const int kPrefCount = 23;
+static const int kPrefDef[] = { 32, 1, 0, 1, 33, 1, 100, 100, 1280, 720, 0, 1, 1, 1, 1, 0, 1, 1, 0, 168, 186, 206, 4800, 0 };
+static const int kPrefCount = 24;
 
 static int pref_clamp_key(const std::string& key, int v) {
     if (key == "grid") {
@@ -7259,7 +7745,7 @@ static int pref_clamp_key(const std::string& key, int v) {
         if (v > 3) return 3;
         return v;
     }
-    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "export_open_folder" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows" || key == "fog" || key == "filament")
+    if (key == "show_grid" || key == "snap" || key == "autosave" || key == "fullscreen" || key == "export_used" || key == "export_open_folder" || key == "export_console" || key == "vsync" || key == "hd" || key == "aa" || key == "shadows" || key == "fog" || key == "filament")
         return v != 0 ? 1 : 0;
     if (key == "fog_r" || key == "fog_g" || key == "fog_b") {
         if (v < 0) return 0;
@@ -7399,6 +7885,8 @@ extern "C" int engine_content_ship_game_cfg(const char* dst, int encrypt) {
         int v = def;
         auto it = g.prefs.find(key);
         if (it != g.prefs.end()) v = it->second;
+        /* A 2D game never starts the 3D renderer. */
+        if (!g.render3d && std::strcmp(key, "filament") == 0) v = 0;
         body += std::string(key) + "=" + std::to_string(v) + "\n";
     }
     char tmpDir[MAX_PATH];
@@ -7482,9 +7970,7 @@ extern "C" int engine_project_open(const char* path) {
     proj_note_compiled_scripts();
     proj_scan_dir(proj_join(g.projRoot, "scripts"), ".ebp", g.projBlueprints);
     proj_scan_dir(proj_join(g.projRoot, "prefabs"), ".prefab", g.projPrefabs);
-    proj_scan_dir_multi(proj_join(g.projRoot, "assets"),
-                        { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".obj" },
-                        g.projAssets);
+    proj_scan_dir_multi(proj_join(g.projRoot, "assets"), {}, g.projAssets);
     g.projActiveScene = 0;
     g.projLoaded = true;
     absorb_scene_files();
@@ -8153,6 +8639,24 @@ extern "C" int engine_project_remove_scene(int i) {
     return 1;
 }
 
+/* Change one scene's path in place. Removing it first refuses the only scene
+   and, for the open scene, points the active slot at a different file while
+   the entities in memory still belong to the one being renamed. */
+extern "C" int engine_project_rename_scene(int i, const char* rel) {
+    if (!g.projLoaded || !rel || !rel[0]) return 0;
+    if (i < 0 || i >= (int)g.projScenes.size()) return 0;
+    std::string next = rel;
+    std::string old = g.projScenes[i];
+    if (old == next) return 1;
+    for (int k = 0; k < (int)g.projScenes.size(); ++k) {
+        if (k != i && g.projScenes[k] == next) return 0;
+    }
+    g.projScenes[i] = next;
+    if (g.projStart == old) g.projStart = next;
+    engine_project_save_manifest();
+    return 1;
+}
+
 extern "C" int engine_project_script_count() { return (int)g.projScripts.size(); }
 extern "C" const char* engine_project_script_name(int i) {
     if (i < 0 || i >= (int)g.projScripts.size()) return "";
@@ -8221,7 +8725,7 @@ extern "C" int engine_project_save_prefab(const char* name, int slot) {
       << e.sound << "|" << (e.soundLoop ? 1 : 0) << "|" << e.soundRange << "|"
       << e.emitRate << "|" << e.emitLife << "|" << e.emitSpeed << "|"
       << e.emitSpread << "|" << e.emitSize << "|" << (e.emitHD ? 1 : 0) << "|"
-      << pub_encode(e.pubs) << "|" << e.aa << "\n";
+      << pub_encode(e.pubs) << "|" << e.aa << "|" << (e.pixel ? 1 : 0) << "\n";
 
     auto it = std::find(g.projPrefabs.begin(), g.projPrefabs.end(), fname);
     if (it == g.projPrefabs.end()) {
@@ -8289,6 +8793,11 @@ extern "C" int engine_project_spawn_prefab(int i, int x, int y) {
                     try { aav = std::stoi(parts[27]); } catch (...) {}
                     engine_entity_set_aa(slot, aav);
                 }
+                if (parts.size() >= 29) {
+                    int px = 0;
+                    try { px = std::stoi(parts[28]); } catch (...) {}
+                    engine_entity_set_pixel(slot, px);
+                }
             }
             return slot;
         }
@@ -8319,19 +8828,33 @@ extern "C" const char* engine_project_asset_rel(int i) {
 
 extern "C" void engine_project_rescan_assets() {
     if (!g.projLoaded) return;
-    proj_scan_dir_multi(proj_join(g.projRoot, "assets"),
-                        { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".obj" },
-                        g.projAssets);
+    proj_scan_dir_multi(proj_join(g.projRoot, "assets"), {}, g.projAssets);
 }
 
 static std::string g_lastImport;
 
-extern "C" int engine_project_import_asset(const char* src_path) {
+static bool import_subdir_ok(const char* into_rel, std::string& out) {
+    out.clear();
+    if (!into_rel || !into_rel[0]) return true;
+    std::string rel = into_rel;
+    for (char& c : rel) if (c == '\\') c = '/';
+    while (!rel.empty() && rel.front() == '/') rel.erase(rel.begin());
+    while (!rel.empty() && rel.back() == '/') rel.pop_back();
+    if (rel.empty()) return true;
+    if (rel.find("..") != std::string::npos) return false;
+    out = rel;
+    return true;
+}
+
+extern "C" int engine_project_import_asset_into(const char* src_path, const char* into_rel) {
     if (!g.projLoaded || !src_path) return 0;
     std::error_code ec;
     fs::path src(src_path);
     if (!fs::exists(src, ec)) return 0;
+    std::string sub;
+    if (!import_subdir_ok(into_rel, sub)) return 0;
     fs::path assets = fs::path(g.projRoot) / "assets";
+    fs::path dstDir = sub.empty() ? assets : (assets / sub);
     fs::path srcAbs = fs::weakly_canonical(src, ec);
     fs::path assetsAbs = fs::weakly_canonical(assets, ec);
     if (!ec) {
@@ -8342,8 +8865,25 @@ extern "C" int engine_project_import_asset(const char* src_path) {
             return 1;
         }
     }
-    fs::path dstDir = assets;
     fs::create_directories(dstDir, ec);
+    if (fs::is_directory(src, ec)) {
+        fs::path dst = dstDir / src.filename();
+        if (fs::exists(dst, ec)) {
+            std::string stem = dst.filename().string();
+            int i = 1;
+            while (fs::exists(dst, ec)) {
+                dst = dstDir / (stem + "_" + std::to_string(i));
+                ++i;
+            }
+        }
+        fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+        if (ec) return 0;
+        std::string rel = sub.empty() ? dst.filename().string() : (sub + "/" + dst.filename().string());
+        for (char& c : rel) if (c == '\\') c = '/';
+        g_lastImport = std::string("assets/") + rel;
+        engine_project_rescan_assets();
+        return 1;
+    }
     fs::path dst = dstDir / src.filename();
     /* if a same-named asset exists, append _1, _2, ... */
     if (fs::exists(dst, ec)) {
@@ -8357,13 +8897,36 @@ extern "C" int engine_project_import_asset(const char* src_path) {
     }
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
     if (ec) return 0;
-    g_lastImport = std::string("assets/") + dst.filename().string();
+    std::string rel = sub.empty() ? dst.filename().string() : (sub + "/" + dst.filename().string());
+    for (char& c : rel) if (c == '\\') c = '/';
+    g_lastImport = std::string("assets/") + rel;
     engine_project_rescan_assets();
     return 1;
 }
 
+extern "C" int engine_project_import_asset(const char* src_path) {
+    return engine_project_import_asset_into(src_path, nullptr);
+}
+
 extern "C" const char* engine_project_last_import() {
     return g_lastImport.c_str();
+}
+
+extern "C" int engine_drop_count() {
+    return (int)g_dropPaths.size();
+}
+
+extern "C" int engine_drop_x() { return g_dropX; }
+extern "C" int engine_drop_y() { return g_dropY; }
+
+extern "C" const char* engine_drop_path(int i) {
+    if (i < 0 || i >= (int)g_dropPaths.size()) return "";
+    g_dropTmp = g_dropPaths[(size_t)i];
+    return g_dropTmp.c_str();
+}
+
+extern "C" void engine_drop_clear() {
+    g_dropPaths.clear();
 }
 
 /* Files a build actually reaches. The launch scene is the seed. A scene, script,

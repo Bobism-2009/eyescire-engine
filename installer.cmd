@@ -18,12 +18,13 @@ mkdir installer\payload\package
 copy /y "release\editor.exe"           "installer\payload\" >nul
 copy /y "release\engine.dll"           "installer\payload\" >nul
 copy /y "release\engine.lib"           "installer\payload\" >nul
+if exist "release\filament_bridge.dll" copy /y "release\filament_bridge.dll" "installer\payload\" >nul
 copy /y "release\EyescirePlayer3D.exe" "installer\payload\" >nul
+copy /y "release\EyescirePlayer.exe"   "installer\payload\" >nul
+copy /y "release\EyescirePlayer.dll"   "installer\payload\" >nul
 copy /y "release\libc++.dll"           "installer\payload\" >nul
 if errorlevel 1 (echo failed to copy libc++.dll & exit /b 1)
 copy /y "release\libunwind.dll"        "installer\payload\" >nul
-if exist "build\EyescirePlayer.exe" copy /y "build\EyescirePlayer.exe" "installer\payload\" >nul
-if exist "build\EyescirePlayer.dll" copy /y "build\EyescirePlayer.dll" "installer\payload\" >nul
 if exist "release\icons\*.png" copy /y "release\icons\*.png" "installer\payload\icons\" >nul
 copy /y "engine\*.nxa"                 "installer\payload\package\" >nul
 copy /y "installer\VERSION"            "installer\payload\VERSION" >nul

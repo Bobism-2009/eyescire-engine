@@ -13,13 +13,38 @@ let WIN_H: int = 720;
 let cam_x: float = 0.0;
 let cam_y: float = 0.0;
 let cam_zoom: float = 1.0;
+let gv_x: int = 0;
+let gv_y: int = 0;
+let gv_w: int = 1280;
+let gv_h: int = 720;
 
 fn ent_is_empty(slot: int): int {
     if (slot < 0) return 0;
     if (ent_kind(slot) == "empty") return 1;
     if (ent_is_light(slot) == 1) return 1;       /* 3D lights: nothing to draw in 2D */
-    if (ent_kind(slot) == "rect" && ent_name(slot) == "empty") return 1;
     return 0;
+}
+
+/* Fullscreen used to leave the picture at the play size and stretch it.
+   Match the real client so the 16:9 game view stays square. */
+fn player_match_window() {
+    let cw: int = eng_client_w();
+    let ch: int = eng_client_h();
+    if (cw < 320 || ch < 240) return;
+    eng_fit_buffer(cw, ch);
+    WIN_W = eng_window_w();
+    WIN_H = eng_window_h();
+}
+
+fn game_view_fit() {
+    let gw: int = WIN_W;
+    let gh: int = WIN_H;
+    if (WIN_W * 720 <= WIN_H * 1280) gh = WIN_W * 720 / 1280;
+    else gw = WIN_H * 1280 / 720;
+    gv_w = gw;
+    gv_h = gh;
+    gv_x = (WIN_W - gw) / 2;
+    gv_y = (WIN_H - gh) / 2;
 }
 
 fn ent_is_camera_ent(slot: int): int {
@@ -43,27 +68,27 @@ fn snap_to_main_camera() {
     let eh: int = ent_h(cam_slot);
     if (ew < 4) ew = 4;
     if (eh < 4) eh = 4;
-    let zoom_x: float = WIN_W;
+    let zoom_x: float = gv_w;
     zoom_x = zoom_x / ew;
-    let zoom_y: float = WIN_H;
+    let zoom_y: float = gv_h;
     zoom_y = zoom_y / eh;
-    if (WIN_W * eh <= WIN_H * ew) {
+    if (gv_w * eh <= gv_h * ew) {
         cam_zoom = zoom_x;
         cam_x = ex;
-        cam_y = ey + eh / 2.0 - WIN_H / (2.0 * cam_zoom);
+        cam_y = ey + eh / 2.0 - gv_h / (2.0 * cam_zoom);
     } else {
         cam_zoom = zoom_y;
-        cam_x = ex + ew / 2.0 - WIN_W / (2.0 * cam_zoom);
+        cam_x = ex + ew / 2.0 - gv_w / (2.0 * cam_zoom);
         cam_y = ey;
     }
     if (cam_zoom < 0.05) cam_zoom = 0.05;
 }
 
 fn world_to_screen_x(wx: float): int {
-    return (wx - cam_x) * cam_zoom;
+    return (wx - cam_x) * cam_zoom + gv_x;
 }
 fn world_to_screen_y(wy: float): int {
-    return (wy - cam_y) * cam_zoom;
+    return (wy - cam_y) * cam_zoom + gv_y;
 }
 fn world_len(wl: float): int { return wl * cam_zoom; }
 
@@ -74,40 +99,42 @@ fn draw_entity_at(slot: int, sx: int, sy: int, sw: int, sh: int) {
     if (kind == "label") {
         let txt: string = ent_text(slot);
         if (txt.len() == 0) txt = ent_name(slot);
-        ui_draw_label(sx, sy, sw, sh, txt, ent_r(slot), ent_g(slot), ent_b(slot), ent_sprite(slot));
+        ui_draw_label(sx, sy, sw, sh, txt, ent_r(slot), ent_g(slot), ent_b(slot), ent_sprite(slot), ent_font_px(slot), ent_font_ox(slot), ent_font_oy(slot), ui_ha(slot), ui_va(slot));
     } else if (ent_is_3d_kind(slot) == 1) {
         shape3d_draw_flat(slot, sx, sy, sw, sh);
-    } else if (kind == "sprite2d" && ent_sprite_id(slot) != 0) {
-        eng_image_blit_scaled_rot_a(ent_sprite_id(slot), sx, sy, sw, sh, rot, ent_a(slot));
-    } else if (ent_sprite_id(slot) != 0) {
-        if (rot != 0) eng_image_blit_scaled_rot(ent_sprite_id(slot), sx, sy, sw, sh, rot);
-        else          eng_image_blit_scaled(ent_sprite_id(slot), sx, sy, sw, sh);
-    } else {
-        if (rot != 0)                 eng_fill_rect_rot(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), rot);
-        else if (ent_is_ui(slot) == 1) ui_draw_box(slot, sx, sy, sw, sh);
-        else                          draw_fill_rect(rect(sx, sy, sw, sh), rgb(ent_r(slot), ent_g(slot), ent_b(slot)));
+    } else if (ent_is_ui(slot) == 1 && kind != "sprite2d") {
+        if (rot != 0) eng_fill_rect_rot_a(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot), rot);
+        else          ui_draw_box(slot, sx, sy, sw, sh);
         let txt: string = ent_text(slot);
         if (txt.len() > 0 && sw > 10 && sh > 8 && rot == 0 && ui_ent_owns_caption(slot) == 0) {
-            eng_set_font_size(ui_rect_text_font_px(sh));
-            draw_text_centered(sx, sy, sw, sh, txt, rgb(240, 240, 240));
-            eng_set_font_size(14);
+            ui_draw_caption(sx, sy, sw, sh, txt, ent_font_px(slot), ent_font_ox(slot), ent_font_oy(slot), ui_text_chan(slot, 0), ui_text_chan(slot, 1), ui_text_chan(slot, 2), ui_ha(slot), ui_va(slot));
+        }
+    } else if (ent_sprite_id(slot) != 0) {
+        eng_image_blit_scaled_rot_px(ent_sprite_id(slot), sx, sy, sw, sh, rot, ent_a(slot), ent_pixel(slot));
+    } else {
+        if (rot != 0)                 eng_fill_rect_rot_a(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot), rot);
+        else if (ent_is_ui(slot) == 1) ui_draw_box(slot, sx, sy, sw, sh);
+        else                          eng_fill_rect_a(sx, sy, sw, sh, ent_r(slot), ent_g(slot), ent_b(slot), ent_a(slot));
+        let txt: string = ent_text(slot);
+        if (txt.len() > 0 && sw > 10 && sh > 8 && rot == 0 && ui_ent_owns_caption(slot) == 0) {
+            ui_draw_caption(sx, sy, sw, sh, txt, ent_font_px(slot), ent_font_ox(slot), ent_font_oy(slot), ui_text_chan(slot, 0), ui_text_chan(slot, 1), ui_text_chan(slot, 2), ui_ha(slot), ui_va(slot));
         }
     }
 }
 
 fn draw_world() {
-    let i: int = ent_iter_next(0);
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ent_is_empty(i) == 1) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         if (ent_is_ui(i) == 1) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         if (ent_is_camera_ent(i) == 1 || ent_shown(i) == 0) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         let sx: int = world_to_screen_x(ent_x(i));
@@ -115,17 +142,17 @@ fn draw_world() {
         let sw: int = world_len(ent_w(i));
         let sh: int = world_len(ent_h(i));
         draw_entity_at(i, sx, sy, sw, sh);
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
     particles_draw();
 }
 
 fn draw_ui_overlay() {
-    ui_canvas_layout_game_view(rect(0, 0, WIN_W, WIN_H));
-    let i: int = ent_iter_next(0);
+    ui_canvas_layout_game_view(rect(gv_x, gv_y, gv_w, gv_h));
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ent_is_ui(i) == 0 || ent_shown(i) == 0) {
-            i = ent_iter_next(i + 1);
+            i = ent_next_by_depth(i);
             continue;
         }
         let sx: int = ui_to_screen_x(ent_x(i));
@@ -133,22 +160,26 @@ fn draw_ui_overlay() {
         let sw: int = ui_len_w(ent_w(i));
         let sh: int = ui_len_h(ent_h(i));
         draw_entity_at(i, sx, sy, sw, sh);
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
 }
 
 fn apply_engine_view() {
-    eng_view_set(cam_x, cam_y, cam_zoom, 0, 0, WIN_W, WIN_H);
+    eng_view_set(cam_x, cam_y, cam_zoom, gv_x, gv_y, gv_w, gv_h);
 }
 
 fn draw_scene() {
-    eng_clear(28, 32, 40);
+    game_view_fit();
+    eng_clear(18, 19, 22);
+    eng_fill_rect(gv_x, gv_y, gv_w, gv_h, scene_clear_r(), scene_clear_g(), scene_clear_b());
     snap_to_main_camera();
     apply_engine_view();
+    eng_set_clip(gv_x, gv_y, gv_w, gv_h);
     if (tilemap_active() == 1) tilemap_draw(1);
     draw_world();
     draw_ui_overlay();
     dispatch_draw();
+    eng_clear_clip();
 }
 
 fn dispatch_scripts() {
@@ -202,7 +233,7 @@ fn player_main(): int {
     }
 
     let opened: int = proj_open(exe_dir);
-    if (opened == 0) return 0;
+    if (opened == 0) return -3;
 
     let title: string = proj_name();
     if (title.len() == 0) title = "Eyescire Game";
@@ -210,10 +241,11 @@ fn player_main(): int {
     WIN_W = pref_int("play_w", 1280);
     WIN_H = pref_int("play_h", 720);
     let ok: int = eng_init(WIN_W, WIN_H, title);
+    if (ok == 0) return -4;
     if (pref_int("fullscreen", 0) == 1) eng_set_fullscreen(1);
-    if (ok == 0) return 0;
+    player_match_window();
     set_target_fps(60);
-    if (eng_splash_run() == 0) return 0;
+    if (eng_splash_run() == 0) return 1;
 
     if (proj_scene_count() > 0) {
         let scene_path: string = proj_scene_abs(proj_active_scene());
@@ -242,7 +274,9 @@ fn player_main(): int {
         running = eng_pump();
         if (key_pressed(VK_ESCAPE)) running = 0;
 
-        ui_canvas_layout_game_view(rect(0, 0, WIN_W, WIN_H));
+        player_match_window();
+        game_view_fit();
+        ui_canvas_layout_game_view(rect(gv_x, gv_y, gv_w, gv_h));
         ui_poll_buttons();
         snap_to_main_camera();
         apply_engine_view();

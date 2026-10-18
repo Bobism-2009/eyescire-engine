@@ -14,6 +14,9 @@ let ui_cw: int = 0;
 let ui_ch: int = 0;
 let ui_scale_x: float = 1.0;
 let ui_scale_y: float = 1.0;
+let ui_tr: int = 240;
+let ui_tg: int = 240;
+let ui_tb: int = 240;
 
 fn ui_canvas_layout_letterbox(v: Rect) {
     let scale_x: float = v.w;
@@ -71,7 +74,6 @@ fn ui_named(slot: int, want: string): int {
     let kind: string = ent_kind(slot);
     if (kind == want) return 1;
     if (kind == "ui_" + want) return 1;
-    if (kind == "rect" && ent_name(slot) == want) return 1;
     return 0;
 }
 
@@ -115,8 +117,7 @@ fn ui_ent_owns_caption(slot: int): int {
 
 fn ui_ent_is_button(slot: int): int {
     let kind: string = ent_kind(slot);
-    if (kind == "ui_button") return 1;
-    if (kind == "rect" && ent_name(slot) == "button") return 1;
+    if (kind == "button" || kind == "ui_button") return 1;
     return 0;
 }
 
@@ -184,6 +185,31 @@ fn ui_button_host(sc: string, button: int): int {
     return button;
 }
 
+/* Next entity in paint order. Pass -1 to start. Lower depth is behind;
+   equal depths keep creation order. */
+fn ent_next_by_depth(after_slot: int): int {
+    let after_z: int = 0;
+    if (after_slot >= 0) after_z = ent_z(after_slot);
+    let best: int = -1;
+    let best_z: int = 0;
+    let i: int = ent_iter_next(0);
+    while (i >= 0) {
+        let z: int = ent_z(i);
+        let later: int = 0;
+        if (after_slot < 0) later = 1;
+        else if (z > after_z) later = 1;
+        else if (z == after_z && i > after_slot) later = 1;
+        if (later == 1) {
+            if (best < 0 || z < best_z || (z == best_z && i < best)) {
+                best = i;
+                best_z = z;
+            }
+        }
+        i = ent_iter_next(i + 1);
+    }
+    return best;
+}
+
 /* Click flips a toggle button and runs its On click function.
    The caller has already laid out the canvas. The last hit wins, matching paint order. */
 fn ui_button_call(slot: int) {
@@ -222,7 +248,7 @@ fn ui_poll_buttons() {
     ui_poll_widgets();
     if (eng_mouse_pressed(0) == 0) return;
     let hit: int = -1;
-    let i: int = ent_iter_next(0);
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ui_ent_is_button(i) == 1 && ent_shown(i) == 1) {
             let sx: int = ui_to_screen_x(ent_x(i));
@@ -231,7 +257,7 @@ fn ui_poll_buttons() {
             let sh: int = ui_len_h(ent_h(i));
             if (ui_point_in(sx, sy, sw, sh) == 1) hit = i;
         }
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
     if (hit < 0) return;
     if (ent_button_toggle(hit) == 1) {
@@ -239,6 +265,56 @@ fn ui_poll_buttons() {
         else                               ent_set_button_toggled(hit, 1);
     }
     ui_button_call(hit);
+}
+
+fn ui_ha(slot: int): int { return ent_ui_align(slot) % 3; }
+fn ui_va(slot: int): int { return ent_ui_align(slot) / 3; }
+
+fn ui_pack_text(r: int, g: int, b: int): int {
+    if (r < 0) r = 0;
+    if (g < 0) g = 0;
+    if (b < 0) b = 0;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    return r * 65536 + g * 256 + b;
+}
+
+fn ui_text_chan(slot: int, ch: int): int {
+    let p: int = ent_ui_text(slot);
+    if (p < 0) return -1;
+    if (ch == 0) return p / 65536;
+    if (ch == 1) return (p / 256) % 256;
+    return p % 256;
+}
+
+/* dr/dg/db are the color used when the widget has no custom text color. */
+fn ui_load_text_color(slot: int, dr: int, dg: int, db: int) {
+    let p: int = ent_ui_text(slot);
+    if (p < 0) {
+        ui_tr = dr;
+        ui_tg = dg;
+        ui_tb = db;
+        return;
+    }
+    ui_tr = p / 65536;
+    if (ui_tr > 255) ui_tr = 255;
+    ui_tg = (p / 256) % 256;
+    ui_tb = p % 256;
+}
+
+/* auto_px is the built-in corner size in screen pixels. A stored radius replaces it. */
+fn ui_radius_screen(slot: int, sw: int, sh: int, auto_px: int): int {
+    let custom: int = ent_ui_radius(slot);
+    let rad: int = auto_px;
+    if (custom >= 0) {
+        let f: float = custom;
+        rad = f * ui_scale_y;
+    }
+    if (rad < 0) rad = 0;
+    if (sh > 0 && rad * 2 > sh) rad = sh / 2;
+    if (sw > 0 && rad * 2 > sw) rad = sw / 2;
+    return rad;
 }
 
 fn ui_draw_box(slot: int, sx: int, sy: int, sw: int, sh: int) {
@@ -250,10 +326,9 @@ fn ui_draw_box(slot: int, sx: int, sy: int, sw: int, sh: int) {
     let is_button: int = ui_ent_is_button(slot);
     let base: float = 10.0;
     if (is_button == 1) base = 6.0;
-    let rad: int = base * ui_scale_y;
-    if (rad < 2) rad = 2;
-    if (rad * 2 > sh) rad = sh / 2;
-    if (rad * 2 > sw) rad = sw / 2;
+    let auto_rad: int = base * ui_scale_y;
+    if (auto_rad < 2 && ent_ui_radius(slot) < 0) auto_rad = 2;
+    let rad: int = ui_radius_screen(slot, sw, sh, auto_rad);
     let drop: int = 2.0 * ui_scale_y;
     if (drop < 1) drop = 1;
     ui_resolve_fill(slot, sx, sy, sw, sh);
@@ -261,28 +336,79 @@ fn ui_draw_box(slot: int, sx: int, sy: int, sw: int, sh: int) {
     let g: int = ui_fill_g;
     let b: int = ui_fill_b;
     let a: int = ent_a(slot);
-    eng_fill_round_a(sx, sy + drop, sw, sh, rad, 0, 0, 0, 70 * a / 255);
+    let shadow: int = ent_ui_shadow(slot);
+    if (shadow == 2 || shadow == 0) {
+        eng_fill_round_a(sx, sy + drop, sw, sh, rad, 0, 0, 0, 70 * a / 255);
+    }
     eng_fill_round_a(sx, sy, sw, sh, rad, r, g, b, a);
-    if (is_button == 0) {
-        eng_outline_round_a(sx, sy, sw - 1, sh - 1, rad, 1,
+    let border: int = ent_ui_border(slot);
+    let draw_edge: int = 0;
+    let thick: int = 1;
+    if (border < 0) {
+        if (is_button == 0) draw_edge = 1;
+    } else if (border > 0) {
+        draw_edge = 1;
+        thick = border;
+        let tf: float = thick;
+        thick = tf * ui_scale_y;
+        if (thick < 1) thick = 1;
+    }
+    if (draw_edge == 1) {
+        eng_outline_round_a(sx, sy, sw - 1, sh - 1, rad, thick,
                             ui_lighten(r, 22), ui_lighten(g, 22), ui_lighten(b, 22), a);
     }
 }
 
 // -----------------------------------------------------------------------------
-// Scaled text — text pixel size tracks the game-view scale so labels/buttons
-// look identical in the editor UI tab, play mode, native runtime, and web.
-// A label/button's on-screen box height (already scaled) drives its font size,
-// giving designers WYSIWYG control by dragging the element's height.
+// Text size is a property of the words. The box only clips them (and wraps
+// when a line is wider than the box). Dragging the box does not change the
+// font. Screen pixels are the canvas size times the game-view scale.
 // -----------------------------------------------------------------------------
 
 fn ui_clamp_font(px: int): int {
     if (px < 6) return 6;
-    if (px > 96) return 96;
+    if (px > 512) return 512;
     return px;
 }
 
-/* Label text fills the element height. */
+/* Shrink a face already sized for the box height until the words fit the width. */
+fn ui_fit_px(face: string, px: int, sw: int, txt: string, pad: int): int {
+    px = ui_clamp_font(px);
+    eng_set_font(face, px);
+    if (txt.len() == 0) return px;
+    let room: int = sw - pad;
+    if (room < 8) room = 8;
+    let tw: int = eng_text_width(txt);
+    if (tw > room && tw > 0) {
+        px = px * room / tw;
+        px = ui_clamp_font(px);
+        eng_set_font(face, px);
+    }
+    return px;
+}
+
+/* Canvas font size, scaled into the game view. */
+fn ui_font_screen(canvas_px: int): int {
+    if (canvas_px < 1) return 0;
+    let f: float = canvas_px;
+    let px: int = f * ui_scale_y;
+    if (px < 1) px = 1;
+    if (px > 512) px = 512;
+    return px;
+}
+
+/* Stored size when the entity has one. Otherwise the old height rule. */
+fn ui_text_px_for(slot: int, sh: int): int {
+    let stored: int = ent_font_px(slot);
+    if (stored > 0) {
+        let px: int = ui_font_screen(stored);
+        if (px < 6) px = 6;
+        return px;
+    }
+    return ui_rect_text_font_px(sh);
+}
+
+/* Fallback when a label has no stored size. */
 fn ui_label_font_px(scaled_h: int): int {
     return ui_clamp_font(scaled_h);
 }
@@ -330,8 +456,33 @@ fn ui_font_file(path: string): int {
 
 /* A label whose picture path is a font file draws with that font.
    Other labels stay on the pixel font in 3D and Consolas in 2D. */
-fn ui_draw_label(sx: int, sy: int, sw: int, sh: int, txt: string, r: int, g: int, b: int, font_path: string) {
+fn ui_draw_label(sx: int, sy: int, sw: int, sh: int, txt: string, r: int, g: int, b: int, font_path: string, font_px: int, font_ox: int, font_oy: int, ha: int, va: int) {
     if (txt.len() == 0) return;
+    if (scene_render3d() == 0) {
+        let px: int = ui_font_screen(font_px);
+        if (px < 6) px = ui_label_font_px(sh);
+        eng_clip_push_rect(sx, sy, sw, sh);
+        if (ha == 0 && va == 0) {
+            let ox: int = ui_len_w(font_ox);
+            let oy: int = ui_len_h(font_oy);
+            let tw: int = sw - ox;
+            if (tw < 1) tw = 1;
+            if (ui_font_file(font_path) == 1) {
+                if (px > 320) px = 320;
+                eng_text_file(sx + ox, sy + oy, txt, r, g, b, px, font_path);
+            } else {
+                eng_set_font("Consolas", px);
+                eng_text_box(sx + ox, sy + oy, tw, sh + 4096, txt, r, g, b);
+                eng_set_font("Consolas", 14);
+            }
+        } else {
+            eng_set_font("Consolas", px);
+            eng_text_box_align(sx, sy, sw, sh, txt, r, g, b, ha, va);
+            eng_set_font("Consolas", 14);
+        }
+        eng_clip_pop();
+        return;
+    }
     if (ui_font_file(font_path) == 1) {
         let px: int = sh;
         if (px > 320) px = 320;
@@ -367,11 +518,34 @@ fn ui_draw_label(sx: int, sy: int, sw: int, sh: int, txt: string, r: int, g: int
         let y: int = sy;
         if (th < sh) y = sy + (sh - th) / 2;
         eng_text_px(x, y, txt, r, g, b, sc);
-    } else {
-        eng_set_font("Consolas", ui_label_font_px(sh));
-        eng_text(sx, sy, txt, r, g, b);
-        eng_set_font("Consolas", 14);
     }
+}
+
+/* Button and panel words. Same face in the editor and the desktop player. */
+fn ui_draw_caption(sx: int, sy: int, sw: int, sh: int, txt: string, font_px: int, font_ox: int, font_oy: int, r: int, g: int, b: int, ha: int, va: int) {
+    if (txt.len() == 0) return;
+    if (r < 0) { r = 240; g = 240; b = 240; }
+    if (scene_render3d() == 1) {
+        let sc: int = ui_px_caption_scale(sw, sh, txt.len());
+        let tw: int = txt.len() * 6 * sc;
+        eng_text_px(sx + (sw - tw) / 2, sy + (sh - 7 * sc) / 2, txt, r, g, b, sc);
+        return;
+    }
+    let px: int = ui_font_screen(font_px);
+    if (px < 6) px = ui_rect_text_font_px(sh);
+    eng_clip_push_rect(sx, sy, sw, sh);
+    eng_set_font("Cascadia Mono", px);
+    if (ha == 0 && va == 0) {
+        let ox: int = ui_len_w(font_ox);
+        let oy: int = ui_len_h(font_oy);
+        let rw: int = sw - ox;
+        if (rw < 1) rw = 1;
+        eng_text_box(sx + ox, sy + oy, rw, sh + 4096, txt, r, g, b);
+    } else {
+        eng_text_box_align(sx, sy, sw, sh, txt, r, g, b, ha, va);
+    }
+    eng_set_font("Consolas", 14);
+    eng_clip_pop();
 }
 
 fn ui_draw_text(x: int, y: int, s: string, r: int, g: int, b: int, px: int) {
@@ -402,7 +576,7 @@ fn ui_hit_slot(slot: int): int {
 }
 
 fn ui_slider_layout(slot: int, sx: int, sy: int, sw: int, sh: int) {
-    ui_font = ui_rect_text_font_px(sh);
+    ui_font = ui_text_px_for(slot, sh);
     let num: string = "" + ent_ui_value(slot);
     ui_num_w = ui_text_w(num, ui_font) + 10;
     ui_lab_w = 0;
@@ -443,6 +617,7 @@ fn ui_slider_from_mouse(slot: int) {
 }
 
 fn ui_draw_check(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    eng_clip_push_rect(sx, sy, sw, sh);
     let bs: int = sh;
     if (bs > sw) bs = sw;
     if (bs < 8) bs = 8;
@@ -464,11 +639,14 @@ fn ui_draw_check(slot: int, sx: int, sy: int, sw: int, sh: int) {
     }
     let lab: string = ent_text(slot);
     if (lab.len() == 0) lab = ent_name(slot);
-    let px: int = ui_rect_text_font_px(sh);
-    ui_draw_text(sx + bs + 8, ui_text_y(sy, sh, px), lab, 232, 233, 236, px);
+    let px: int = ui_text_px_for(slot, sh);
+    ui_load_text_color(slot, 232, 233, 236);
+    ui_draw_text(sx + bs + 8, ui_text_y(sy, sh, px), lab, ui_tr, ui_tg, ui_tb, px);
+    eng_clip_pop();
 }
 
 fn ui_draw_toggle(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    eng_clip_push_rect(sx, sy, sw, sh);
     let pw: int = sh * 2;
     if (pw > sw) pw = sw;
     if (pw < sh) pw = sh;
@@ -487,15 +665,19 @@ fn ui_draw_toggle(slot: int, sx: int, sy: int, sw: int, sh: int) {
     eng_fill_round_a(kx, ky, ks, ks, ks / 2, 236, 237, 240, 255);
     let lab: string = ent_text(slot);
     if (lab.len() == 0) lab = ent_name(slot);
-    let px: int = ui_rect_text_font_px(sh);
-    ui_draw_text(sx + pw + 8, ui_text_y(sy, sh, px), lab, 232, 233, 236, px);
+    let px: int = ui_text_px_for(slot, sh);
+    ui_load_text_color(slot, 232, 233, 236);
+    ui_draw_text(sx + pw + 8, ui_text_y(sy, sh, px), lab, ui_tr, ui_tg, ui_tb, px);
+    eng_clip_pop();
 }
 
 fn ui_draw_slider(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    eng_clip_push_rect(sx, sy, sw, sh);
     ui_slider_layout(slot, sx, sy, sw, sh);
     let px: int = ui_font;
     if (ui_lab_w > 0) {
-        ui_draw_text(sx, ui_text_y(sy, sh, px), ent_text(slot), 210, 214, 220, px);
+        ui_load_text_color(slot, 210, 214, 220);
+        ui_draw_text(sx, ui_text_y(sy, sh, px), ent_text(slot), ui_tr, ui_tg, ui_tb, px);
     }
     let th: int = sh / 3;
     if (th < 4) th = 4;
@@ -518,13 +700,16 @@ fn ui_draw_slider(slot: int, sx: int, sy: int, sw: int, sh: int) {
     let ky: int = sy + sh / 2 - kr;
     eng_fill_round_a(kx, ky, kr * 2, kr * 2, kr, 236, 237, 240, 255);
     let num: string = "" + v;
-    ui_draw_text(sx + sw - ui_num_w + 6, ui_text_y(sy, sh, px), num, 210, 214, 220, px);
+    ui_load_text_color(slot, 210, 214, 220);
+    ui_draw_text(sx + sw - ui_num_w + 6, ui_text_y(sy, sh, px), num, ui_tr, ui_tg, ui_tb, px);
+    eng_clip_pop();
 }
 
 fn ui_draw_bar(slot: int, sx: int, sy: int, sw: int, sh: int) {
-    let rad: int = sh / 2;
-    if (rad > 8) rad = 8;
-    if (rad < 2) rad = 2;
+    let auto_rad: int = sh / 2;
+    if (auto_rad > 8) auto_rad = 8;
+    if (auto_rad < 2) auto_rad = 2;
+    let rad: int = ui_radius_screen(slot, sw, sh, auto_rad);
     eng_fill_round_a(sx, sy, sw, sh, rad, 28, 32, 40, 255);
     let v: int = ent_ui_value(slot);
     let fw: int = sw * v / 100;
@@ -533,23 +718,26 @@ fn ui_draw_bar(slot: int, sx: int, sy: int, sw: int, sh: int) {
 }
 
 fn ui_draw_field(slot: int, sx: int, sy: int, sw: int, sh: int) {
+    eng_clip_push_rect(sx, sy, sw, sh);
     ui_blink = ui_blink + 1;
-    let rad: int = 6;
-    if (rad * 2 > sh) rad = sh / 2;
+    let auto_rad: int = 6;
+    if (auto_rad * 2 > sh) auto_rad = sh / 2;
+    let rad: int = ui_radius_screen(slot, sw, sh, auto_rad);
     eng_fill_round_a(sx, sy, sw, sh, rad, 22, 26, 34, 255);
     let br: int = 70;
     let bg: int = 76;
     let bb: int = 88;
     if (ui_focus == slot) { br = ent_r(slot); bg = ent_g(slot); bb = ent_b(slot); }
     eng_outline_round_a(sx, sy, sw - 1, sh - 1, rad, 1, br, bg, bb, 255);
-    let px: int = ui_rect_text_font_px(sh);
+    let px: int = ui_text_px_for(slot, sh);
     let txt: string = ent_text(slot);
     let tx: int = sx + 8;
     let ty: int = ui_text_y(sy, sh, px);
+    ui_load_text_color(slot, 232, 233, 236);
     if (txt.len() == 0 && ui_focus != slot) {
         ui_draw_text(tx, ty, "Text", 120, 126, 138, px);
     } else {
-        ui_draw_text(tx, ty, txt, 232, 233, 236, px);
+        ui_draw_text(tx, ty, txt, ui_tr, ui_tg, ui_tb, px);
     }
     if (ui_focus == slot && (ui_blink / 18) % 2 == 0) {
         let cx: int = tx + ui_text_w(txt, px) + 1;
@@ -557,6 +745,7 @@ fn ui_draw_field(slot: int, sx: int, sy: int, sw: int, sh: int) {
         if (ch > sh - 6) ch = sh - 6;
         eng_fill_rect(cx, sy + (sh - ch) / 2, 2, ch, 232, 233, 236);
     }
+    eng_clip_pop();
 }
 
 fn ui_type_into(slot: int, code: int) {
@@ -602,14 +791,14 @@ fn ui_poll_widgets() {
     let hit_field: int = -1;
     let hit_flip: int = -1;
     let hit_slider: int = -1;
-    let i: int = ent_iter_next(0);
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ent_shown(i) == 1 && ui_hit_slot(i) == 1) {
             if (ui_ent_is_field(i) == 1) hit_field = i;
             if (ui_ent_is_check(i) == 1 || ui_ent_is_toggle(i) == 1) hit_flip = i;
             if (ui_ent_is_slider(i) == 1) hit_slider = i;
         }
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
     if (hit_field >= 0) ui_focus = hit_field;
     else ui_focus = -1;

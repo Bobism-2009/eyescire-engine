@@ -41,6 +41,8 @@ extern "C" int    engine_emit_burst(const char*, float, float, float, int, int, 
 extern "C" void   engine_particles_draw_2d();
 extern "C" int    engine_sfx_play(const char*);
 extern "C" int    engine_sfx_play_at(const char*, float, float, float);
+extern "C" int    engine_sfx_preview(const char*);
+extern "C" int    engine_sfx_preview_on();
 extern "C" void   engine_sfx_set_live(int);
 extern "C" void   engine_set_autosave(int);
 extern "C" int    engine_autosave();
@@ -110,6 +112,8 @@ extern "C" void   engine_outline_rect(int, int, int, int, int, int, int, int);
 extern "C" void   engine_line(int, int, int, int, int, int, int);
 extern "C" void   engine_pixel(int, int, int, int, int);
 extern "C" void   engine_text(int, int, const char*, int, int, int);
+extern "C" void   engine_text_box(int, int, int, int, const char*, int, int, int);
+extern "C" void   engine_text_box_align(int, int, int, int, const char*, int, int, int, int, int);
 extern "C" void   engine_text_px(int, int, const char*, int, int, int, int);
 extern "C" void   engine_text_aa(int, int, const char*, int, int, int, int);
 extern "C" int    engine_text_width(const char*);
@@ -121,10 +125,13 @@ extern "C" void   engine_set_font_bold(int);
 extern "C" void   engine_text_file(int, int, const char*, int, int, int, int, const char*);
 extern "C" int    engine_text_file_width(const char*, int, const char*);
 extern "C" void   engine_set_clip(int, int, int, int);
+extern "C" void   engine_clip_push_rect(int, int, int, int);
+extern "C" void   engine_clip_pop();
 extern "C" void   engine_clear_clip();
 
 extern "C" int    engine_image_load(const char*);
 extern "C" int    engine_image_load_cached(const char*);
+extern "C" int    engine_image_load_thumb(const char*, int);
 extern "C" void   engine_image_cache_clear();
 extern "C" int    engine_image_w(int);
 extern "C" int    engine_image_h(int);
@@ -137,6 +144,7 @@ extern "C" void   engine_image_blit_sub_nn_tint(int, int, int, int, int, int, in
 extern "C" void   engine_image_blit_pan_nn(int, double, int, int);
 extern "C" void   engine_image_blit_scaled_rot(int, int, int, int, int, int);
 extern "C" void   engine_image_blit_scaled_rot_a(int, int, int, int, int, int, int);
+extern "C" void   engine_image_blit_scaled_rot_px(int, int, int, int, int, int, int, int);
 extern "C" void   engine_draw_sprite(int, int, int, int, int, int, int);
 extern "C" void   engine_image_free(int);
 
@@ -193,6 +201,24 @@ extern "C" void   engine_entity_set_x(int, int);
 extern "C" void   engine_entity_set_y(int, int);
 extern "C" void   engine_entity_set_w(int, int);
 extern "C" void   engine_entity_set_h(int, int);
+extern "C" int    engine_entity_font_px(int);
+extern "C" void   engine_entity_set_font_px(int, int);
+extern "C" int    engine_entity_font_ox(int);
+extern "C" int    engine_entity_font_oy(int);
+extern "C" void   engine_entity_set_font_ox(int, int);
+extern "C" void   engine_entity_set_font_oy(int, int);
+extern "C" int    engine_entity_ui_radius(int);
+extern "C" void   engine_entity_set_ui_radius(int, int);
+extern "C" int    engine_entity_ui_border(int);
+extern "C" void   engine_entity_set_ui_border(int, int);
+extern "C" int    engine_entity_ui_align(int);
+extern "C" void   engine_entity_set_ui_align(int, int);
+extern "C" int    engine_entity_ui_shadow(int);
+extern "C" void   engine_entity_set_ui_shadow(int, int);
+extern "C" int    engine_entity_ui_text(int);
+extern "C" void   engine_entity_set_ui_text(int, int);
+extern "C" int    engine_entity_pixel(int);
+extern "C" void   engine_entity_set_pixel(int, int);
 extern "C" void   engine_entity_set_rot(int, int);
 extern "C" void   engine_entity_set_rot_x(int, int);
 extern "C" void   engine_entity_set_rot_y(int, int);
@@ -223,6 +249,26 @@ extern "C" int    engine_entity_shown(int);
 extern "C" const char* engine_entity_model(int);
 extern "C" const char* engine_entity_model_path(int);
 extern "C" void   engine_entity_set_model(int, const char*);
+extern "C" const char* engine_entity_tex_albedo(int);
+extern "C" void   engine_entity_set_tex_albedo(int, const char*);
+extern "C" const char* engine_entity_tex_normal(int);
+extern "C" void   engine_entity_set_tex_normal(int, const char*);
+extern "C" const char* engine_entity_tex_rough(int);
+extern "C" void   engine_entity_set_tex_rough(int, const char*);
+extern "C" const char* engine_entity_tex_metal(int);
+extern "C" void   engine_entity_set_tex_metal(int, const char*);
+extern "C" const char* engine_entity_tex_height(int);
+extern "C" void   engine_entity_set_tex_height(int, const char*);
+extern "C" const char* engine_entity_tex_ao(int);
+extern "C" void   engine_entity_set_tex_ao(int, const char*);
+extern "C" int    engine_entity_mat_rough(int);
+extern "C" void   engine_entity_set_mat_rough(int, int);
+extern "C" int    engine_entity_mat_metal(int);
+extern "C" void   engine_entity_set_mat_metal(int, int);
+extern "C" int    engine_entity_mat_bump(int);
+extern "C" void   engine_entity_set_mat_bump(int, int);
+extern "C" int    engine_entity_mat_tile(int);
+extern "C" void   engine_entity_set_mat_tile(int, int);
 extern "C" const char* engine_entity_sound(int);
 extern "C" void   engine_entity_set_sound(int, const char*);
 extern "C" int    engine_entity_sound_loop(int);
@@ -252,7 +298,9 @@ extern "C" void   engine_r3d_cone(double, double, double, double, double, double
 extern "C" void   engine_r3d_screen_rect(int, int, int, int, int, int, int, int);
 extern "C" void   engine_r3d_sector(double, double, double, int, double, double, double, int, int, int, int);
 extern "C" void   engine_r3d_line(double, double, double, double, double, double, int, int, int, int);
+extern "C" void   engine_r3d_line_over(double, double, double, double, double, double, int, int, int, int);
 extern "C" void   engine_r3d_end(int, int, int);
+extern "C" void   engine_r3d_dismiss();
 extern "C" int    engine_r3d_pick(int, int);
 extern "C" int    engine_r3d_project(double, double, double);
 extern "C" double engine_r3d_px();
@@ -565,6 +613,7 @@ extern "C" int         engine_project_active_scene();
 extern "C" void        engine_project_set_active_scene(int);
 extern "C" int         engine_project_add_scene(const char*);
 extern "C" int         engine_project_remove_scene(int);
+extern "C" int         engine_project_rename_scene(int, const char*);
 extern "C" void        engine_project_rescan_scenes();
 extern "C" int         engine_project_script_count();
 extern "C" const char* engine_project_script_name(int);
@@ -580,6 +629,8 @@ extern "C" int         engine_bp_create(const char*);
 extern "C" int         engine_bp_create_extension(const char*);
 extern "C" int         engine_bp_translate_file(const char*, int);
 extern "C" int         engine_bp_open(const char*);
+extern "C" int         engine_paths_same(const char*, const char*);
+extern "C" int         engine_bp_retarget(const char*, const char*);
 extern "C" void        engine_bp_close();
 extern "C" int         engine_bp_is_open();
 extern "C" const char* engine_bp_path();
@@ -668,7 +719,13 @@ extern "C" const char* engine_project_asset_path(int);
 extern "C" const char* engine_project_asset_rel(int);
 extern "C" void        engine_project_rescan_assets();
 extern "C" int         engine_project_import_asset(const char*);
+extern "C" int         engine_project_import_asset_into(const char*, const char*);
 extern "C" const char* engine_project_last_import();
+extern "C" int         engine_drop_count();
+extern "C" int         engine_drop_x();
+extern "C" int         engine_drop_y();
+extern "C" const char* engine_drop_path(int);
+extern "C" void        engine_drop_clear();
 extern "C" int         engine_export_used_count();
 extern "C" const char* engine_export_used_rel(int);
 extern "C" int         engine_export_used_has(const char*);
@@ -813,6 +870,16 @@ fn ent_set_aa(slot: int, v: int) { inline_cpp! { engine_entity_set_aa(slot, v); 
 fn sfx_play(path: string): int {
     let r: int = 0;
     inline_cpp! { r = engine_sfx_play(path.c_str()); }
+    return r;
+}
+fn sfx_preview(path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_sfx_preview(path.c_str()); }
+    return r;
+}
+fn sfx_preview_on(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_sfx_preview_on(); }
     return r;
 }
 fn sfx_play_at(path: string, x: float, y: float, z: float): int {
@@ -976,6 +1043,12 @@ fn eng_pixel(x: int, y: int, r: int, g: int, b: int) {
 fn eng_text(x: int, y: int, s: string, r: int, g: int, b: int) {
     inline_cpp! { engine_text(x, y, s.c_str(), r, g, b); }
 }
+fn eng_text_box(x: int, y: int, w: int, h: int, s: string, r: int, g: int, b: int) {
+    inline_cpp! { engine_text_box(x, y, w, h, s.c_str(), r, g, b); }
+}
+fn eng_text_box_align(x: int, y: int, w: int, h: int, s: string, r: int, g: int, b: int, ha: int, va: int) {
+    inline_cpp! { engine_text_box_align(x, y, w, h, s.c_str(), r, g, b, ha, va); }
+}
 fn eng_text_px(x: int, y: int, s: string, r: int, g: int, b: int, scale: int) {
     inline_cpp! { engine_text_px(x, y, s.c_str(), r, g, b, scale); }
 }
@@ -1009,6 +1082,8 @@ fn eng_text_file_width(s: string, px: int, path: string): int {
     return r;
 }
 fn eng_set_clip(x: int, y: int, w: int, h: int) { inline_cpp! { engine_set_clip(x, y, w, h); } }
+fn eng_clip_push_rect(x: int, y: int, w: int, h: int) { inline_cpp! { engine_clip_push_rect(x, y, w, h); } }
+fn eng_clip_pop() { inline_cpp! { engine_clip_pop(); } }
 fn eng_clear_clip() { inline_cpp! { engine_clear_clip(); } }
 
 // ----- images ---------------------------------------------------------------
@@ -1021,6 +1096,11 @@ fn eng_image_load(path: string): int {
 fn eng_image_load_cached(path: string): int {
     let id: int = 0;
     inline_cpp! { id = engine_image_load_cached(path.c_str()); }
+    return id;
+}
+fn eng_image_load_thumb(path: string, max_side: int): int {
+    let id: int = 0;
+    inline_cpp! { id = engine_image_load_thumb(path.c_str(), max_side); }
     return id;
 }
 fn eng_image_cache_clear() { inline_cpp! { engine_image_cache_clear(); } }
@@ -1050,6 +1130,9 @@ fn eng_image_blit_scaled_rot(id: int, x: int, y: int, w: int, h: int, deg: int) 
 }
 fn eng_image_blit_scaled_rot_a(id: int, x: int, y: int, w: int, h: int, deg: int, a: int) {
     inline_cpp! { engine_image_blit_scaled_rot_a(id, x, y, w, h, deg, a); }
+}
+fn eng_image_blit_scaled_rot_px(id: int, x: int, y: int, w: int, h: int, deg: int, a: int, nearest: int) {
+    inline_cpp! { engine_image_blit_scaled_rot_px(id, x, y, w, h, deg, a, nearest); }
 }
 fn eng_image_free(id: int) { inline_cpp! { engine_image_free(id); } }
 
@@ -1140,6 +1223,24 @@ fn ent_set_x(slot: int, v: int) { inline_cpp! { engine_entity_set_x(slot, v); } 
 fn ent_set_y(slot: int, v: int) { inline_cpp! { engine_entity_set_y(slot, v); } }
 fn ent_set_w(slot: int, v: int) { inline_cpp! { engine_entity_set_w(slot, v); } }
 fn ent_set_h(slot: int, v: int) { inline_cpp! { engine_entity_set_h(slot, v); } }
+fn ent_font_px(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_font_px(slot); } return r; }
+fn ent_set_font_px(slot: int, v: int) { inline_cpp! { engine_entity_set_font_px(slot, v); } }
+fn ent_font_ox(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_font_ox(slot); } return r; }
+fn ent_font_oy(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_font_oy(slot); } return r; }
+fn ent_set_font_ox(slot: int, v: int) { inline_cpp! { engine_entity_set_font_ox(slot, v); } }
+fn ent_set_font_oy(slot: int, v: int) { inline_cpp! { engine_entity_set_font_oy(slot, v); } }
+fn ent_ui_radius(slot: int): int { let r: int = -1; inline_cpp! { r = engine_entity_ui_radius(slot); } return r; }
+fn ent_set_ui_radius(slot: int, v: int) { inline_cpp! { engine_entity_set_ui_radius(slot, v); } }
+fn ent_ui_border(slot: int): int { let r: int = -1; inline_cpp! { r = engine_entity_ui_border(slot); } return r; }
+fn ent_set_ui_border(slot: int, v: int) { inline_cpp! { engine_entity_set_ui_border(slot, v); } }
+fn ent_ui_align(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_ui_align(slot); } return r; }
+fn ent_set_ui_align(slot: int, v: int) { inline_cpp! { engine_entity_set_ui_align(slot, v); } }
+fn ent_ui_shadow(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_ui_shadow(slot); } return r; }
+fn ent_set_ui_shadow(slot: int, v: int) { inline_cpp! { engine_entity_set_ui_shadow(slot, v); } }
+fn ent_ui_text(slot: int): int { let r: int = -1; inline_cpp! { r = engine_entity_ui_text(slot); } return r; }
+fn ent_set_ui_text(slot: int, v: int) { inline_cpp! { engine_entity_set_ui_text(slot, v); } }
+fn ent_pixel(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_pixel(slot); } return r; }
+fn ent_set_pixel(slot: int, v: int) { inline_cpp! { engine_entity_set_pixel(slot, v); } }
 fn ent_set_rot(slot: int, v: int) { inline_cpp! { engine_entity_set_rot(slot, v); } }
 fn ent_set_rot_x(slot: int, v: int) { inline_cpp! { engine_entity_set_rot_x(slot, v); } }
 fn ent_set_rot_y(slot: int, v: int) { inline_cpp! { engine_entity_set_rot_y(slot, v); } }
@@ -1183,6 +1284,50 @@ fn ent_model_path(slot: int): string {
     return s;
 }
 fn ent_set_model(slot: int, v: string) { inline_cpp! { engine_entity_set_model(slot, v.c_str()); } }
+fn ent_tex_albedo(slot: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_entity_tex_albedo(slot); }
+    return s;
+}
+fn ent_set_tex_albedo(slot: int, v: string) { inline_cpp! { engine_entity_set_tex_albedo(slot, v.c_str()); } }
+fn ent_tex_normal(slot: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_entity_tex_normal(slot); }
+    return s;
+}
+fn ent_set_tex_normal(slot: int, v: string) { inline_cpp! { engine_entity_set_tex_normal(slot, v.c_str()); } }
+fn ent_tex_rough(slot: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_entity_tex_rough(slot); }
+    return s;
+}
+fn ent_set_tex_rough(slot: int, v: string) { inline_cpp! { engine_entity_set_tex_rough(slot, v.c_str()); } }
+fn ent_tex_metal(slot: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_entity_tex_metal(slot); }
+    return s;
+}
+fn ent_set_tex_metal(slot: int, v: string) { inline_cpp! { engine_entity_set_tex_metal(slot, v.c_str()); } }
+fn ent_tex_height(slot: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_entity_tex_height(slot); }
+    return s;
+}
+fn ent_set_tex_height(slot: int, v: string) { inline_cpp! { engine_entity_set_tex_height(slot, v.c_str()); } }
+fn ent_tex_ao(slot: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_entity_tex_ao(slot); }
+    return s;
+}
+fn ent_set_tex_ao(slot: int, v: string) { inline_cpp! { engine_entity_set_tex_ao(slot, v.c_str()); } }
+fn ent_mat_rough(slot: int): int { let r: int = 55; inline_cpp! { r = engine_entity_mat_rough(slot); } return r; }
+fn ent_set_mat_rough(slot: int, v: int) { inline_cpp! { engine_entity_set_mat_rough(slot, v); } }
+fn ent_mat_metal(slot: int): int { let r: int = 0; inline_cpp! { r = engine_entity_mat_metal(slot); } return r; }
+fn ent_set_mat_metal(slot: int, v: int) { inline_cpp! { engine_entity_set_mat_metal(slot, v); } }
+fn ent_mat_bump(slot: int): int { let r: int = 100; inline_cpp! { r = engine_entity_mat_bump(slot); } return r; }
+fn ent_set_mat_bump(slot: int, v: int) { inline_cpp! { engine_entity_set_mat_bump(slot, v); } }
+fn ent_mat_tile(slot: int): int { let r: int = 4; inline_cpp! { r = engine_entity_mat_tile(slot); } return r; }
+fn ent_set_mat_tile(slot: int, v: int) { inline_cpp! { engine_entity_set_mat_tile(slot, v); } }
 fn ent_sound(slot: int): string {
     let s: string = "";
     inline_cpp! { s = engine_entity_sound(slot); }
@@ -1251,7 +1396,11 @@ fn r3d_sector(cx: float, cy: float, cz: float, axis: int, ang0: float, sweep: fl
 fn r3d_line(x1: float, yy1: float, z1: float, x2: float, y2: float, z2: float, r: int, g: int, b: int, a: int) {
     inline_cpp! { engine_r3d_line(x1, yy1, z1, x2, y2, z2, r, g, b, a); }
 }
+fn r3d_line_over(x1: float, yy1: float, z1: float, x2: float, y2: float, z2: float, r: int, g: int, b: int, a: int) {
+    inline_cpp! { engine_r3d_line_over(x1, yy1, z1, x2, y2, z2, r, g, b, a); }
+}
 fn r3d_end(r: int, g: int, b: int) { inline_cpp! { engine_r3d_end(r, g, b); } }
+fn r3d_dismiss() { inline_cpp! { engine_r3d_dismiss(); } }
 fn r3d_pick(x: int, y: int): int { let r: int = 0; inline_cpp! { r = engine_r3d_pick(x, y); } return r; }
 fn r3d_project(wx: float, wy: float, wz: float): int { let r: int = 0; inline_cpp! { r = engine_r3d_project(wx, wy, wz); } return r; }
 fn r3d_px(): float { let r: float = 0.0; inline_cpp! { r = engine_r3d_px(); } return r; }
@@ -2026,6 +2175,11 @@ fn proj_remove_scene(i: int): int {
     inline_cpp! { r = engine_project_remove_scene(i); }
     return r;
 }
+fn proj_rename_scene(i: int, rel: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_project_rename_scene(i, rel.c_str()); }
+    return r;
+}
 fn proj_rescan_scenes() { inline_cpp! { engine_project_rescan_scenes(); } }
 
 fn proj_script_count(): int { let r: int = 0; inline_cpp! { r = engine_project_script_count(); } return r; }
@@ -2092,6 +2246,16 @@ fn bp_path(): string {
     let s: string = "";
     inline_cpp! { s = engine_bp_path(); }
     return s;
+}
+fn paths_same(a: string, b: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_paths_same(a.c_str(), b.c_str()); }
+    return r;
+}
+fn bp_retarget(old_path: string, new_path: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_bp_retarget(old_path.c_str(), new_path.c_str()); }
+    return r;
 }
 fn bp_dirty(): int { let r: int = 0; inline_cpp! { r = engine_bp_dirty(); } return r; }
 fn bp_save(): int { let r: int = 0; inline_cpp! { r = engine_bp_save(); } return r; }
@@ -2265,6 +2429,11 @@ fn proj_prefab_name(i: int): string {
     inline_cpp! { s = engine_project_prefab_name(i); }
     return s;
 }
+fn proj_prefab_path(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_project_prefab_path(i); }
+    return s;
+}
 fn proj_save_prefab(name: string, slot: int): int {
     let r: int = 0;
     inline_cpp! { r = engine_project_save_prefab(name.c_str(), slot); }
@@ -2300,11 +2469,37 @@ fn proj_import_asset(src: string): int {
     inline_cpp! { r = engine_project_import_asset(src.c_str()); }
     return r;
 }
+fn proj_import_asset_into(src: string, into: string): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_project_import_asset_into(src.c_str(), into.c_str()); }
+    return r;
+}
 fn proj_last_import(): string {
     let s: string = "";
     inline_cpp! { s = engine_project_last_import(); }
     return s;
 }
+fn eng_drop_count(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_drop_count(); }
+    return r;
+}
+fn eng_drop_x(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_drop_x(); }
+    return r;
+}
+fn eng_drop_y(): int {
+    let r: int = 0;
+    inline_cpp! { r = engine_drop_y(); }
+    return r;
+}
+fn eng_drop_path(i: int): string {
+    let s: string = "";
+    inline_cpp! { s = engine_drop_path(i); }
+    return s;
+}
+fn eng_drop_clear() { inline_cpp! { engine_drop_clear(); } }
 fn export_used_count(): int {
     let r: int = 0;
     inline_cpp! { r = engine_export_used_count(); }

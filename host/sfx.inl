@@ -10,6 +10,7 @@
 #include <memory>
 
 static int g_sfxLive = 0;
+static std::string g_previewPath;
 
 struct SfxCallback : IXAudio2VoiceCallback {
     std::atomic<int>* done = nullptr;
@@ -207,6 +208,7 @@ static void sfx_voice_stop(SfxSlot& s) {
 
 static void sfx_stop_all() {
     for (int i = 0; i < kSfxMax; ++i) sfx_voice_stop(g_sfxSlot[i]);
+    g_previewPath.clear();
 }
 
 static void sfx_shutdown() {
@@ -367,6 +369,12 @@ static std::string sfx_resolve(const char* path) {
             return "";
         }
     }
+    /* Shipped games encrypt assets. Media Foundation needs the plain file. */
+    resolved = content_resolve_path(resolved);
+    if (resolved.empty()) {
+        sfx_log_once(std::string("[sfx] could not read: ") + path);
+        return "";
+    }
     return resolved;
 }
 
@@ -414,6 +422,38 @@ extern "C" int engine_sfx_play(const char* path) {
     std::string resolved = sfx_resolve(path);
     if (resolved.empty()) return 0;
     return sfx_start(resolved, 0, 0, 0, 800, 0, 0, 0, -1);
+}
+
+/* 1 started, 2 stopped the one already playing, 0 failed. */
+extern "C" int engine_sfx_preview(const char* path) {
+    std::string resolved = sfx_resolve(path);
+    if (resolved.empty()) return 0;
+    int same = 0;
+    for (int i = 0; i < kSfxMax; ++i) {
+        SfxSlot& s = g_sfxSlot[i];
+        if (!s.used || s.follow) continue;
+        int mine = 0;
+        if (!g_previewPath.empty() && s.path == g_previewPath) mine = 1;
+        if (s.path == resolved) mine = 1;
+        if (!mine) continue;
+        if (s.path == resolved && !s.done.load()) same = 1;
+        sfx_voice_stop(s);
+    }
+    g_previewPath.clear();
+    if (same) return 2;
+    int ok = sfx_start(resolved, 0, 0, 0, 800, 0, 0, 0, -1);
+    if (ok) g_previewPath = resolved;
+    return ok;
+}
+
+extern "C" int engine_sfx_preview_on() {
+    if (g_previewPath.empty()) return 0;
+    for (int i = 0; i < kSfxMax; ++i) {
+        SfxSlot& s = g_sfxSlot[i];
+        if (s.used && !s.follow && !s.done.load() && s.path == g_previewPath) return 1;
+    }
+    g_previewPath.clear();
+    return 0;
 }
 
 extern "C" int engine_sfx_play_at(const char* path, float x, float y, float z) {

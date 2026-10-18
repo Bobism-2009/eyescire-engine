@@ -2280,18 +2280,34 @@ extern "C" int engine_bp_create(const char* name) {
         engine_log("[blueprint] open a project first");
         return 0;
     }
-    std::string base = sanitize_base(name);
+    std::string in = name ? name : "";
+    for (char& c : in) if (c == '\\') c = '/';
+    std::string folder;
+    auto slash = in.find_last_of('/');
+    if (slash != std::string::npos) {
+        folder = in.substr(0, slash);
+        in = in.substr(slash + 1);
+        std::string clean;
+        for (unsigned char c : folder) {
+            if (isalnum(c) || c == '_' || c == '/' || c == '-') clean += (char)c;
+        }
+        folder = clean;
+        while (!folder.empty() && folder.front() == '/') folder.erase(folder.begin());
+        while (!folder.empty() && folder.back() == '/') folder.pop_back();
+    }
+    std::string base = sanitize_base(in.c_str());
     if (base.empty()) {
         engine_log("[blueprint] name needs a letter or number");
         return 0;
     }
     std::string dir = proj_join(g.projRoot, "scripts");
+    if (!folder.empty()) dir = proj_join(dir, folder);
     std::error_code ec;
     fs::create_directories(dir, ec);
     std::string ebp = proj_join(dir, base + ".ebp");
     std::string nxa = proj_join(dir, base + ".nxa");
     if (fs::exists(ebp, ec)) {
-        std::string msg = "[blueprint] already exists: " + base + ".ebp";
+        std::string msg = "[blueprint] already exists: " + (folder.empty() ? base : folder + "/" + base) + ".ebp";
         engine_log(msg.c_str());
         return 0;
     }
@@ -2314,7 +2330,8 @@ extern "C" int engine_bp_create(const char* name) {
     }
     g_bp = std::move(d);
     proj_scan_dir(proj_join(g.projRoot, "scripts"), ".ebp", g.projBlueprints);
-    std::string msg = "[blueprint] created " + base + ".ebp";
+    std::string shown = folder.empty() ? base + ".ebp" : folder + "/" + base + ".ebp";
+    std::string msg = "[blueprint] created " + shown;
     engine_log(msg.c_str());
     return 1;
 }
@@ -2335,6 +2352,19 @@ extern "C" void engine_bp_close() { g_bp = BpDoc{}; }
 
 extern "C" int engine_bp_is_open() { return g_bp.open ? 1 : 0; }
 extern "C" const char* engine_bp_path() { return g_bp.path.c_str(); }
+
+extern "C" int engine_paths_same(const char* a, const char* b) {
+    if (!a || !b || !a[0] || !b[0]) return 0;
+    return same_path(a, b) ? 1 : 0;
+}
+
+/* Point the open graph at a renamed file without closing it. 1 if this doc was that file. */
+extern "C" int engine_bp_retarget(const char* old_path, const char* new_path) {
+    if (!g_bp.open || !old_path || !new_path || !new_path[0]) return 0;
+    if (!same_path(g_bp.path, old_path)) return 0;
+    g_bp.path = new_path;
+    return 1;
+}
 extern "C" int engine_bp_dirty() { return (g_bp.open && g_bp.dirty) ? 1 : 0; }
 
 extern "C" int engine_bp_save() {

@@ -62,6 +62,7 @@ struct Proc33 {
     GenVaoFn GenVao = nullptr;
     BindVaoFn BindVao = nullptr;
     ActiveTexFn ActiveTex = nullptr;
+    ActiveTexFn GenMipmap = nullptr;
 };
 
 struct Pipe {
@@ -69,6 +70,10 @@ struct Pipe {
     GLuint prog = 0, vao = 0, vboBg = 0, vboLine = 0;
     GLuint vboBox = 0, vboSphere = 0, vboCyl = 0, vboCap = 0;
     GLsizei nBox = 0, nSphere = 0, nCyl = 0;
+    /* UV-aware unit meshes for entity PBR maps on primitives. */
+    GLuint matUnitVbo[4]{};
+    GLuint matUnitVao[4]{};
+    GLsizei matUnitN[4]{};
     std::unordered_map<const Model*, std::pair<GLuint, GLsizei>> models;
     float proj[16]{};
     float cam[16]{};
@@ -97,6 +102,7 @@ struct Pipe {
     GLint muLit = -1, muAlpha = -1, muNdc = -1, muLN = -1, muMap = -1;
     GLint muPos = -1, muDif = -1, muSpot = -1, muSp = -1;
     GLint muBase = -1, muNrm = -1, muMetal = -1, muRough = -1, muHeight = -1;
+    GLint muTile = -1, muBump = -1, muTri = -1;
     std::unordered_map<const Model*, GLuint> matTex;
     std::unordered_map<const Model*, GLuint> matVao;
     std::unordered_map<const Model*, std::pair<GLuint, GLsizei>> matMesh;
@@ -278,6 +284,137 @@ static bool build_unit_meshes() {
     K.vboBox = upload(box, &K.nBox);
     K.vboSphere = upload(sphere, &K.nSphere);
     K.vboCyl = upload(cyl, &K.nCyl);
+    /* Mat-format unit meshes. A sphere quad takes one cube face so the
+       picture is not pinched at the pole or smeared between faces. */
+    {
+        auto push12 = [&](std::vector<float>& o, float x, float y, float z,
+                          float nx, float ny, float nz, float tx, float ty, float tz,
+                          float u, float vv, float hand = 1.f) {
+            V3 n = norm(v3(nx, ny, nz));
+            V3 t = v3(tx, ty, tz);
+            t = t - n * dot(n, t);
+            if (dot(t, t) < 1e-8f) t = v3(1, 0, 0);
+            t = norm(t);
+            float s[12] = { x, y, z, n.x, n.y, n.z, t.x, t.y, t.z, hand, u, vv };
+            o.insert(o.end(), s, s + 12);
+        };
+        auto upload12 = [&](int kind, const std::vector<float>& v) {
+            if (v.empty() || !K.P.GenBuffers || !K.P.GenVao) return;
+            GLuint id = 0, vao = 0;
+            K.P.GenBuffers(1, &id);
+            K.P.BindBuffer(kArray, id);
+            K.P.BufferData(kArray, (std::intptr_t)(v.size() * sizeof(float)), v.data(), kStatic);
+            K.P.GenVao(1, &vao);
+            K.P.BindVao(vao);
+            K.P.BindBuffer(kArray, id);
+            const GLsizei stride = (GLsizei)(12 * sizeof(float));
+            K.P.EnableAttrib(0);
+            K.P.AttribPtr(0, 3, GL_FLOAT, GL_FALSE, stride, (const void*)0);
+            K.P.EnableAttrib(1);
+            K.P.AttribPtr(1, 3, GL_FLOAT, GL_FALSE, stride, (const void*)(3 * sizeof(float)));
+            K.P.EnableAttrib(2);
+            K.P.AttribPtr(2, 4, GL_FLOAT, GL_FALSE, stride, (const void*)(6 * sizeof(float)));
+            K.P.EnableAttrib(3);
+            K.P.AttribPtr(3, 2, GL_FLOAT, GL_FALSE, stride, (const void*)(10 * sizeof(float)));
+            K.P.BindVao(0);
+            K.matUnitVbo[kind] = id;
+            K.matUnitVao[kind] = vao;
+            K.matUnitN[kind] = (GLsizei)(v.size() / 12);
+        };
+        std::vector<float> mbox, msphere, mcyl;
+        for (int f = 0; f < 6; ++f) {
+            float q[4][3];
+            for (int i = 0; i < 4; ++i)
+                for (int c = 0; c < 3; ++c) q[i][c] = F[f][i][c];
+            V3 n = v3(N[f][0], N[f][1], N[f][2]);
+            V3 t = norm(v3(q[1][0] - q[0][0], q[1][1] - q[0][1], q[1][2] - q[0][2]));
+            auto pv = [&](int i, float u, float vv) {
+                push12(mbox, q[i][0], q[i][1], q[i][2], n.x, n.y, n.z, t.x, t.y, t.z, u, vv);
+            };
+            pv(0, 0, 0); pv(1, 1, 0); pv(2, 1, 1);
+            pv(0, 0, 0); pv(2, 1, 1); pv(3, 0, 1);
+        }
+        const int SEG = 48, RING = 24;
+        for (int j = 0; j < RING; ++j) {
+            for (int i = 0; i < SEG; ++i) {
+                float th0 = (float)j / RING * 3.14159265f;
+                float th1 = (float)(j + 1) / RING * 3.14159265f;
+                float ph0 = (float)i / SEG * 6.2831853f;
+                float ph1 = (float)(i + 1) / SEG * 6.2831853f;
+                auto vert = [&](float th, float ph, float* o) {
+                    o[3] = std::sin(th) * std::cos(ph);
+                    o[4] = std::cos(th);
+                    o[5] = std::sin(th) * std::sin(ph);
+                    o[0] = o[3] * .5f; o[1] = o[4] * .5f; o[2] = o[5] * .5f;
+                };
+                float qa[6], qb[6], qc[6], qd[6];
+                vert(th0, ph0, qa); vert(th0, ph1, qb); vert(th1, ph1, qc); vert(th1, ph0, qd);
+                float fnx = qa[3] + qb[3] + qc[3] + qd[3];
+                float fny = qa[4] + qb[4] + qc[4] + qd[4];
+                float fnz = qa[5] + qb[5] + qc[5] + qd[5];
+                float fax = std::fabs(fnx), fay = std::fabs(fny), faz = std::fabs(fnz);
+                auto emit = [&](float* o) {
+                    float u, v, tx, ty, tz, bx, by, bz;
+                    if (fax >= fay && fax >= faz) {
+                        float s = fnx >= 0.f ? 1.f : -1.f;
+                        u = s * o[2] + 0.5f; v = o[1] + 0.5f;
+                        tx = 0; ty = 0; tz = s; bx = 0; by = 1; bz = 0;
+                    } else if (fay >= faz) {
+                        float s = fny >= 0.f ? 1.f : -1.f;
+                        u = o[0] + 0.5f; v = s * o[2] + 0.5f;
+                        tx = 1; ty = 0; tz = 0; bx = 0; by = 0; bz = s;
+                    } else {
+                        float s = fnz >= 0.f ? 1.f : -1.f;
+                        u = s * o[0] + 0.5f; v = o[1] + 0.5f;
+                        tx = s; ty = 0; tz = 0; bx = 0; by = 1; bz = 0;
+                    }
+                    float cx = fny * tz - fnz * ty;
+                    float cy = fnz * tx - fnx * tz;
+                    float cz = fnx * ty - fny * tx;
+                    float hand = (cx * bx + cy * by + cz * bz) < 0.f ? -1.f : 1.f;
+                    push12(msphere, o[0], o[1], o[2], o[3], o[4], o[5], tx, ty, tz, u, v, hand);
+                };
+                emit(qa); emit(qb); emit(qc);
+                emit(qa); emit(qc); emit(qd);
+            }
+        }
+        const int CS = 40;
+        for (int i = 0; i < CS; ++i) {
+            float a0 = (float)i / CS * 6.2831853f;
+            float a1 = (float)(i + 1) / CS * 6.2831853f;
+            float u0 = (float)i / CS, u1 = (float)(i + 1) / CS;
+            float x0 = std::cos(a0), z0 = std::sin(a0), x1 = std::cos(a1), z1 = std::sin(a1);
+            float tx0 = -z0, tz0 = x0, tx1 = -z1, tz1 = x1;
+            push12(mcyl, x0 * .5f, .5f, z0 * .5f, x0, 0, z0, tx0, 0, tz0, u0, 1);
+            push12(mcyl, x1 * .5f, .5f, z1 * .5f, x1, 0, z1, tx1, 0, tz1, u1, 1);
+            push12(mcyl, x1 * .5f, -.5f, z1 * .5f, x1, 0, z1, tx1, 0, tz1, u1, 0);
+            push12(mcyl, x0 * .5f, .5f, z0 * .5f, x0, 0, z0, tx0, 0, tz0, u0, 1);
+            push12(mcyl, x1 * .5f, -.5f, z1 * .5f, x1, 0, z1, tx1, 0, tz1, u1, 0);
+            push12(mcyl, x0 * .5f, -.5f, z0 * .5f, x0, 0, z0, tx0, 0, tz0, u0, 0);
+        }
+        for (int cap = 0; cap < 2; ++cap) {
+            float y = cap == 0 ? .5f : -.5f;
+            float ny = cap == 0 ? 1.f : -1.f;
+            for (int i = 0; i < CS; ++i) {
+                float a0 = (float)i / CS * 6.2831853f;
+                float a1 = (float)(i + 1) / CS * 6.2831853f;
+                float c0x = std::cos(a0) * .5f, c0z = std::sin(a0) * .5f;
+                float c1x = std::cos(a1) * .5f, c1z = std::sin(a1) * .5f;
+                if (cap == 0) {
+                    push12(mcyl, 0, y, 0, 0, ny, 0, 1, 0, 0, .5f, .5f);
+                    push12(mcyl, c0x, y, c0z, 0, ny, 0, 1, 0, 0, c0x + .5f, c0z + .5f);
+                    push12(mcyl, c1x, y, c1z, 0, ny, 0, 1, 0, 0, c1x + .5f, c1z + .5f);
+                } else {
+                    push12(mcyl, 0, y, 0, 0, ny, 0, 1, 0, 0, .5f, .5f);
+                    push12(mcyl, c1x, y, c1z, 0, ny, 0, 1, 0, 0, c1x + .5f, c1z + .5f);
+                    push12(mcyl, c0x, y, c0z, 0, ny, 0, 1, 0, 0, c0x + .5f, c0z + .5f);
+                }
+            }
+        }
+        upload12(1, mbox);
+        upload12(2, msphere);
+        upload12(3, mcyl);
+    }
     K.P.GenBuffers(1, &K.vboBg);
     K.P.GenBuffers(1, &K.vboLine);
     static const float cube[] = {
@@ -491,6 +628,8 @@ out vec3 vN;
 out vec3 vT;
 out vec3 vB;
 out vec2 vUv;
+out vec3 vObj;
+out vec3 vObjN;
 void main() {
     vec4 eye = uMv * vec4(aPos, 1.0);
     gl_Position = uMvp * vec4(aPos, 1.0);
@@ -506,6 +645,8 @@ void main() {
     vT = normalize(uNmat * aTan.xyz);
     vB = cross(vN, vT) * aTan.w;
     vUv = aUv;
+    vObj = aPos;
+    vObjN = aNrm;
     vLight = uLightMvp * vec4(aPos, 1.0);
 }
 )GLSL";
@@ -517,6 +658,8 @@ in vec3 vN;
 in vec3 vT;
 in vec3 vB;
 in vec2 vUv;
+in vec3 vObj;
+in vec3 vObjN;
 in vec4 vLight;
 in float vFog;
 uniform vec3 uColor;
@@ -536,6 +679,10 @@ uniform sampler2D uNrm;
 uniform sampler2D uMetal;
 uniform sampler2D uRough;
 uniform sampler2D uHeight;
+uniform mat3 uNmat;
+uniform float uTile;
+uniform float uBump;
+uniform float uTri;
 uniform int uSun;
 uniform float uDoShadow;
 uniform sampler2DShadow uShadowMap;
@@ -592,27 +739,70 @@ vec3 shade(vec3 n, vec3 pe, vec3 albedo, float metal, float rough) {
     return clamp(lit * diff + spec * F0 * 0.18, 0.0, 1.0);
 }
 void main() {
-    vec2 uv = vUv;
+    vec2 uv = vUv * max(uTile, 0.25);
+    float bump = max(uBump, 0.0);
     vec3 nrm = normalize(gl_FrontFacing ? vN : -vN);
     vec3 tan = normalize(gl_FrontFacing ? vT : -vT);
     vec3 bit = normalize(gl_FrontFacing ? vB : -vB);
-    vec3 albedo = ((uMap & 1) != 0) ? texture(uBase, uv).rgb : uColor;
-    if ((uMap & 2) != 0) {
-        vec3 tn = texture(uNrm, uv).rgb * 2.0 - 1.0;
-        nrm = normalize(tan * tn.x + bit * tn.y + nrm * tn.z);
+    vec3 albedo = uColor;
+    float metal = 0.0;
+    float rough = 0.55;
+    if (uTri > 0.5) {
+        vec3 oN = normalize(vObjN);
+        vec3 pos = vObj;
+        vec3 bw = abs(oN);
+        bw = bw * bw; bw = bw * bw; bw = bw * bw; bw = bw * bw;
+        bw /= (bw.x + bw.y + bw.z + 0.0001);
+        vec2 ux = pos.zy * max(uTile, 0.25);
+        vec2 uy = pos.xz * max(uTile, 0.25);
+        vec2 uz = pos.xy * max(uTile, 0.25);
+        if ((uMap & 1) != 0) {
+            albedo = texture(uBase, ux).rgb * bw.x
+                   + texture(uBase, uy).rgb * bw.y
+                   + texture(uBase, uz).rgb * bw.z;
+        }
+        vec3 tx = vec3(0.0, 0.0, 1.0);
+        vec3 ty = tx;
+        vec3 tz = tx;
+        if ((uMap & 2) != 0) {
+            tx = texture(uNrm, ux).rgb * 2.0 - 1.0;
+            ty = texture(uNrm, uy).rgb * 2.0 - 1.0;
+            tz = texture(uNrm, uz).rgb * 2.0 - 1.0;
+            tx.xy *= bump; ty.xy *= bump; tz.xy *= bump;
+        }
+        if ((uMap & 2) != 0) {
+            float sx = oN.x < 0.0 ? -1.0 : 1.0;
+            float sy = oN.y < 0.0 ? -1.0 : 1.0;
+            float sz = oN.z < 0.0 ? -1.0 : 1.0;
+            vec3 nx = vec3(tx.z * sx, tx.y, tx.x);
+            vec3 ny = vec3(ty.x, ty.z * sy, ty.y);
+            vec3 nz = vec3(tz.x, tz.y, tz.z * sz);
+            vec3 objN = normalize(nx * bw.x + ny * bw.y + nz * bw.z);
+            nrm = normalize(uNmat * objN);
+            if (!gl_FrontFacing) nrm = -nrm;
+        }
+        if ((uMap & 4) != 0)
+            metal = texture(uMetal, ux).r * bw.x + texture(uMetal, uy).r * bw.y + texture(uMetal, uz).r * bw.z;
+        if ((uMap & 8) != 0)
+            rough = texture(uRough, ux).r * bw.x + texture(uRough, uy).r * bw.y + texture(uRough, uz).r * bw.z;
+    } else {
+        albedo = ((uMap & 1) != 0) ? texture(uBase, uv).rgb : uColor;
+        if ((uMap & 2) != 0) {
+            vec3 tn = texture(uNrm, uv).rgb * 2.0 - 1.0;
+            tn.xy *= bump;
+            nrm = normalize(tan * tn.x + bit * tn.y + nrm * tn.z);
+        }
+        if ((uMap & 16) != 0) {
+            float h = texture(uHeight, uv).r;
+            vec2 dx = dFdx(uv);
+            vec2 dy = dFdy(uv);
+            float hx = texture(uHeight, uv + dx).r - h;
+            float hy = texture(uHeight, uv + dy).r - h;
+            nrm = normalize(nrm - tan * hx * 4.0 * bump - bit * hy * 4.0 * bump);
+        }
+        metal = ((uMap & 4) != 0) ? texture(uMetal, uv).r : 0.0;
+        rough = ((uMap & 8) != 0) ? texture(uRough, uv).r : 0.55;
     }
-    /* Height stays on this chart. Sliding the coordinate would pull the
-       doorway onto the floor picture beside it in the texture. */
-    if ((uMap & 16) != 0) {
-        float h = texture(uHeight, uv).r;
-        vec2 dx = dFdx(uv);
-        vec2 dy = dFdy(uv);
-        float hx = texture(uHeight, uv + dx).r - h;
-        float hy = texture(uHeight, uv + dy).r - h;
-        nrm = normalize(nrm - tan * hx * 4.0 - bit * hy * 4.0);
-    }
-    float metal = ((uMap & 4) != 0) ? texture(uMetal, uv).r : 0.0;
-    float rough = ((uMap & 8) != 0) ? texture(uRough, uv).r : 0.55;
     vec3 col = (uLit < 0.5) ? albedo : shade(nrm, vEye, albedo, metal, rough);
     col = mix(col, uFogColor, vFog);
     frag = vec4(col, uAlpha);
@@ -757,6 +947,12 @@ void main() {}
                 if (K.muMetal >= 0) K.P.Uni1i(K.muMetal, 2);
                 if (K.muRough >= 0) K.P.Uni1i(K.muRough, 3);
                 if (K.muHeight >= 0) K.P.Uni1i(K.muHeight, 4);
+                K.muTile = K.P.GetLoc(K.matProg, "uTile");
+                K.muBump = K.P.GetLoc(K.matProg, "uBump");
+                K.muTri = K.P.GetLoc(K.matProg, "uTri");
+                if (K.muTile >= 0) K.P.Uni1f(K.muTile, 1.f);
+                if (K.muBump >= 0) K.P.Uni1f(K.muBump, 1.f);
+                if (K.muTri >= 0) K.P.Uni1f(K.muTri, 0.f);
                 K.muLightMvp = K.P.GetLoc(K.matProg, "uLightMvp");
                 K.muSun = K.P.GetLoc(K.matProg, "uSun");
                 K.muDoShadow = K.P.GetLoc(K.matProg, "uDoShadow");
@@ -834,6 +1030,7 @@ static bool load_procs() {
     K.P.ShaderLog = (GetInfoFn)proc("glGetShaderInfoLog");
     K.P.ProgLog = (GetInfoFn)proc("glGetProgramInfoLog");
     K.P.ActiveTex = (ActiveTexFn)proc("glActiveTexture");
+    K.P.GenMipmap = (ActiveTexFn)proc("glGenerateMipmap");
     return true;
 }
 
@@ -999,19 +1196,42 @@ static bool model_has_maps(const Model& m) {
     return m.base.w > 0 || m.nrm.w > 0 || m.metal.w > 0 || m.rough.w > 0 || m.height.w > 0;
 }
 
-static GLuint upload_map(const MapImg& im) {
+/* Model charts clamp so a chart never bleeds into its neighbour. Primitive
+   maps tile, so they repeat; clamping them smears the edge texels across
+   every tile past the first. */
+static GLuint upload_map(const MapImg& im, bool tiled = false) {
     if (im.w < 1 || im.rgb.empty()) return 0;
     GLuint id = 0;
     glGenTextures(1, &id);
     if (!id) return 0;
     glBindTexture(GL_TEXTURE_2D, id);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812F);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812F);
+    GLint wrap = tiled ? GL_REPEAT : 0x812F;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    bool mips = tiled && K.P.GenMipmap;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mips ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, im.w, im.h, 0, GL_RGB, GL_UNSIGNED_BYTE, im.rgb.data());
+    if (mips) {
+        K.P.GenMipmap(GL_TEXTURE_2D);
+        glTexParameterf(GL_TEXTURE_2D, 0x84FE, 8.0f); /* max anisotropy */
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
+    return id;
+}
+
+/* Keyed by pixel buffer address — callers must pass stable MapImg storage. */
+static GLuint upload_map_cached(const MapImg& im, bool tiled = false) {
+    if (im.w < 1 || im.rgb.empty()) return 0;
+    static std::unordered_map<const void*, GLuint> cache;
+    static std::unordered_map<const void*, GLuint> tiledCache;
+    auto& c = tiled ? tiledCache : cache;
+    const void* key = im.rgb.data();
+    auto it = c.find(key);
+    if (it != c.end()) return it->second;
+    GLuint id = upload_map(im, tiled);
+    if (id) cache[key] = id;
     return id;
 }
 
@@ -1088,6 +1308,112 @@ static GLuint model_mat_vbo(const Model& m, GLsizei* n) {
     return id;
 }
 
+static int map_bits_of(const MapImg& base, const MapImg& nrm, const MapImg& metal,
+                       const MapImg& rough, const MapImg& height) {
+    int bits = 0;
+    if (base.w > 0) bits |= 1;
+    if (nrm.w > 0) bits |= 2;
+    if (metal.w > 0) bits |= 4;
+    if (rough.w > 0) bits |= 8;
+    if (height.w > 0) bits |= 16;
+    return bits;
+}
+
+static void draw_unit_maps(int kind, const MapImg& base, const MapImg& nrm,
+                           const MapImg& metal, const MapImg& rough, const MapImg& height,
+                           const float* mvp, const float* mv, float tile, float bump) {
+    if (!K.matProg || !K.P.ActiveTex || kind < 1 || kind > 3) return;
+    if (!K.matUnitVao[kind] || K.matUnitN[kind] <= 0) return;
+    GLuint ids[5] = {
+        upload_map_cached(base, true), upload_map_cached(nrm, true), upload_map_cached(metal, true),
+        upload_map_cached(rough, true), upload_map_cached(height, true)
+    };
+    float nm[9];
+    normal_matrix(mv, nm);
+    float savedColor[3] = { K.color[0], K.color[1], K.color[2] };
+    if (base.w > 0) { K.color[0] = K.color[1] = K.color[2] = 1.f; }
+    K.P.Use(K.matProg);
+    K.P.UniMat4(K.muMvp, 1, GL_FALSE, mvp);
+    K.P.UniMat4(K.muMv, 1, GL_FALSE, mv);
+    if (K.muLightMvp >= 0) K.P.UniMat4(K.muLightMvp, 1, GL_FALSE, K.lightMvp);
+    K.P.UniMat3(K.muN, 1, GL_FALSE, nm);
+    if (K.muColor >= 0) K.P.Uni3fv(K.muColor, 1, K.color);
+    if (K.muAmb >= 0) K.P.Uni3fv(K.muAmb, 1, K.amb);
+    if (K.muFill >= 0) K.P.Uni1f(K.muFill, K.fill);
+    if (K.muLit >= 0) K.P.Uni1f(K.muLit, K.lit);
+    if (K.muAlpha >= 0) K.P.Uni1f(K.muAlpha, K.alpha);
+    if (K.muNdc >= 0) K.P.Uni2f(K.muNdc, K.ndcX, K.ndcY);
+    if (K.muLN >= 0) K.P.Uni1i(K.muLN, K.lights);
+    if (K.muMap >= 0) K.P.Uni1i(K.muMap, map_bits_of(base, nrm, metal, rough, height));
+    if (K.muTile >= 0) K.P.Uni1f(K.muTile, tile < 0.25f ? 0.25f : tile);
+    if (K.muBump >= 0) K.P.Uni1f(K.muBump, bump < 0.f ? 0.f : bump);
+    if (K.muTri >= 0) K.P.Uni1f(K.muTri, 0.f);
+    if (K.muPos >= 0) K.P.Uni4fv(K.muPos, 16, K.lpos);
+    if (K.muDif >= 0) K.P.Uni3fv(K.muDif, 16, K.ldif);
+    if (K.muSpot >= 0) K.P.Uni3fv(K.muSpot, 16, K.lspot);
+    if (K.muSp >= 0) K.P.Uni3fv(K.muSp, 16, K.lsp);
+    for (int i = 0; i < 5; ++i) {
+        K.P.ActiveTex(0x84C0 + i);
+        glBindTexture(GL_TEXTURE_2D, ids[i]);
+    }
+    K.P.BindVao(K.matUnitVao[kind]);
+    glDrawArrays(GL_TRIANGLES, 0, K.matUnitN[kind]);
+    for (int i = 0; i < 5; ++i) {
+        K.P.ActiveTex(0x84C0 + i);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    K.P.ActiveTex(0x84C0);
+    K.P.Use(K.prog);
+    K.color[0] = savedColor[0]; K.color[1] = savedColor[1]; K.color[2] = savedColor[2];
+}
+
+static void draw_model_maps_imgs(const Model& m, const MapImg& base, const MapImg& nrm,
+                                 const MapImg& metal, const MapImg& rough, const MapImg& height,
+                                 GLsizei n, const float* mvp, const float* mv) {
+    if (!K.matProg || !K.P.ActiveTex || n <= 0) return;
+    GLuint vbo = model_mat_vbo(m, &n);
+    auto vit = K.matVao.find(&m);
+    if (!vbo || vit == K.matVao.end()) return;
+    GLuint ids[5] = {
+        upload_map_cached(base), upload_map_cached(nrm), upload_map_cached(metal),
+        upload_map_cached(rough), upload_map_cached(height)
+    };
+    float nm[9];
+    normal_matrix(mv, nm);
+    K.P.Use(K.matProg);
+    K.P.UniMat4(K.muMvp, 1, GL_FALSE, mvp);
+    K.P.UniMat4(K.muMv, 1, GL_FALSE, mv);
+    if (K.muLightMvp >= 0) K.P.UniMat4(K.muLightMvp, 1, GL_FALSE, K.lightMvp);
+    K.P.UniMat3(K.muN, 1, GL_FALSE, nm);
+    if (K.muColor >= 0) K.P.Uni3fv(K.muColor, 1, K.color);
+    if (K.muAmb >= 0) K.P.Uni3fv(K.muAmb, 1, K.amb);
+    if (K.muFill >= 0) K.P.Uni1f(K.muFill, K.fill);
+    if (K.muLit >= 0) K.P.Uni1f(K.muLit, K.lit);
+    if (K.muAlpha >= 0) K.P.Uni1f(K.muAlpha, K.alpha);
+    if (K.muNdc >= 0) K.P.Uni2f(K.muNdc, K.ndcX, K.ndcY);
+    if (K.muLN >= 0) K.P.Uni1i(K.muLN, K.lights);
+    if (K.muMap >= 0) K.P.Uni1i(K.muMap, map_bits_of(base, nrm, metal, rough, height));
+    if (K.muTile >= 0) K.P.Uni1f(K.muTile, 1.f);
+    if (K.muBump >= 0) K.P.Uni1f(K.muBump, 1.f);
+    if (K.muTri >= 0) K.P.Uni1f(K.muTri, 0.f);
+    if (K.muPos >= 0) K.P.Uni4fv(K.muPos, 16, K.lpos);
+    if (K.muDif >= 0) K.P.Uni3fv(K.muDif, 16, K.ldif);
+    if (K.muSpot >= 0) K.P.Uni3fv(K.muSpot, 16, K.lspot);
+    if (K.muSp >= 0) K.P.Uni3fv(K.muSp, 16, K.lsp);
+    for (int i = 0; i < 5; ++i) {
+        K.P.ActiveTex(0x84C0 + i);
+        glBindTexture(GL_TEXTURE_2D, ids[i]);
+    }
+    K.P.BindVao(vit->second);
+    glDrawArrays(GL_TRIANGLES, 0, n);
+    for (int i = 0; i < 5; ++i) {
+        K.P.ActiveTex(0x84C0 + i);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    K.P.ActiveTex(0x84C0);
+    K.P.Use(K.prog);
+}
+
 static void draw_model_maps(const Model& m, GLsizei n, const float* mvp, const float* mv) {
     if (!K.matProg || !K.P.ActiveTex || n <= 0) return;
     GLuint vbo = model_mat_vbo(m, &n);
@@ -1120,6 +1446,9 @@ static void draw_model_maps(const Model& m, GLsizei n, const float* mvp, const f
     if (K.muNdc >= 0) K.P.Uni2f(K.muNdc, K.ndcX, K.ndcY);
     if (K.muLN >= 0) K.P.Uni1i(K.muLN, K.lights);
     if (K.muMap >= 0) K.P.Uni1i(K.muMap, model_map_bits(m));
+    if (K.muTile >= 0) K.P.Uni1f(K.muTile, 1.f);
+    if (K.muBump >= 0) K.P.Uni1f(K.muBump, 1.f);
+    if (K.muTri >= 0) K.P.Uni1f(K.muTri, 0.f);
     if (K.muPos >= 0) K.P.Uni4fv(K.muPos, 16, K.lpos);
     if (K.muDif >= 0) K.P.Uni3fv(K.muDif, 16, K.ldif);
     if (K.muSpot >= 0) K.P.Uni3fv(K.muSpot, 16, K.lspot);
@@ -1176,7 +1505,8 @@ static bool mesh_local(const Entity& e, float* shape, GLuint* vbo, GLsizei* n, f
             sx = sy = sz = s;
             *vbo = model_vbo(*m, n);
             *two = 1;
-            if (mapped && model_has_maps(*m) && K.matProg && K.lit > 0.5f) *mapped = m;
+            if (mapped && K.matProg && K.lit > 0.5f
+                && (model_has_maps(*m) || ent_has_tex(e))) *mapped = m;
         } else {
             sx = w * kUnit; sy = h * kUnit; sz = d * kUnit;
         }
@@ -1193,7 +1523,7 @@ static bool mesh_local(const Entity& e, float* shape, GLuint* vbo, GLsizei* n, f
     return true;
 }
 
-static void shape33(const Entity& e) {
+static void shape33(const Entity& e, int slot = -1) {
     float shape[16];
     GLuint vbo = 0;
     GLsizei n = 0;
@@ -1207,8 +1537,25 @@ static void shape33(const Entity& e) {
     else ident(K.lightMvp);
     float saved = K.two;
     K.two = two;
-    if (mapped) draw_model_maps(*mapped, n, mvp, mv);
-    else draw_mesh(vbo, n, mvp, mv);
+    if (mapped) {
+        if (ent_has_tex(e) && slot >= 0) {
+            const EntMapSet* em = ent_maps_for_draw(slot, e, mapped);
+            if (em) draw_model_maps_imgs(*mapped, em->base, em->nrm, em->metal, em->rough, em->height, n, mvp, mv);
+            else draw_model_maps(*mapped, n, mvp, mv);
+        } else {
+            draw_model_maps(*mapped, n, mvp, mv);
+        }
+    } else if (ent_has_tex(e) && slot >= 0 && K.matProg) {
+        const EntMapSet* em = ent_maps_for_draw(slot, e, nullptr);
+        int kind = 1;
+        if (e.kind == "sphere") kind = 2;
+        else if (e.kind == "cylinder") kind = 3;
+        if (em && ent_maps_any(*em) && K.matUnitVao[kind])
+            draw_unit_maps(kind, em->base, em->nrm, em->metal, em->rough, em->height, mvp, mv,
+                           (float)e.matTile, (float)e.matBump / 100.f);
+        else
+            draw_mesh(vbo, n, mvp, mv);
+    } else draw_mesh(vbo, n, mvp, mv);
     K.two = saved;
 }
 
@@ -1657,7 +2004,7 @@ static void entity33(const Entity& e, int slot) {
         K.amb[2] = std::min(1.f, K.amb[2] + 0.18f);
         glDepthRange(0.0, 0.18);
     }
-    shape33(e);
+    shape33(e, slot);
     if (held) {
         K.amb[0] = amb0;
         K.amb[1] = amb1;

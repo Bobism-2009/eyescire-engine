@@ -61,6 +61,8 @@ EYESCIRE_API void engine_sfx_set_volume(int percent); /* 0..100 */
 EYESCIRE_API int  engine_sfx_volume();
 EYESCIRE_API int  engine_sfx_play(const char* path); /* one-shot, centered */
 EYESCIRE_API int  engine_sfx_play_at(const char* path, float x, float y, float z);
+EYESCIRE_API int  engine_sfx_preview(const char* path); /* editor listen: play, or stop if that file is already playing */
+EYESCIRE_API int  engine_sfx_preview_on();             /* 1 while that preview is still audible */
 EYESCIRE_API void engine_sfx_set_live(int on); /* 1 while a game is playing */
 EYESCIRE_API void engine_set_autosave(int on);
 EYESCIRE_API int  engine_autosave();
@@ -144,6 +146,10 @@ EYESCIRE_API void engine_outline_rect(int x, int y, int w, int h, int thickness,
 EYESCIRE_API void engine_line(int x0, int y0, int x1, int y1, int r, int g, int b);
 EYESCIRE_API void engine_pixel(int x, int y, int r, int g, int b);
 EYESCIRE_API void engine_text(int x, int y, const char* s, int r, int g, int b);
+/* Current font, wrapped from the top-left of the rect. Callers clip. */
+EYESCIRE_API void engine_text_box(int x, int y, int w, int h, const char* s, int r, int g, int b);
+/* ha: 0 left, 1 center, 2 right. va: 0 top, 1 middle, 2 bottom. */
+EYESCIRE_API void engine_text_box_align(int x, int y, int w, int h, const char* s, int r, int g, int b, int ha, int va);
 /* 5x7 text, the same glyphs and spacing as std/gfx text (the 3D player's). */
 EYESCIRE_API void engine_text_px(int x, int y, const char* s, int r, int g, int b, int scale);
 EYESCIRE_API void engine_text_aa(int x, int y, const char* s, int r, int g, int b, int a);
@@ -156,10 +162,14 @@ EYESCIRE_API void engine_set_font_bold(int on);
 EYESCIRE_API void engine_text_file(int x, int y, const char* s, int r, int g, int b, int px, const char* path);
 EYESCIRE_API int  engine_text_file_width(const char* s, int px, const char* path);
 EYESCIRE_API void engine_set_clip(int x, int y, int w, int h);
+EYESCIRE_API void engine_clip_push_rect(int x, int y, int w, int h);
+EYESCIRE_API void engine_clip_pop();
 EYESCIRE_API void engine_clear_clip();
 
 EYESCIRE_API int  engine_image_load(const char* path);
 EYESCIRE_API int  engine_image_load_cached(const char* path);
+/* Downscaled dock preview (max_side clamped to 32..256). */
+EYESCIRE_API int  engine_image_load_thumb(const char* path, int max_side);
 EYESCIRE_API void engine_image_cache_clear();
 EYESCIRE_API int  engine_image_w(int id);
 EYESCIRE_API int  engine_image_h(int id);
@@ -172,6 +182,8 @@ EYESCIRE_API void engine_image_blit_sub_nn_tint(int id, int src_x, int src_y, in
 EYESCIRE_API void engine_image_blit_pan_nn(int id, double scroll_x, int view_w, int view_h);
 EYESCIRE_API void engine_image_blit_scaled_rot(int id, int x, int y, int w, int h, int deg);
 EYESCIRE_API void engine_image_blit_scaled_rot_a(int id, int x, int y, int w, int h, int deg, int a);
+/* nearest 1 draws with point filtering so scaled pixels stay square. */
+EYESCIRE_API void engine_image_blit_scaled_rot_px(int id, int x, int y, int w, int h, int deg, int a, int nearest);
 EYESCIRE_API void engine_image_free(int id);
 
 /* ======================================================================== */
@@ -243,6 +255,33 @@ EYESCIRE_API void engine_entity_set_x(int slot, int x);
 EYESCIRE_API void engine_entity_set_y(int slot, int y);
 EYESCIRE_API void engine_entity_set_w(int slot, int w);
 EYESCIRE_API void engine_entity_set_h(int slot, int h);
+/* Canvas font size for labels and UI captions. The box clips the words;
+   changing the box does not change this. 0 means unset. */
+EYESCIRE_API int  engine_entity_font_px(int slot);
+EYESCIRE_API void engine_entity_set_font_px(int slot, int px);
+/* Where the words sit relative to the box. Resizing the box changes the
+   clip, not this, so the glyphs stay put. */
+EYESCIRE_API int  engine_entity_font_ox(int slot);
+EYESCIRE_API int  engine_entity_font_oy(int slot);
+EYESCIRE_API void engine_entity_set_font_ox(int slot, int ox);
+EYESCIRE_API void engine_entity_set_font_oy(int slot, int oy);
+/* -1 keeps the built-in look. Radius and border are canvas pixels.
+   Align is horizontal (0 left, 1 center, 2 right) plus vertical * 3
+   (0 top, 1 middle, 2 bottom). Shadow is 0 auto, 1 off, 2 on.
+   Text is -1 for the default caption color, otherwise 0xRRGGBB. */
+EYESCIRE_API int  engine_entity_ui_radius(int slot);
+EYESCIRE_API void engine_entity_set_ui_radius(int slot, int px);
+EYESCIRE_API int  engine_entity_ui_border(int slot);
+EYESCIRE_API void engine_entity_set_ui_border(int slot, int px);
+EYESCIRE_API int  engine_entity_ui_align(int slot);
+EYESCIRE_API void engine_entity_set_ui_align(int slot, int align);
+EYESCIRE_API int  engine_entity_ui_shadow(int slot);
+EYESCIRE_API void engine_entity_set_ui_shadow(int slot, int mode);
+EYESCIRE_API int  engine_entity_ui_text(int slot);
+EYESCIRE_API void engine_entity_set_ui_text(int slot, int rgb);
+/* 0 smooth scale, 1 nearest-neighbor (pixel art). */
+EYESCIRE_API int  engine_entity_pixel(int slot);
+EYESCIRE_API void engine_entity_set_pixel(int slot, int on);
 EYESCIRE_API void engine_entity_set_rot(int slot, int deg);
 EYESCIRE_API void engine_entity_set_rot_x(int slot, int deg);
 EYESCIRE_API void engine_entity_set_rot_y(int slot, int deg);
@@ -608,6 +647,7 @@ EYESCIRE_API int         engine_project_active_scene();
 EYESCIRE_API void        engine_project_set_active_scene(int i);
 EYESCIRE_API int         engine_project_add_scene(const char* rel);
 EYESCIRE_API int         engine_project_remove_scene(int i);
+EYESCIRE_API int         engine_project_rename_scene(int i, const char* rel);
 EYESCIRE_API void        engine_project_rescan_scenes(); /* add scene files found in subfolders */
 
 EYESCIRE_API int         engine_project_script_count();
@@ -627,6 +667,8 @@ EYESCIRE_API int         engine_bp_create(const char* name);
 EYESCIRE_API int         engine_bp_create_extension(const char* folder); /* writes folder/ext.ebp + generated ext.nxa */
 EYESCIRE_API int         engine_bp_translate_file(const char* ebp_path, int force); /* 1 = overwrite even if .nxa was hand-edited */
 EYESCIRE_API int         engine_bp_open(const char* path);
+EYESCIRE_API int         engine_paths_same(const char* a, const char* b);
+EYESCIRE_API int         engine_bp_retarget(const char* old_path, const char* new_path);
 EYESCIRE_API void        engine_bp_close();
 EYESCIRE_API int         engine_bp_is_open();
 EYESCIRE_API const char* engine_bp_path();
@@ -730,7 +772,16 @@ EYESCIRE_API const char* engine_project_asset_path(int i);   /* full filesystem 
 EYESCIRE_API const char* engine_project_asset_rel(int i);    /* "assets/player.png" */
 EYESCIRE_API void        engine_project_rescan_assets();
 EYESCIRE_API int         engine_project_import_asset(const char* src_path);
+/* into_rel is under assets/ ("" = assets root). Folders are copied recursively. */
+EYESCIRE_API int         engine_project_import_asset_into(const char* src_path, const char* into_rel);
 EYESCIRE_API const char* engine_project_last_import(); /* assets/... after the last successful import */
+
+/* Explorer -> window file drops. eng_drop_clear after handling. */
+EYESCIRE_API int         engine_drop_count();
+EYESCIRE_API int         engine_drop_x();
+EYESCIRE_API int         engine_drop_y();
+EYESCIRE_API const char* engine_drop_path(int i);
+EYESCIRE_API void        engine_drop_clear();
 
 /* Files the running game reaches from the launch scene. engine_export_used_count
    rebuilds the list: the start scene, scenes a script opens, scripts on those
@@ -783,6 +834,27 @@ EYESCIRE_API int  engine_entity_shown(int slot);     /* 0 if this or a parent is
 EYESCIRE_API const char* engine_entity_model(int slot);       /* .obj, as stored */
 EYESCIRE_API const char* engine_entity_model_path(int slot);  /* resolved */
 EYESCIRE_API void engine_entity_set_model(int slot, const char* path);
+/* Optional PBR maps (relative paths). Empty = use model MTL / none. */
+EYESCIRE_API const char* engine_entity_tex_albedo(int slot);
+EYESCIRE_API void engine_entity_set_tex_albedo(int slot, const char* path);
+EYESCIRE_API const char* engine_entity_tex_normal(int slot);
+EYESCIRE_API void engine_entity_set_tex_normal(int slot, const char* path);
+EYESCIRE_API const char* engine_entity_tex_rough(int slot);
+EYESCIRE_API void engine_entity_set_tex_rough(int slot, const char* path);
+EYESCIRE_API const char* engine_entity_tex_metal(int slot);
+EYESCIRE_API void engine_entity_set_tex_metal(int slot, const char* path);
+EYESCIRE_API const char* engine_entity_tex_height(int slot);
+EYESCIRE_API void engine_entity_set_tex_height(int slot, const char* path);
+EYESCIRE_API const char* engine_entity_tex_ao(int slot);
+EYESCIRE_API void engine_entity_set_tex_ao(int slot, const char* path);
+EYESCIRE_API int  engine_entity_mat_rough(int slot);
+EYESCIRE_API void engine_entity_set_mat_rough(int slot, int v);
+EYESCIRE_API int  engine_entity_mat_metal(int slot);
+EYESCIRE_API void engine_entity_set_mat_metal(int slot, int v);
+EYESCIRE_API int  engine_entity_mat_bump(int slot);
+EYESCIRE_API void engine_entity_set_mat_bump(int slot, int v);
+EYESCIRE_API int  engine_entity_mat_tile(int slot);
+EYESCIRE_API void engine_entity_set_mat_tile(int slot, int v);
 EYESCIRE_API const char* engine_entity_sound(int slot);
 EYESCIRE_API void engine_entity_set_sound(int slot, const char* path);
 EYESCIRE_API int  engine_entity_sound_loop(int slot);
@@ -866,7 +938,12 @@ EYESCIRE_API void engine_r3d_sector(double cx, double cy, double cz, int axis,
                                     int r, int g, int b, int a);
 EYESCIRE_API void engine_r3d_line(double x1, double y1, double z1, double x2, double y2, double z2,
                                   int r, int g, int b, int a);
+/* Like engine_r3d_line but always on top (no depth test). Move-gizmo shafts use this. */
+EYESCIRE_API void engine_r3d_line_over(double x1, double y1, double z1, double x2, double y2, double z2,
+                                       int r, int g, int b, int a);
 EYESCIRE_API void engine_r3d_end(int outline_r, int outline_g, int outline_b); /* r < 0: no outline */
+/* This present shows the back buffer, not the 3D child window. */
+EYESCIRE_API void engine_r3d_dismiss();
 EYESCIRE_API int  engine_r3d_pick(int x, int y);
 EYESCIRE_API int  engine_r3d_project(double wx, double wy, double wz);
 EYESCIRE_API double engine_r3d_px();

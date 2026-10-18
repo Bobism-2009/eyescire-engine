@@ -47,6 +47,20 @@ FB_API void fb_sky(const unsigned char* const faces[6], const int wh[12], const 
 FB_API void fb_prim(int kind, const float xform[16], int r, int g, int b, int a,
                     int cast_shadow, int mode);
 
+/* Roughness/metallic in 0..1, bump strength (1 = normal). Call before mapped draws. */
+FB_API void fb_mat_params(float roughness, float metallic, float bump, float tile, float triplanar);
+
+/* Same as fb_prim, but with optional PBR maps (null skips). Maps are sampled
+   with the mesh UVs into Filament's standard lit inputs. Height is vertex
+   displacement done before this call, not a shader input. */
+FB_API void fb_prim_maps(int kind, const float xform[16], int r, int g, int b, int a,
+                         int cast_shadow, int mode,
+                         const unsigned char* albedo, int aw, int ah,
+                         const unsigned char* normal, int nw, int nh,
+                         const unsigned char* metal, int mw, int mh,
+                         const unsigned char* rough, int rw, int rh,
+                         const unsigned char* height, int hw, int hh);
+
 /* Unindexed triangle list. pos/nrm are tightly packed float3, count is vertices.
    uv may be null. albedo and the maps are RGB, row 0 at the bottom; null skips that map. */
 FB_API void fb_model(const void* key,
@@ -55,7 +69,8 @@ FB_API void fb_model(const void* key,
                      const unsigned char* albedo, int aw, int ah,
                      const unsigned char* normal, int nw, int nh,
                      const unsigned char* metal, int mw, int mh,
-                     const unsigned char* rough, int rw, int rh);
+                     const unsigned char* rough, int rw, int rh,
+                     const unsigned char* height, int hw, int hh);
 
 /* Unindexed triangles, one flat color. lit=0 skips tangents. */
 FB_API void fb_tris(const float* pos, const float* nrm, int count, const float xform[16],
@@ -72,6 +87,10 @@ FB_API void fb_sprite(const void* key, const unsigned char* rgba, int tw, int th
 
 /* Device-space quad. x0,y0,x1,y1 are clip coordinates, y = +1 at the top. */
 FB_API void fb_screen(float x0, float y0, float x1, float y1, int r, int g, int b, int a);
+
+/* World point -> viewport pixels (y down, origin top-left of the view).
+   Returns 1 when the point is in front of the camera. */
+FB_API int fb_project(float wx, float wy, float wz, float* sx, float* sy);
 
 /* Top-down BGRA, or null when the HUD is empty. */
 FB_API void fb_overlay(const void* bgra, int w, int h);

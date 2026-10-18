@@ -530,27 +530,7 @@ static bool model_load_tga(const std::string& path, MapImg& im) {
     return true;
 }
 
-static bool model_load_image(const std::string& path, MapImg& im) {
-    if (path.empty()) return false;
-    auto cached = g_imgCache.find(path);
-    if (cached != g_imgCache.end()) {
-        im = cached->second;
-        return im.w > 0;
-    }
-    if (path.size() >= 4) {
-        std::string ext = path.substr(path.size() - 4);
-        for (char& c : ext) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-        if (ext == ".tga" && model_load_tga(path, im)) {
-            g_imgCache[path] = im;
-            return im.w > 0;
-        }
-    }
-    int n = MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, nullptr, 0);
-    if (n <= 0) return false;
-    std::wstring w((size_t)n, L'\0');
-    MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, w.data(), n);
-    if (!w.empty() && w.back() == 0) w.pop_back();
-    Gdiplus::Bitmap src(w.c_str());
+static bool model_decode_bitmap(Gdiplus::Bitmap& src, MapImg& im) {
     if (src.GetLastStatus() != Gdiplus::Ok || src.GetWidth() < 1 || src.GetHeight() < 1) return false;
     int sw = (int)src.GetWidth(), sh = (int)src.GetHeight();
     int side = sw > sh ? sw : sh;
@@ -583,8 +563,89 @@ static bool model_load_image(const std::string& path, MapImg& im) {
         }
     }
     bmp.UnlockBits(&bd);
-    g_imgCache[path] = im;
     return true;
+}
+
+static bool model_load_image_at(const std::string& path, MapImg& im) {
+    if (path.empty()) return false;
+    if (path.size() >= 4) {
+        std::string ext = path.substr(path.size() - 4);
+        for (char& c : ext) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (ext == ".tga" && model_load_tga(path, im)) return im.w > 0;
+    }
+    /* Prefer memory decode (same path as UI thumbs) — more reliable than GDI+ file open. */
+    auto bytes = content_read_bytes(path);
+    if (!bytes.empty()) {
+        HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes.size());
+        if (h) {
+            void* p = GlobalLock(h);
+            if (p) {
+                std::memcpy(p, bytes.data(), bytes.size());
+                GlobalUnlock(h);
+                IStream* stream = nullptr;
+                if (CreateStreamOnHGlobal(h, TRUE, &stream) == S_OK && stream) {
+                    Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromStream(stream);
+                    stream->Release();
+                    bool ok = false;
+                    if (src) {
+                        ok = model_decode_bitmap(*src, im);
+                        delete src;
+                    }
+                    if (ok) return true;
+                } else {
+                    GlobalFree(h);
+                }
+            } else {
+                GlobalFree(h);
+            }
+        }
+    }
+    int n = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    if (n <= 0) n = MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, nullptr, 0);
+    if (n <= 0) return false;
+    std::wstring w((size_t)n, L'\0');
+    if (MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, w.data(), n) <= 0)
+        MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, w.data(), n);
+    if (!w.empty() && w.back() == 0) w.pop_back();
+    Gdiplus::Bitmap src(w.c_str());
+    return model_decode_bitmap(src, im);
+}
+
+static bool model_path_has_image_ext(const std::string& path) {
+    auto lower_tail = [&](size_t n) -> std::string {
+        if (path.size() < n) return {};
+        std::string e = path.substr(path.size() - n);
+        for (char& c : e) if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        return e;
+    };
+    std::string e4 = lower_tail(4), e5 = lower_tail(5);
+    return e4 == ".png" || e4 == ".jpg" || e4 == ".bmp" || e4 == ".tga" || e4 == ".gif"
+        || e5 == ".jpeg";
+}
+
+static bool model_load_image(const std::string& path, MapImg& im) {
+    if (path.empty()) return false;
+    auto cached = g_imgCache.find(path);
+    if (cached != g_imgCache.end()) {
+        im = cached->second;
+        return im.w > 0;
+    }
+    im = {};
+    if (model_load_image_at(path, im)) {
+        g_imgCache[path] = im;
+        return true;
+    }
+    /* Browse / assets sometimes omit the extension; try common image suffixes. */
+    if (!model_path_has_image_ext(path)) {
+        static const char* kExt[] = { ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".PNG", ".JPG", ".JPEG", ".BMP", ".TGA" };
+        for (const char* ext : kExt) {
+            if (model_load_image_at(path + ext, im)) {
+                g_imgCache[path] = im;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 static void model_sample(const MapImg& im, float u, float v, int& r, int& g, int& b) {
@@ -750,6 +811,117 @@ static void model_bind_maps(Model& m, const std::string& objPath, const std::str
         if (model_load_image(ao, occ)) model_bake_ao(m.base, occ);
     }
     if (nrmPath.find("+-+") != std::string::npos) model_flip_green(m.nrm);
+}
+
+struct EntMapSet {
+    MapImg base, nrm, metal, rough, height;
+};
+
+struct EntMapCache {
+    std::string albedo, normal, rough, metal, height, ao, model;
+    EntMapSet maps;
+    int ready = 0;
+    int fails = 0;
+};
+
+static std::unordered_map<int, EntMapCache> g_entMapCache;
+
+static bool ent_has_tex(const Entity& e) {
+    return !e.texAlbedo.empty() || !e.texNormal.empty() || !e.texRough.empty()
+        || !e.texMetal.empty() || !e.texHeight.empty() || !e.texAO.empty();
+}
+
+static void ent_maps_cache_clear() {
+    g_entMapCache.clear();
+}
+
+void ent_maps_invalidate() {
+    g_entMapCache.clear();
+}
+
+static void ent_load_map_path(const std::string& rel, MapImg& out) {
+    out = {};
+    if (rel.empty()) return;
+    model_load_image(asset_resolve(rel), out);
+}
+
+/* Load entity-assigned maps. AO darkens albedo when both are present. */
+static void ent_fill_maps(const Entity& e, EntMapSet& m) {
+    ent_load_map_path(e.texAlbedo, m.base);
+    ent_load_map_path(e.texNormal, m.nrm);
+    ent_load_map_path(e.texRough, m.rough);
+    ent_load_map_path(e.texMetal, m.metal);
+    ent_load_map_path(e.texHeight, m.height);
+    if (!e.texAO.empty()) {
+        MapImg ao;
+        ent_load_map_path(e.texAO, ao);
+        if (ao.w > 0 && m.base.w <= 0) {
+            m.base.w = ao.w;
+            m.base.h = ao.h;
+            m.base.rgb.assign((size_t)ao.w * ao.h * 3, 255);
+        }
+        if (m.base.w > 0) model_bake_ao(m.base, ao);
+    }
+}
+
+/* Entity paths override model MTL/sidecar maps; unset slots keep the model. */
+static void ent_merge_model_maps(const Entity& e, const Model& model, EntMapSet& out) {
+    ent_fill_maps(e, out);
+    if (out.base.w <= 0) {
+        out.base = model.base;
+        if (!e.texAO.empty() && out.base.w > 0) {
+            MapImg ao;
+            ent_load_map_path(e.texAO, ao);
+            model_bake_ao(out.base, ao);
+        }
+    }
+    if (out.nrm.w <= 0) out.nrm = model.nrm;
+    if (out.rough.w <= 0) out.rough = model.rough;
+    if (out.metal.w <= 0) out.metal = model.metal;
+    if (out.height.w <= 0) out.height = model.height;
+}
+
+static bool ent_maps_any(const EntMapSet& m) {
+    return m.base.w > 0 || m.nrm.w > 0 || m.metal.w > 0 || m.rough.w > 0 || m.height.w > 0;
+}
+
+/* Stable maps for a slot so Filament/GL do not copy or re-upload 2K images every frame. */
+static const EntMapSet* ent_maps_for_draw(int slot, const Entity& e, const Model* model) {
+    if (!ent_has_tex(e)) return nullptr;
+    std::string modelKey = model ? e.model : std::string();
+    EntMapCache& c = g_entMapCache[slot];
+    if (c.ready && c.albedo == e.texAlbedo && c.normal == e.texNormal && c.rough == e.texRough
+        && c.metal == e.texMetal && c.height == e.texHeight && c.ao == e.texAO
+        && c.model == modelKey) {
+        return &c.maps;
+    }
+    bool pathChange = c.albedo != e.texAlbedo || c.normal != e.texNormal || c.rough != e.texRough
+        || c.metal != e.texMetal || c.height != e.texHeight || c.ao != e.texAO
+        || c.model != modelKey;
+    if (pathChange) c.fails = 0;
+    c.albedo = e.texAlbedo;
+    c.normal = e.texNormal;
+    c.rough = e.texRough;
+    c.metal = e.texMetal;
+    c.height = e.texHeight;
+    c.ao = e.texAO;
+    c.model = modelKey;
+    c.maps = {};
+    if (model) ent_merge_model_maps(e, *model, c.maps);
+    else ent_fill_maps(e, c.maps);
+    /* Do not freeze an empty result — project root may not be ready on first try. */
+    if (ent_maps_any(c.maps)) {
+        c.ready = 1;
+        c.fails = 0;
+    } else {
+        c.fails++;
+        c.ready = c.fails >= 90 ? 1 : 0;
+        if (c.fails == 1 || c.fails == 30) {
+            log_push(std::string("[maps] load failed for slot ") + std::to_string(slot)
+                     + " albedo=" + e.texAlbedo);
+        }
+    }
+    return &c.maps;
 }
 
 /* A face whose texture window covers a big slice of the picture pulls in
@@ -1474,7 +1646,10 @@ static void hide_view() {
 static void place(int x, int y, int w, int h) {
     if (!S.wnd) return;
     static int px = -99999, py = -99999, pw = -1, ph = -1;
-    if (x == px && y == py && w == pw && h == ph && IsWindowVisible(S.wnd)) return;
+    RECT cr{};
+    GetClientRect(S.wnd, &cr);
+    int cw = cr.right, ch = cr.bottom;
+    if (x == px && y == py && w == pw && h == ph && cw == w && ch == h && IsWindowVisible(S.wnd)) return;
     px = x; py = y; pw = w; ph = h;
     SetWindowPos(S.wnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
@@ -2633,13 +2808,28 @@ extern "C" void engine_r3d_cone(double bx, double by, double bz,
     int ntri = (int)verts.size() / 18;
     if (ntri <= 0) return;
     if (g_useFilament && p_fb_tris) {
-        float id[16];
-        fil_ident(id);
+        /* Filament draws these without depth and in no set order, so the base
+           can land on top of the tip. The cone is convex: keeping only faces
+           toward the eye is exact. One draw per shade keeps handle churn low. */
+        V3 mid = base + axis * 0.25f;
+        std::unordered_map<uint32_t, std::vector<float>> byColor;
         for (int t = 0; t < ntri; ++t) {
             const float* p = verts.data() + (size_t)t * 18;
-            float pos[9] = { p[0], p[1], p[2], p[6], p[7], p[8], p[12], p[13], p[14] };
-            int cr = (int)(p[3] * 255), cg = (int)(p[4] * 255), cb = (int)(p[5] * 255);
-            p_fb_tris(pos, nullptr, 3, id, cr, cg, cb, 255, 0, 0, 0, 0);
+            V3 a = v3(p[0], p[1], p[2]), b2 = v3(p[6], p[7], p[8]), c = v3(p[12], p[13], p[14]);
+            V3 n = cross(b2 - a, c - a);
+            V3 cen = (a + b2 + c) * (1.0f / 3.0f);
+            if (dot(n, cen - mid) < 0) n = n * -1.0f;
+            if (dot(n, C.eye - cen) <= 0) continue;
+            uint32_t key = (uint32_t)(p[3] * 255) | ((uint32_t)(p[4] * 255) << 8) | ((uint32_t)(p[5] * 255) << 16);
+            float s[9] = { a.x, a.y, a.z, b2.x, b2.y, b2.z, c.x, c.y, c.z };
+            auto& dst = byColor[key];
+            dst.insert(dst.end(), s, s + 9);
+        }
+        float id[16];
+        fil_ident(id);
+        for (auto& kv : byColor) {
+            p_fb_tris(kv.second.data(), nullptr, (int)kv.second.size() / 3, id,
+                      kv.first & 255, (kv.first >> 8) & 255, (kv.first >> 16) & 255, 255, 0, 0, 0, 0);
         }
         return;
     }
@@ -2772,13 +2962,14 @@ extern "C" void engine_r3d_screen_rect(int x, int y, int w, int h, int r, int g_
     }
 }
 
-/* Depth-tested line in world units; a > 0 blends (0..255) over what's there. */
-extern "C" void engine_r3d_line(double x1, double y1, double z1, double x2, double y2, double z2,
-                                int r, int g_, int b, int a) {
+/* Line in world units. depth_test 1 = occluded by meshes; 0 = always on top. */
+static void r3d_line_draw(double x1, double y1, double z1, double x2, double y2, double z2,
+                          int r, int g_, int b, int a, int depth_test) {
     using namespace r3d;
     if (!C.valid) return;
     if (g_useFilament && p_fb_line) {
-        p_fb_line((float)x1, (float)y1, (float)z1, (float)x2, (float)y2, (float)z2, r, g_, b, a, 1);
+        p_fb_line((float)x1, (float)y1, (float)z1, (float)x2, (float)y2, (float)z2, r, g_, b, a,
+                  depth_test ? 1 : 0);
         return;
     }
     if (g_useVk) {
@@ -2806,15 +2997,30 @@ extern "C" void engine_r3d_line(double x1, double y1, double z1, double x2, doub
         if (x < 0 || y < 0 || x >= T.w || y >= T.h) continue;
         size_t k = (size_t)y * T.w + x;
         float iz = s.iz + (e.iz - s.iz) * t;
-        if (iz * 1.002f < T.invz[k]) continue;
+        if (depth_test && iz * 1.002f < T.invz[k]) continue;
         uint32_t o = T.px[k];
         int orr = (o >> 16) & 255, og = (o >> 8) & 255, ob = o & 255;
         T.px[k] = pack(orr + (r - orr) * al / 255, og + (g_ - og) * al / 255, ob + (b - ob) * al / 255);
     }
 }
 
+extern "C" void engine_r3d_line(double x1, double y1, double z1, double x2, double y2, double z2,
+                                int r, int g_, int b, int a) {
+    r3d_line_draw(x1, y1, z1, x2, y2, z2, r, g_, b, a, 1);
+}
+
+extern "C" void engine_r3d_line_over(double x1, double y1, double z1, double x2, double y2, double z2,
+                                     int r, int g_, int b, int a) {
+    r3d_line_draw(x1, y1, z1, x2, y2, z2, r, g_, b, a, 0);
+}
+
 static bool g_glFrame = false;
 static HWND g_ov = nullptr;
+
+/* Drop the 3D child for this present. A later full-window draw (the compile
+   card) would otherwise leave the view hole, which stays black until the
+   next frame — after the first script has already finished. */
+extern "C" void engine_r3d_dismiss() { g_glFrame = false; }
 
 /* Outline every selected entity's silhouette (outline_rgb >= 0), then show. */
 extern "C" void engine_r3d_end(int or_, int og, int ob) {
@@ -2823,8 +3029,9 @@ extern "C" void engine_r3d_end(int or_, int og, int ob) {
     if (g_useFilament) {
         fil_particles();
         if (or_ >= 0) fil_outline(or_, og, ob);
-        round_gfx_drop();
-        SelectClipRgn(g.backDC, nullptr);
+        /* Drop the panel clip too. Leaving the region selected makes the next
+           popup fill stop at that panel while its labels paint across the view. */
+        engine_clear_clip();
         HBRUSH br = CreateSolidBrush(RGB(g_frameClearR, g_frameClearG, g_frameClearB));
         RECT rc{ C.sx, C.sy, C.sx + T.w, C.sy + T.h };
         FillRect(g.backDC, &rc, br);
@@ -2844,8 +3051,7 @@ extern "C" void engine_r3d_end(int or_, int og, int ob) {
         }
         /* Key color under the gizmos and HUD. The view window shows the 3D
            picture; present() copies this rectangle on top with the key transparent. */
-        round_gfx_drop();
-        SelectClipRgn(g.backDC, nullptr);
+        engine_clear_clip();
         HBRUSH br = CreateSolidBrush(RGB(g_frameClearR, g_frameClearG, g_frameClearB));
         RECT rc{ C.sx, C.sy, C.sx + T.w, C.sy + T.h };
         FillRect(g.backDC, &rc, br);
@@ -2895,6 +3101,15 @@ extern "C" int engine_r3d_pick(int x, int y) {
 extern "C" int engine_r3d_project(double wx, double wy, double wz) {
     using namespace r3d;
     if (!C.valid) return 0;
+    /* Filament's camera can disagree with the software basis by a few pixels;
+       gizmos and picks use Filament's own matrices when it is drawing. */
+    if (g_useFilament && p_fb_project) {
+        float sx = 0, sy = 0;
+        if (!p_fb_project((float)wx, (float)wy, (float)wz, &sx, &sy)) return 0;
+        g_px = C.sx + sx;
+        g_py = C.sy + sy;
+        return 1;
+    }
     V3 c = to_cam(v3((float)wx, (float)wy, (float)wz));
     if (c.z < kNear) return 0;
     g_px = C.sx + T.w * 0.5f + c.x * C.f / c.z;
@@ -3052,7 +3267,12 @@ void r3d::overlay_present() {
     ensure_ov_dib(T.w, T.h);
     const void* bits = nullptr;
     if (g_ovBits) {
+        /* A panel clip still selected here would copy only that panel, so a
+           menu drawn across the view would lose its fill inside the picture. */
+        int saved = SaveDC(g.backDC);
+        SelectClipRgn(g.backDC, nullptr);
         BitBlt(g_ovDC, 0, 0, T.w, T.h, g.backDC, C.sx, C.sy, SRCCOPY);
+        RestoreDC(g.backDC, saved);
         auto* px = (uint32_t*)g_ovBits;
         uint32_t key = ((uint32_t)g_frameClearR << 16) | ((uint32_t)g_frameClearG << 8) | (uint32_t)g_frameClearB;
         int n = T.w * T.h;

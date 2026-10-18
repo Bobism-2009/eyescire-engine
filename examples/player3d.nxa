@@ -111,7 +111,6 @@ fn init_scripts() {
 
 fn ent_is_empty3d(slot: int): int {
     if (ent_kind(slot) == "empty") return 1;
-    if (ent_kind(slot) == "rect" && ent_name(slot) == "empty") return 1;
     return 0;
 }
 
@@ -240,7 +239,7 @@ fn draw_ui_layer() {
     let vw: int = eng_window_w();
     let vh: int = eng_window_h();
     ui_canvas_layout_game_view(rect(0, 0, vw, vh));
-    let i: int = ent_iter_next(0);
+    let i: int = ent_next_by_depth(-1);
     while (i >= 0) {
         if (ent_is_ui(i) == 1 && ent_shown(i) == 1) {
             let sx: int = ui_to_screen_x(ent_x(i));
@@ -253,15 +252,15 @@ fn draw_ui_layer() {
             let b: int = ui_fill_b;
             if (ent_kind(i) == "sprite2d") {
                 let sid: int = ent_sprite_id(i);
-                if (sid != 0) eng_image_blit_scaled_rot_a(sid, sx, sy, sw, sh, ent_rot(i), ent_a(i));
+                if (sid != 0) eng_image_blit_scaled_rot_px(sid, sx, sy, sw, sh, ent_rot(i), ent_a(i), ent_pixel(i));
                 else eng_fill_rect_a(sx, sy, sw, sh, ent_r(i), ent_g(i), ent_b(i), ent_a(i));
-                i = ent_iter_next(i + 1);
+                i = ent_next_by_depth(i);
                 continue;
             }
             let txt: string = ent_text(i);
             if (ent_kind(i) == "label" || ent_kind(i) == "ui_label") {
                 if (txt.len() == 0) txt = ent_name(i);
-                ui_draw_label(sx, sy, sw, sh, txt, r, g, b, ent_sprite(i));
+                ui_draw_label(sx, sy, sw, sh, txt, r, g, b, ent_sprite(i), ent_font_px(i), ent_font_ox(i), ent_font_oy(i), ui_ha(i), ui_va(i));
             } else {
                 ui_draw_box(i, sx, sy, sw, sh);
                 if (txt.len() > 0 && ui_ent_owns_caption(i) == 0) {
@@ -271,7 +270,7 @@ fn draw_ui_layer() {
                 }
             }
         }
-        i = ent_iter_next(i + 1);
+        i = ent_next_by_depth(i);
     }
 }
 

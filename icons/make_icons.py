@@ -676,6 +676,18 @@ def build_all():
     ic.gstroke([(20.2, 15.4), (12, 20.4)], 1.45)
     ic.save("model")
 
+    ic = Icon()
+    ic.gfill_rrect((3.2, 8.6, 7.4, 15.4), 1.15)
+    ic.fill_poly([
+        (px(7.0), px(8.8)),
+        (px(12.6), px(5.2)),
+        (px(12.6), px(18.8)),
+        (px(7.0), px(15.2)),
+    ])
+    ic.garc(12.4, 12.0, 3.15, 310, 50, 1.7)
+    ic.garc(12.4, 12.0, 5.55, 318, 42, 1.7)
+    ic.save("sound")
+
 
 if __name__ == "__main__":
     eyescire_mark()

@@ -28,7 +28,7 @@ fn run_player(path: string): int {
         if (mod) {
             typedef int (*player_run_fn)();
             player_run_fn run = (player_run_fn)GetProcAddress(mod, "player_run");
-            if (run) result = run() ? 1 : 0;
+            if (run) result = run();
             else     result = -2;
         }
     }
@@ -66,6 +66,14 @@ fn main() {
         launcher_error("Can't start this game",
                        "project.eye was not found next to the game.",
                        "Copy the whole export folder, not just the .exe.");
+    } else if (r == -3) {
+        launcher_error("Can't start this game",
+                       "The exported project could not be opened.",
+                       "Re-export the game. If protection is on, export the whole folder again.");
+    } else if (r == -4) {
+        launcher_error("Can't start this game",
+                       "The game window could not be created.",
+                       "Re-export the game from the Eyescire editor.");
     } else if (r < 0) {
         launcher_error("Can't start this game",
                        "EyescirePlayer.dll is present but failed to load.",

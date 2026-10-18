@@ -16,14 +16,21 @@ static void (*p_fb_spot)(float, float, float, float, float, float, float, float,
 static void (*p_fb_ambient)(float, float, float) = nullptr;
 static void (*p_fb_sky)(const unsigned char* const*, const int*, const char*) = nullptr;
 static void (*p_fb_prim)(int, const float*, int, int, int, int, int, int) = nullptr;
+static void (*p_fb_mat_params)(float, float, float, float, float) = nullptr;
+static void (*p_fb_prim_maps)(int, const float*, int, int, int, int, int, int,
+                              const unsigned char*, int, int, const unsigned char*, int, int,
+                              const unsigned char*, int, int, const unsigned char*, int, int,
+                              const unsigned char*, int, int) = nullptr;
 static void (*p_fb_model)(const void*, const float*, const float*, const float*, int, const float*,
                           int, int, int, int, int, const unsigned char*, int, int,
                           const unsigned char*, int, int, const unsigned char*, int, int,
-                          const unsigned char*, int, int) = nullptr;
+                          const unsigned char*, int, int, const unsigned char*, int, int) = nullptr;
+static void (*p_fb_model_forget)(const void*) = nullptr;
 static void (*p_fb_tris)(const float*, const float*, int, const float*, int, int, int, int, int, int, int, int) = nullptr;
 static void (*p_fb_line)(float, float, float, float, float, float, int, int, int, int, int) = nullptr;
 static void (*p_fb_sprite)(const void*, const unsigned char*, int, int, const float*, const float*, int, int, int, int) = nullptr;
 static void (*p_fb_screen)(float, float, float, float, int, int, int, int) = nullptr;
+static int (*p_fb_project)(float, float, float, float*, float*) = nullptr;
 static void (*p_fb_overlay)(const void*, int, int) = nullptr;
 static int (*p_fb_draw)(int) = nullptr;
 static int (*p_fb_take_capture)(unsigned char*, int, int*, int*) = nullptr;
@@ -59,11 +66,15 @@ static int fil_bind() {
     p_fb_ambient = (decltype(p_fb_ambient))sym("fb_ambient");
     p_fb_sky = (decltype(p_fb_sky))sym("fb_sky");
     p_fb_prim = (decltype(p_fb_prim))sym("fb_prim");
+    p_fb_mat_params = (decltype(p_fb_mat_params))sym("fb_mat_params");
+    p_fb_prim_maps = (decltype(p_fb_prim_maps))sym("fb_prim_maps");
     p_fb_model = (decltype(p_fb_model))sym("fb_model");
+    p_fb_model_forget = (decltype(p_fb_model_forget))sym("fb_model_forget");
     p_fb_tris = (decltype(p_fb_tris))sym("fb_tris");
     p_fb_line = (decltype(p_fb_line))sym("fb_line");
     p_fb_sprite = (decltype(p_fb_sprite))sym("fb_sprite");
     p_fb_screen = (decltype(p_fb_screen))sym("fb_screen");
+    p_fb_project = (decltype(p_fb_project))sym("fb_project");
     p_fb_overlay = (decltype(p_fb_overlay))sym("fb_overlay");
     p_fb_draw = (decltype(p_fb_draw))sym("fb_draw");
     p_fb_take_capture = (decltype(p_fb_take_capture))sym("fb_take_capture");

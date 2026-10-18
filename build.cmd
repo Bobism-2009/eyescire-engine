@@ -48,6 +48,8 @@ call clang++ -std=c++17 -O2 -shared -DEYESCIRE_BUILDING=1 %BOX2D_INC% %JOLT_INC%
 if not exist bin\engine.dll (echo engine.dll build failed & exit /b 1)
 copy /y bin\engine.dll build\engine.dll >nul
 copy /y bin\engine.lib build\engine.lib >nul
+rem Filament renderer (MSVC build of host\filament_bridge; loaded from beside engine.dll)
+if exist bin\filament_bridge.dll copy /y bin\filament_bridge.dll build\ >nul
 
 rem llvm-mingw C++ runtime (engine.dll imports these; must sit next to the exes)
 echo == copying libc++.dll / libunwind.dll
@@ -106,7 +108,7 @@ if not exist build\EyescirePlayer3D.exe (echo EyescirePlayer3D.exe build failed 
 echo == compiling EyescirePlayer.exe launcher
 if exist build\EyescirePlayer.exe del build\EyescirePlayer.exe
 if exist build\EyescirePlayer.exe (echo build\EyescirePlayer.exe is in use - close it and rebuild & exit /b 1)
-call NexaC examples\player_launcher.nxa --link build\engine.lib --link build\eyescire_res.o -p -o build\EyescirePlayer.exe
+call NexaC examples\player_launcher.nxa --link build\engine.lib --link build\eyescire_res.o -p --no-console -o build\EyescirePlayer.exe
 if not exist build\EyescirePlayer.exe (echo EyescirePlayer.exe build failed & exit /b 1)
 
 echo.
